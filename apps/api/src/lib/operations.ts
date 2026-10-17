@@ -77,6 +77,10 @@ const dnsAddStep: StepDef = {
     const existing = await services.cloudflare.findDnsRecord(hostname);
     if (existing) {
       if (existing.comment === comment) {
+        if (!site.pagesSubdomain) throw new StepError("adresse pages.dev inconnue : reprendre la création du projet.");
+        // CNAME du hub réemployé : sa cible doit être l'adresse pages.dev actuelle du projet, sinon il est recalé.
+        const stale = existing.type !== "CNAME" || existing.content.toLowerCase() !== site.pagesSubdomain.toLowerCase() || !existing.proxied;
+        if (stale) await services.cloudflare.updateCname(existing.id, hostname, site.pagesSubdomain, comment);
         await prisma.site.update({ where: { id: site.id }, data: { dnsRecordId: existing.id } });
         return;
       }
@@ -240,14 +244,15 @@ export class OperationEngine {
   }
 
   async retry(siteId: string, opId: string): Promise<Operation> {
+    // Verrou posé avant tout await, comme start() : deux reprises simultanées ne lancent qu'une exécution.
     if (this.busy.has(siteId)) throw new HttpError(409, "Une opération est déjà en cours sur ce site.", "operation_running");
-    const op = await prisma.operation.findFirst({ where: { id: opId, siteId } });
-    if (!op) throw new HttpError(404, "Opération introuvable.");
-    if (op.status !== "FAILED") throw new HttpError(409, "Seule une opération en échec peut être reprise.");
-    const latest = await prisma.operation.findFirst({ where: { siteId }, orderBy: { startedAt: "desc" }, select: { id: true } });
-    if (latest?.id !== op.id) throw new HttpError(409, "Une opération plus récente a eu lieu sur ce site : relancer l'action.");
     this.busy.add(siteId);
     try {
+      const op = await prisma.operation.findFirst({ where: { id: opId, siteId } });
+      if (!op) throw new HttpError(404, "Opération introuvable.");
+      if (op.status !== "FAILED") throw new HttpError(409, "Seule une opération en échec peut être reprise.");
+      const latest = await prisma.operation.findFirst({ where: { siteId }, orderBy: { startedAt: "desc" }, select: { id: true } });
+      if (latest?.id !== op.id) throw new HttpError(409, "Une opération plus récente a eu lieu sur ce site : relancer l'action.");
       const steps = parseSteps(op.steps).map((s) => (s.status === "failed" || s.status === "running" ? { key: s.key, label: s.label, status: "todo" as const } : s));
       const updated = await prisma.operation.update({
         where: { id: op.id },
@@ -436,7 +441,9 @@ export class DomainWatcher {
     step.status = status;
     if (detail) step.detail = detail;
     else delete step.detail;
-    await prisma.operation.update({ where: { id: op.id }, data: { steps: JSON.stringify(steps) } });
+    // Échec du certificat : opération FAILED, reprenable (« Reprendre » relance l'étape certificate).
+    const failed = status === "failed" ? { status: "FAILED" as const, error: `${step.label} : ${detail ?? "échec"}`, finishedAt: new Date() } : {};
+    await prisma.operation.update({ where: { id: op.id }, data: { steps: JSON.stringify(steps), ...failed } });
   }
 
   private async loop(siteId: string, signal: AbortSignal): Promise<void> {
@@ -465,12 +472,12 @@ export class DomainWatcher {
       }
       if (isDomainError(domain.status)) {
         await prisma.site.update({ where: { id: siteId }, data: { domainStatus: "ERROR" } });
-        await this.setWaitingDetail(siteId, "failed", "Cloudflare signale une erreur de validation de l'adresse.");
+        await this.setWaitingDetail(siteId, "failed", "Cloudflare signale une erreur de validation de l'adresse : vérifier dans Cloudflare, puis reprendre ou couper le site.");
         await audit({ action: "site.certificate", result: "error", siteId, siteSlug: site.slug, detail: domain.status });
         return;
       }
       if (Date.now() - started > this.maxMs) {
-        await this.setWaitingDetail(siteId, "waiting", "certificat toujours en attente : vérifier l'adresse dans Cloudflare");
+        await this.setWaitingDetail(siteId, "failed", "certificat toujours en attente après 24 h : vérifier l'adresse dans Cloudflare, puis reprendre.");
         return;
       }
     }

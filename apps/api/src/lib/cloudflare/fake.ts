@@ -91,9 +91,12 @@ export class FakeCloudflare implements CloudflareGateway {
   }
 
   /** Force le statut d'un domaine (tests : erreur de validation). */
-  setDomainStatus(project: string, hostname: string, status: CfDomain["status"]): void {
+  setDomainStatus(project: string, hostname: string, status: CfDomain["status"] | undefined): void {
     const domain = this.project(project)?.domains.find((d) => d.name === hostname);
-    if (domain) domain.status = status;
+    if (domain) {
+      if (status) domain.status = status;
+      else delete domain.status;
+    }
     this.save();
   }
 
@@ -208,6 +211,16 @@ export class FakeCloudflare implements CloudflareGateway {
     this.calls.push(`createCname:${hostname}`);
     this.save();
     return record;
+  }
+
+  async updateCname(id: string, hostname: string, target: string, comment: string): Promise<CfDnsRecord> {
+    this.check("updateCname");
+    const record = this.state.dns.find((r) => r.id === id);
+    if (!record) throw new CloudflareError("Élément introuvable chez Cloudflare.", 404);
+    Object.assign(record, { type: "CNAME", name: hostname, content: target, proxied: true, comment });
+    this.calls.push(`updateCname:${hostname}`);
+    this.save();
+    return { ...record };
   }
 
   async deleteDnsRecord(id: string): Promise<void> {

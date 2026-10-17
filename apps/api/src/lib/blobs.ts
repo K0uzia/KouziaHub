@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { createReadStream, createWriteStream, type ReadStream } from "node:fs";
-import { mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, stat, unlink, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Transform, type Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -41,9 +41,21 @@ export class BlobStore {
     );
   }
 
+  /**
+   * Blob déjà présent : mtime rafraîchi, pour que gc() (qui épargne les blobs récents) ne l'efface pas
+   * entre son réemploi par un envoi et l'écriture des lignes qui le référencent.
+   */
+  private async touch(sha256: string): Promise<boolean> {
+    const now = new Date();
+    return utimes(this.pathOf(sha256), now, now).then(
+      () => true,
+      () => false,
+    );
+  }
+
   async putBuffer(buffer: Buffer): Promise<StoredBlob> {
     const sha256 = createHash("sha256").update(buffer).digest("hex");
-    if (!(await this.has(sha256))) {
+    if (!(await this.touch(sha256))) {
       await mkdir(this.tmpDir, { recursive: true });
       const tmp = path.join(this.tmpDir, randomBytes(12).toString("hex"));
       await writeFile(tmp, buffer);
@@ -82,7 +94,7 @@ export class BlobStore {
 
   private async commit(tmp: string, sha256: string): Promise<void> {
     const target = this.pathOf(sha256);
-    if (await this.has(sha256)) {
+    if (await this.touch(sha256)) {
       await unlink(tmp).catch(() => undefined);
       return;
     }
@@ -131,7 +143,7 @@ export class BlobStore {
         if (!SHA.test(name) || used.has(name)) continue;
         const file = path.join(folder, name);
         const info = await stat(file).catch(() => null);
-        if (!info || now - info.mtimeMs < graceMs) continue;
+        if (!info || (graceMs > 0 && now - info.mtimeMs < graceMs)) continue;
         await rm(file, { force: true });
         removed++;
       }

@@ -21,6 +21,18 @@ const HOST = ${JSON.stringify(host)};
 const ROBOTS = ${JSON.stringify(NOINDEX_ROBOTS)};
 const HEADERS = ${JSON.stringify(SITE_HEADERS)};
 
+// Fichiers de développement jamais servis (403) : segment caché sauf /.well-known/, notes, journaux,
+// sauvegardes et cartes de sources. Testé sur le chemin décodé (%2e ne contourne pas la règle).
+function isForbidden(pathname) {
+  let path = pathname;
+  try {
+    path = decodeURIComponent(pathname);
+  } catch {}
+  const segments = path.split("/").filter(Boolean);
+  if (segments.some((s, i) => s.startsWith(".") && !(i === 0 && s === ".well-known"))) return true;
+  return /\\.(md|markdown|log|bak|map|swp)$|~$/i.test(path);
+}
+
 function withHeaders(response) {
   const out = new Response(response.body, response);
   for (const [name, value] of Object.entries(HEADERS)) out.headers.set(name, value);
@@ -35,6 +47,9 @@ export default {
     }
     if (url.pathname === "/robots.txt") {
       return withHeaders(new Response(ROBOTS, { status: 200, headers: { "Content-Type": "text/plain; charset=utf-8" } }));
+    }
+    if (isForbidden(url.pathname)) {
+      return withHeaders(new Response("Accès refusé", { status: 403, headers: { "Content-Type": "text/plain; charset=utf-8" } }));
     }
     return withHeaders(await env.ASSETS.fetch(request));
   },

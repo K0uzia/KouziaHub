@@ -134,9 +134,10 @@ export async function deployVersion(services: Services, siteId: string, versionI
 }
 
 /**
- * Rétention : les KEPT_VERSIONS versions de contenu les plus récentes et la version servie restent ;
- * les autres (et les pages d'attente qui ne sont plus servies) perdent leur déploiement Cloudflare et
- * leurs fichiers (statut PURGED). Renvoie le nombre de versions purgées et les échecs éventuels.
+ * Rétention : les KEPT_VERSIONS versions de contenu publiées les plus récentes et la version servie
+ * restent ; les autres (versions en échec et pages d'attente qui ne sont plus servies comprises)
+ * perdent leur déploiement Cloudflare et leurs fichiers (statut PURGED). Renvoie le nombre de versions
+ * purgées et les échecs éventuels.
  */
 export async function applyRetention(services: Services, siteId: string): Promise<{ purged: number; failed: number }> {
   const site = await prisma.site.findUniqueOrThrow({ where: { id: siteId } });
@@ -144,9 +145,10 @@ export async function applyRetention(services: Services, siteId: string): Promis
     where: { siteId, status: { in: ["PUBLISHED", "FAILED"] } },
     orderBy: { number: "desc" },
   });
+  // Seules les versions publiées comptent dans les 10 gardées ; une version en échec est purgée à part.
   const keep = new Set(
     versions
-      .filter((v) => v.source !== "placeholder")
+      .filter((v) => v.source !== "placeholder" && v.status === "PUBLISHED")
       .slice(0, KEPT_VERSIONS)
       .map((v) => v.id),
   );

@@ -12,6 +12,34 @@ const chunks = <T>(items: T[]): T[][] => {
   return out;
 };
 
+export const CASE_CONFLICT = (other: string) => `Un fichier « ${other} » existe déjà avec le même nom à la casse près.`;
+
+/**
+ * Écarte les fichiers dont le nom ne diffère d'un autre que par la casse (Index.html contre index.html) :
+ * Cloudflare les servirait tous deux, la plupart des postes de travail ne les distinguent pas.
+ * `existing` : chemins déjà présents et conservés par l'opération.
+ */
+export function splitCaseConflicts(refs: FileRef[], existing: Iterable<string>): { kept: FileRef[]; rejected: Array<{ path: string; reason: string }> } {
+  const seen = new Map<string, string>();
+  for (const p of existing) seen.set(p.toLowerCase(), p);
+  const kept: FileRef[] = [];
+  const rejected: Array<{ path: string; reason: string }> = [];
+  for (const ref of refs) {
+    const other = seen.get(ref.path.toLowerCase());
+    if (other !== undefined && other !== ref.path) {
+      rejected.push({ path: ref.path, reason: CASE_CONFLICT(other) });
+      continue;
+    }
+    seen.set(ref.path.toLowerCase(), ref.path);
+    kept.push(ref);
+  }
+  return { kept, rejected };
+}
+
+export async function workingPaths(siteId: string): Promise<string[]> {
+  return (await prisma.workingFile.findMany({ where: { siteId }, select: { path: true } })).map((f) => f.path);
+}
+
 export async function listFiles(siteId: string): Promise<FilesResponse> {
   const [files, site] = await Promise.all([
     prisma.workingFile.findMany({ where: { siteId }, orderBy: { path: "asc" } }),

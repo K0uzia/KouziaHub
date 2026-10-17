@@ -128,7 +128,9 @@ export function sitesRoutes(services: Services): FastifyPluginAsync {
     app.post("/api/sites/:id/disable", async (request) => {
       const { id } = idParams.parse(request.params);
       const site = await loadSite(id);
-      if (site.state === "OFFLINE") throw new HttpError(409, "Le site est déjà hors ligne.");
+      // Hors ligne mais CNAME ou domaine encore posés (remise en ligne interrompue) : la coupure reste possible.
+      const attached = site.dnsRecordId !== null || site.domainStatus !== "NONE";
+      if (site.state === "OFFLINE" && !attached) throw new HttpError(409, "Le site est déjà hors ligne.");
       if (site.state === "DELETING") throw new HttpError(409, "Suppression en cours : reprendre la suppression.");
       await services.engine.start(id, "DISABLE");
       return siteDetail(id, services);

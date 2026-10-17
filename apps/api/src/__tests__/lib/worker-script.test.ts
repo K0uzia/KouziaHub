@@ -69,3 +69,30 @@ describe("_worker.js injecté", () => {
     expect(script).toContain('const HOST = "x\\";alert(1);\\"";');
   });
 });
+
+describe("fichiers de développement jamais servis", () => {
+  it.each([
+    "/.env",
+    "/.git/config",
+    "/assets/.secret/x.js",
+    "/%2egit/config",
+    "/README.md",
+    "/docs/notes.markdown",
+    "/debug.log",
+    "/index.html.bak",
+    "/app.js.map",
+    "/.index.html.swp",
+    "/index.html~",
+  ])("%s : 403 avec les en-têtes du hub, sans lire les fichiers", async (path) => {
+    served.length = 0;
+    const res = await worker.fetch(new Request(`https://alpha.kouzia.com${path}`), env);
+    expect(res.status).toBe(403);
+    expect(served).toEqual([]);
+    expectSiteHeaders(res);
+  });
+
+  it.each(["/.well-known/security.txt", "/index.html", "/assets/app.js", "/mdfile.html"])("%s : servi", async (path) => {
+    const res = await worker.fetch(new Request(`https://alpha.kouzia.com${path}`), env);
+    expect(res.status).toBe(200);
+  });
+});

@@ -75,6 +75,25 @@ describe("explorateur de fichiers", () => {
     expect(list.files[0]!.size).toBe(9);
   });
 
+  it("refuse un nom qui ne diffère d'un fichier existant que par la casse (envoi et renommage)", async () => {
+    await upload([{ filename: "index.html", content: "i" }]);
+    const res = await upload([
+      { filename: "Index.html", content: "x" },
+      { filename: "page.html", content: "p" },
+      { filename: "PAGE.html", content: "p2" },
+    ]);
+    const body = res.json() as UploadResult;
+    expect(body.accepted).toEqual(["page.html"]);
+    expect(body.rejected).toEqual([
+      { path: "Index.html", reason: "Un fichier « index.html » existe déjà avec le même nom à la casse près." },
+      { path: "PAGE.html", reason: "Un fichier « page.html » existe déjà avec le même nom à la casse près." },
+    ]);
+    expect((await paths()).sort()).toEqual(["index.html", "page.html"]);
+    const move = await hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/files/move`, headers: hub.headers, payload: { from: "page.html", to: "INDEX.html" } });
+    expect(move.statusCode).toBe(409);
+    expect(move.json().error).toMatch(/casse/);
+  });
+
   it("télécharge en pièce jointe, jamais en ligne, même un HTML", async () => {
     await upload([{ filename: "index.html", content: "<script>alert(1)</script>" }]);
     const res = await hub.app.inject({ method: "GET", url: `/api/sites/${siteId}/files/raw?path=index.html`, headers: hub.headers });
@@ -152,6 +171,20 @@ describe("envoi d'un zip", () => {
     await sendZip(await makeZip([{ name: "index.html", content: "nouveau" }]), "merge");
     expect((await paths()).sort()).toEqual(["garde.css", "index.html"]);
     expect((await files()).files.find((f) => f.path === "index.html")!.size).toBe(7);
+  });
+
+  it("mode merge : collision de casse avec un fichier existant écartée avec sa raison ; mode replace : acceptée", async () => {
+    await upload([{ filename: "index.html", content: "ancien" }]);
+    const zip = await makeZip([
+      { name: "Index.html", content: "nouveau" },
+      { name: "a.css", content: "a" },
+    ]);
+    const merged = (await sendZip(zip, "merge")).json() as UploadResult;
+    expect(merged.accepted).toEqual(["a.css"]);
+    expect(merged.rejected).toEqual([{ path: "Index.html", reason: expect.stringMatching(/casse/) }]);
+    expect((await paths()).sort()).toEqual(["a.css", "index.html"]);
+    const replaced = (await sendZip(zip, "replace")).json() as UploadResult;
+    expect(replaced.accepted.sort()).toEqual(["Index.html", "a.css"]);
   });
 
   it("archive piégée : refusée en entier, version de travail intacte (tout ou rien)", async () => {
@@ -238,6 +271,22 @@ describe("publication et versions", () => {
     expect(hub.cf.deployments("kz-alpha")).toHaveLength(10);
     expect(await prisma.versionFile.count({ where: { version: { status: "PURGED" } } })).toBe(0);
     expect(list[0]!.current).toBe(true);
+  });
+
+  it("rétention : une version en échec ne prend pas la place d'une version publiée", async () => {
+    for (let i = 1; i <= 10; i++) {
+      await upload([{ filename: "index.html", content: `<h1>${i}</h1>` }]);
+      await publish();
+    }
+    await upload([{ filename: "index.html", content: "<h1>échec</h1>" }]);
+    hub.cf.failNext("deploy");
+    await publish();
+    await upload([{ filename: "index.html", content: "<h1>12</h1>" }]);
+    expect((await publish()).statusCode).toBe(200);
+    const list = await versions();
+    expect(list.filter((v) => v.status === "PUBLISHED").map((v) => v.number)).toEqual([13, 11, 10, 9, 8, 7, 6, 5, 4, 3]);
+    expect(list.find((v) => v.number === 12)).toMatchObject({ status: "PURGED", error: expect.any(String) });
+    expect(hub.cf.deployments("kz-alpha")).toHaveLength(10);
   });
 
   it("republie une version gardée, puis la restaure en version de travail", async () => {

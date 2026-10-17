@@ -19,7 +19,7 @@ function erp(handler: (call: Call) => Response, now = () => 1_760_000_000_000) {
     calls.push(call);
     return handler(call);
   }) as typeof fetch;
-  return { calls, dir: new HttpErpDirectory({ baseUrl: "http://10.0.0.50:3000/", secret: SECRET, fetch: fetchImpl, now }) };
+  return { calls, dir: new HttpErpDirectory({ baseUrl: "http://203.0.113.50:3000/", secret: SECRET, fetch: fetchImpl, now }) };
 }
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -30,7 +30,7 @@ describe("annuaire ERP par HTTP (fetch injecté)", () => {
     await dir.list();
     expect(calls).toHaveLength(1);
     const call = calls[0]!;
-    expect(call.url).toBe("http://10.0.0.50:3000/api/hub/clients");
+    expect(call.url).toBe("http://203.0.113.50:3000/api/hub/clients");
     expect(call.method).toBe("GET");
     const ts = call.headers.get("x-kouzia-hub-timestamp");
     expect(ts).toBe("1760000000");
@@ -68,7 +68,7 @@ describe("annuaire ERP par HTTP (fetch injecté)", () => {
 
   it("ERP injoignable, en erreur ou illisible : ErpUnavailableError", async () => {
     const down = new HttpErpDirectory({
-      baseUrl: "http://10.0.0.50:3000",
+      baseUrl: "http://203.0.113.50:3000",
       secret: SECRET,
       fetch: (async () => {
         throw new TypeError("fetch failed");

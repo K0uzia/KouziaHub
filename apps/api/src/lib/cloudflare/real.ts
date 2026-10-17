@@ -252,6 +252,14 @@ export class RealCloudflare implements CloudflareGateway {
     return this.toRecord(env.result);
   }
 
+  async updateCname(id: string, hostname: string, target: string, comment: string): Promise<CfDnsRecord> {
+    const env = await this.call<CfDnsRecord>("PATCH", `/zones/${this.#zone}/dns_records/${encodeURIComponent(id)}`, {
+      json: { type: "CNAME", name: hostname, content: target, proxied: true, ttl: 1, comment },
+    });
+    if (!env.result?.id) throw new CloudflareError("Réponse illisible de Cloudflare (DNS).", 200);
+    return this.toRecord(env.result);
+  }
+
   async deleteDnsRecord(id: string): Promise<void> {
     await this.orNull(this.call("DELETE", `/zones/${this.#zone}/dns_records/${encodeURIComponent(id)}`));
   }
@@ -275,9 +283,25 @@ export class RealCloudflare implements CloudflareGateway {
    * manquants par lots en base64, enregistrement des empreintes, puis création du déploiement.
    */
   async deploy(project: string, input: DeployInput): Promise<CfDeployment> {
-    const tokenEnv = await this.call<{ jwt: string }>("GET", `${this.projectPath(project)}/upload-token`);
-    const jwt = tokenEnv.result?.jwt;
-    if (!jwt) throw new CloudflareError("Cloudflare n'a pas fourni de jeton d'envoi.", 200);
+    const fetchJwt = async () => {
+      const tokenEnv = await this.call<{ jwt: string }>("GET", `${this.projectPath(project)}/upload-token`);
+      const value = tokenEnv.result?.jwt;
+      if (!value) throw new CloudflareError("Cloudflare n'a pas fourni de jeton d'envoi.", 200);
+      return value;
+    };
+    let jwt = await fetchJwt();
+    let renewed = false;
+    // Jeton d'envoi expiré en cours de route (gros site) : redemandé une fois, puis l'appel est rejoué.
+    const assets = async <T>(path: string, json: unknown): Promise<CfEnvelope<T>> => {
+      try {
+        return await this.call<T>("POST", path, { bearer: jwt, json });
+      } catch (err) {
+        if (renewed || !(err instanceof CloudflareError) || err.status !== 401) throw err;
+        renewed = true;
+        jwt = await fetchJwt();
+        return this.call<T>("POST", path, { bearer: jwt, json });
+      }
+    };
 
     const manifest: Record<string, string> = {};
     const byHash = new Map<string, (typeof input.files)[number]>();
@@ -288,14 +312,14 @@ export class RealCloudflare implements CloudflareGateway {
     }
     const hashes = [...byHash.keys()];
 
-    const missingEnv = await this.call<string[]>("POST", "/pages/assets/check-missing", { bearer: jwt, json: { hashes } });
+    const missingEnv = await assets<string[]>("/pages/assets/check-missing", { hashes });
     const missing = (missingEnv.result ?? []).filter((h) => byHash.has(h));
 
     let bucket: Array<{ key: string; value: string; metadata: { contentType: string }; base64: true }> = [];
     let bucketBytes = 0;
     const flush = async () => {
       if (bucket.length === 0) return;
-      await this.call("POST", "/pages/assets/upload", { bearer: jwt, json: bucket });
+      await assets("/pages/assets/upload", bucket);
       bucket = [];
       bucketBytes = 0;
     };
@@ -308,7 +332,7 @@ export class RealCloudflare implements CloudflareGateway {
     }
     await flush();
 
-    await this.call("POST", "/pages/assets/upsert-hashes", { bearer: jwt, json: { hashes } });
+    await assets("/pages/assets/upsert-hashes", { hashes });
 
     const form = new FormData();
     form.append("manifest", JSON.stringify(manifest));

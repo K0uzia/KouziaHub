@@ -200,6 +200,20 @@ describe("moteur d'opérations", () => {
     expect(await get(id)).toMatchObject({ state: "ONLINE", operation: null });
   });
 
+  it("CNAME du hub réemployé avec une ancienne cible : recalé sur l'adresse pages.dev du projet", async () => {
+    hub.cf.failNext("addDomain");
+    const res = await hub.app.inject({ method: "POST", url: "/api/sites", headers: hub.headers, payload: { kind: "PERSO", slug: "alpha", label: "A" } });
+    await settle(hub);
+    const failed = await get(res.json().id);
+    hub.cf.seedDnsRecord({ type: "CNAME", name: "alpha.kouzia.com", content: "kz-ancien.pages.dev", proxied: true, comment: `kouzia-hub:${failed.id}` });
+    await hub.app.inject({ method: "POST", url: `/api/sites/${failed.id}/operations/${failed.operation!.id}/retry`, headers: hub.headers });
+    await settle(hub);
+    expect(hub.cf.calls).toContain("updateCname:alpha.kouzia.com");
+    expect(hub.cf.calls).not.toContain("createCname:alpha.kouzia.com");
+    expect(hub.cf.snapshot().dns).toEqual([expect.objectContaining({ name: "alpha.kouzia.com", content: "kz-alpha.pages.dev" })]);
+    expect(await get(failed.id)).toMatchObject({ state: "ONLINE" });
+  });
+
   it("refuse le CNAME si un enregistrement hors hub occupe le nom", async () => {
     const res = await hub.app.inject({ method: "POST", url: "/api/sites", headers: hub.headers, payload: { kind: "PERSO", slug: "alpha", label: "A" } });
     // Enregistrement créé hors hub entre le contrôle du sous-domaine et l'étape DNS.
@@ -230,6 +244,67 @@ describe("certificat en attente", () => {
     expect(site).toMatchObject({ state: "ONLINE", domainStatus: "ACTIVE", operation: null });
     const op = await prisma.operation.findFirstOrThrow({ where: { siteId: waiting.id, kind: "CREATE" } });
     expect(JSON.parse(op.steps).at(-1)).toMatchObject({ key: "certificate", status: "done" });
+  });
+});
+
+describe("certificat : jamais bloqué", () => {
+  const waitFor = async (pred: (s: SiteDetail) => boolean, id: string) => {
+    const deadline = Date.now() + 3000;
+    let site = await get(id);
+    while (Date.now() < deadline && !pred(site)) {
+      await new Promise((r) => setTimeout(r, 30));
+      site = await get(id);
+    }
+    return site;
+  };
+
+  it("remise en ligne en attente de certificat (hors ligne, CNAME posé) : la coupure reste possible", async () => {
+    await hub.app.close();
+    hub = await buildTestHub({ cloudflare: new FakeCloudflare({ activationDelayMs: 600_000 }), watcherDelaysMs: [600_000] });
+    const id = await createPersoSite(hub, "alpha");
+    await hub.app.inject({ method: "POST", url: `/api/sites/${id}/disable`, headers: hub.headers });
+    await settle(hub);
+    await hub.app.inject({ method: "POST", url: `/api/sites/${id}/enable`, headers: hub.headers });
+    await settle(hub);
+    expect(await get(id)).toMatchObject({ state: "OFFLINE", domainStatus: "PENDING" });
+    expect(hub.cf.snapshot().dns).toHaveLength(1);
+    const off = await hub.app.inject({ method: "POST", url: `/api/sites/${id}/disable`, headers: hub.headers });
+    expect(off.statusCode).toBe(200);
+    await settle(hub);
+    expect(await get(id)).toMatchObject({ state: "OFFLINE", domainStatus: "NONE" });
+    expect(hub.cf.snapshot().dns).toEqual([]);
+    expect(hub.cf.snapshot().projects[0]!.domains).toEqual([]);
+  });
+
+  it("erreur de validation du certificat : opération FAILED reprenable, puis en ligne", async () => {
+    await hub.app.close();
+    let t = 1_000_000;
+    hub = await buildTestHub({ cloudflare: new FakeCloudflare({ activationDelayMs: 60_000, now: () => t }), watcherDelaysMs: [20] });
+    const id = await createPersoSite(hub, "alpha");
+    hub.cf.setDomainStatus("kz-alpha", "alpha.kouzia.com", "error");
+    const failed = await waitFor((s) => s.operation?.status === "FAILED", id);
+    expect(failed).toMatchObject({ state: "CREATING", domainStatus: "ERROR" });
+    expect(failed.operation).toMatchObject({ kind: "CREATE", error: expect.stringMatching(/^Certificat HTTPS : /) });
+    expect(failed.operation!.steps.at(-1)).toMatchObject({ key: "certificate", status: "failed" });
+
+    hub.cf.setDomainStatus("kz-alpha", "alpha.kouzia.com", undefined);
+    t += 120_000;
+    const retry = await hub.app.inject({ method: "POST", url: `/api/sites/${id}/operations/${failed.operation!.id}/retry`, headers: hub.headers });
+    expect(retry.statusCode).toBe(200);
+    await settle(hub);
+    expect(await get(id)).toMatchObject({ state: "ONLINE", domainStatus: "ACTIVE", operation: null });
+  });
+
+  it("deux reprises simultanées : une seule exécution", async () => {
+    hub.cf.failNext("addDomain");
+    const res = await hub.app.inject({ method: "POST", url: "/api/sites", headers: hub.headers, payload: { kind: "PERSO", slug: "alpha", label: "A" } });
+    await settle(hub);
+    const failed = await get(res.json().id);
+    const url = `/api/sites/${failed.id}/operations/${failed.operation!.id}/retry`;
+    const codes = (await Promise.all([1, 2].map(() => hub.app.inject({ method: "POST", url, headers: hub.headers })))).map((r) => r.statusCode).sort();
+    expect(codes).toEqual([200, 409]);
+    await settle(hub);
+    expect(hub.cf.calls.filter((c) => c.startsWith("createCname"))).toHaveLength(1);
   });
 });
 

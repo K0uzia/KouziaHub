@@ -1,7 +1,12 @@
 import sharp from "sharp";
 import { afterEach, describe, expect, it } from "vitest";
 import type { SiteDetail } from "@/contract.js";
-import { resolveChromium } from "@/lib/thumbnails.js";
+import type { AddressInfo } from "node:net";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { BlobStore } from "@/lib/blobs.js";
+import { CAPTURE_CSP, resolveChromium, ThumbnailService } from "@/lib/thumbnails.js";
 import { resetDb } from "../helpers/db.js";
 import { buildTestHub, createPersoSite, multipart, settle, type TestHub } from "../helpers/hub.js";
 
@@ -57,12 +62,34 @@ describe("vignette envoyée (repli)", () => {
   });
 });
 
+describe("serveur éphémère de capture", () => {
+  it("pose une CSP stricte (connect-src 'self') sur chaque réponse", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "kouzia-hub-thumb-"));
+    const blobs = new BlobStore(dataDir);
+    const { sha256 } = await blobs.putBuffer(Buffer.from("<h1>x</h1>"));
+    const server = await new ThumbnailService({ dataDir, blobs, chromiumPath: null }).serveVersion(new Map([["index.html", sha256]]));
+    try {
+      const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      for (const path of ["/", "/absent.css"]) {
+        const res = await fetch(base + path);
+        expect(res.headers.get("content-security-policy")).toBe(CAPTURE_CSP);
+      }
+      expect(CAPTURE_CSP).toContain("connect-src 'self'");
+      expect(CAPTURE_CSP).toContain("default-src 'self'");
+    } finally {
+      server.closeAllConnections();
+      server.close();
+    }
+  });
+});
+
 describe.skipIf(!chromium)("capture automatique (Chromium local)", () => {
   it("capture la version publiée sans réseau extérieur, après la publication", { timeout: 60_000 }, async () => {
     const { hub, siteId } = await setup(chromium);
     const html =
       '<!doctype html><html><head><link rel="stylesheet" href="/s.css"></head>' +
-      '<body><h1>Alpha</h1><img src="https://example.com/pixel.png" alt=""></body></html>';
+      '<body><h1>Alpha</h1><img src="https://example.com/pixel.png" alt="">' +
+      '<script>try { new WebSocket("ws://" + location.host + "/ws"); } catch (e) {}</script></body></html>';
     const body = multipart([], [
       { filename: "index.html", content: html, type: "text/html" },
       { filename: "s.css", content: "body{background:#cc3300;margin:0}", type: "text/css" },
@@ -73,7 +100,10 @@ describe.skipIf(!chromium)("capture automatique (Chromium local)", () => {
     await hub.services.thumbnails.idle();
     const site = (await hub.app.inject({ method: "GET", url: `/api/sites/${siteId}`, headers: hub.headers })).json() as SiteDetail;
     expect(site.thumbnailSource).toBe("capture");
-    expect(hub.services.thumbnails.lastBlocked).toContain("https://example.com/pixel.png");
+    // L'image externe est arrêtée par la CSP avant même l'interception ; le WebSocket (même origine,
+    // permis par la CSP) est coupé par routeWebSocket.
+    expect(hub.services.thumbnails.lastBlocked.some((u) => u.startsWith("https://example.com"))).toBe(false);
+    expect(hub.services.thumbnails.lastBlocked.some((u) => /^ws:\/\/127\.0\.0\.1:\d+\/ws$/.test(u))).toBe(true);
     const img = await hub.app.inject({ method: "GET", url: site.thumbnailUrl!, headers: hub.headers });
     const { data, info } = await sharp(img.rawPayload).raw().toBuffer({ resolveWithObject: true });
     expect([info.width, info.height]).toEqual([640, 400]);

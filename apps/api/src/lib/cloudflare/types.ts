@@ -55,6 +55,8 @@ export interface CloudflareGateway {
   findDnsRecord(hostname: string): Promise<CfDnsRecord | null>;
   /** CNAME proxifié. */
   createCname(hostname: string, target: string, comment: string): Promise<CfDnsRecord>;
+  /** Recale un CNAME du hub (cible, proxy, commentaire). */
+  updateCname(id: string, hostname: string, target: string, comment: string): Promise<CfDnsRecord>;
   deleteDnsRecord(id: string): Promise<void>;
   /** Enregistrements dont le commentaire commence par « kouzia-hub: ». */
   listHubDnsRecords(): Promise<CfDnsRecord[]>;

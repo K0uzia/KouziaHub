@@ -12,6 +12,18 @@ import { prisma } from "@/lib/prisma.js";
 export const THUMB_WIDTH = 640;
 export const THUMB_HEIGHT = 400;
 
+/**
+ * CSP du serveur éphémère de capture : seul 127.0.0.1:<port> est joignable (connect-src couvre fetch,
+ * XHR et WebSocket), en plus de l'interception des requêtes par Chromium.
+ */
+export const CAPTURE_CSP =
+  "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; " +
+  "img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' data: blob:; connect-src 'self'; frame-src 'self'; " +
+  "worker-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'";
+
+/** Bac à sable de Chromium actif sauf sous root (où Chromium refuse de démarrer avec). */
+const sandboxWanted = () => (typeof process.getuid === "function" ? process.getuid() !== 0 : true);
+
 export type ThumbnailOptions = {
   dataDir: string;
   blobs: BlobStore;
@@ -106,7 +118,7 @@ export class ThumbnailService {
     if (!version || version.source === "placeholder" || version.files.length === 0) return false;
     const files = new Map(version.files.map((f) => [f.path, f.sha256]));
 
-    const server = await this.serve(files);
+    const server = await this.serveVersion(files);
     const port = (server.address() as AddressInfo).port;
     const origin = `http://127.0.0.1:${port}`;
     const timeoutMs = this.options.timeoutMs ?? 30_000;
@@ -116,12 +128,24 @@ export class ThumbnailService {
     this.lastBlocked = blocked;
     const deadline = setTimeout(() => void browser?.close().catch(() => undefined), timeoutMs);
     try {
-      browser = await chromium.launch({
-        executablePath,
-        headless: true,
-        timeout: timeoutMs,
-        args: ["--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1", "--disable-background-networking", "--no-first-run"],
-      });
+      const launch = (chromiumSandbox: boolean) =>
+        chromium.launch({
+          executablePath,
+          headless: true,
+          timeout: timeoutMs,
+          chromiumSandbox,
+          args: ["--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1", "--disable-background-networking", "--no-first-run"],
+        });
+      if (sandboxWanted()) {
+        try {
+          browser = await launch(true);
+        } catch (err) {
+          console.warn("[vignette] Chromium refuse le bac à sable, lancement sans", err instanceof Error ? err.message.split(/\r?\n/)[0] : err);
+          browser = await launch(false);
+        }
+      } else {
+        browser = await launch(false);
+      }
       const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: "block", acceptDownloads: false });
       await context.route("**/*", (route) => {
         const url = route.request().url();
@@ -129,6 +153,13 @@ export class ThumbnailService {
         blocked.push(url);
         return route.abort();
       });
+      await context.routeWebSocket(
+        () => true,
+        (ws) => {
+          blocked.push(ws.url());
+          void ws.close();
+        },
+      );
       const page = await context.newPage();
       await page.goto(`${origin}/`, { waitUntil: "load", timeout: timeoutMs });
       await page.waitForTimeout(400);
@@ -149,7 +180,7 @@ export class ThumbnailService {
   }
 
   /** Serveur éphémère des fichiers d'une version, sur 127.0.0.1 et un port aléatoire. */
-  private serve(files: Map<string, string>): Promise<Server> {
+  serveVersion(files: Map<string, string>): Promise<Server> {
     const blobs = this.options.blobs;
     const server = createServer((req, res) => {
       let pathname: string;
@@ -162,10 +193,10 @@ export class ThumbnailService {
       const candidates = [pathname, pathname === "" || pathname.endsWith("/") ? `${pathname}index.html` : `${pathname}/index.html`, `${pathname}.html`];
       const found = candidates.find((p) => files.has(p));
       if (!found || (req.method !== "GET" && req.method !== "HEAD")) {
-        res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" }).end("404");
+        res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8", "Content-Security-Policy": CAPTURE_CSP }).end("404");
         return;
       }
-      res.writeHead(200, { "Content-Type": contentTypeWithCharset(found), "Cache-Control": "no-store" });
+      res.writeHead(200, { "Content-Type": contentTypeWithCharset(found), "Cache-Control": "no-store", "Content-Security-Policy": CAPTURE_CSP });
       if (req.method === "HEAD") {
         res.end();
         return;

@@ -198,6 +198,45 @@ describe("adaptateur Cloudflare réel (fetch injecté)", () => {
     expect(form.get("_redirects")).toBeNull();
   });
 
+  it("jeton d'envoi expiré (401 sur /pages/assets) : redemandé une fois, appel rejoué", async () => {
+    let tokens = 0;
+    let checks = 0;
+    api.on("GET", `${P}/kz-a/upload-token`, () => ok({ jwt: `${JWT}-${++tokens}` }));
+    api.on("POST", "/pages/assets/check-missing", (req) => {
+      checks++;
+      if (req.auth === `Bearer ${JWT}-1`) return { status: 401, body: { success: false, errors: [{ code: 8000013, message: "expired" }] } };
+      return ok([]);
+    });
+    api.on("POST", "/pages/assets/upsert-hashes", (req) => {
+      expect(req.auth).toBe(`Bearer ${JWT}-2`);
+      return ok(null);
+    });
+    api.on("POST", `${P}/kz-a/deployments`, () => ok({ id: "dep-2", url: "" }));
+    const content = Buffer.from("x");
+    await cf.deploy("kz-a", { files: [{ path: "index.html", sha256: "x", size: 1, read: async () => content }], workerJs: "" });
+    expect(tokens).toBe(2);
+    expect(checks).toBe(2);
+  });
+
+  it("jeton d'envoi refusé deux fois : erreur, pas de boucle", async () => {
+    let tokens = 0;
+    api.on("GET", `${P}/kz-a/upload-token`, () => ok({ jwt: `${JWT}-${++tokens}` }));
+    api.on("POST", "/pages/assets/check-missing", () => ({ status: 401, body: { success: false, errors: [] } }));
+    const content = Buffer.from("x");
+    await expect(
+      cf.deploy("kz-a", { files: [{ path: "index.html", sha256: "x", size: 1, read: async () => content }], workerJs: "" }),
+    ).rejects.toMatchObject({ status: 401 });
+    expect(tokens).toBe(2);
+  });
+
+  it("recale un CNAME du hub par PATCH", async () => {
+    api.on("PATCH", "/zones/zone1/dns_records/r1", (req) => {
+      expect(req.json).toEqual({ type: "CNAME", name: "a.kouzia.com", content: "kz-a.pages.dev", proxied: true, ttl: 1, comment: "kouzia-hub:s1" });
+      return ok({ id: "r1", type: "CNAME", name: "a.kouzia.com", content: "kz-a.pages.dev", proxied: true, comment: "kouzia-hub:s1" });
+    });
+    expect((await cf.updateCname("r1", "a.kouzia.com", "kz-a.pages.dev", "kouzia-hub:s1")).content).toBe("kz-a.pages.dev");
+  });
+
   it("réessaie sur 503 puis réussit, en respectant Retry-After sur 429", async () => {
     let calls = 0;
     api.on("GET", `${P}/kz-a`, () => {

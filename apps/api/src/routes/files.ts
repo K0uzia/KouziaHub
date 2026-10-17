@@ -9,7 +9,7 @@ import { z } from "zod";
 import type { RejectedFile, UploadResult } from "@/contract.js";
 import { audit } from "@/lib/audit.js";
 import { requireAuth } from "@/lib/auth.js";
-import { applyWorkingChanges, listFiles, type FileRef } from "@/lib/files.js";
+import { applyWorkingChanges, CASE_CONFLICT, listFiles, splitCaseConflicts, workingPaths, type FileRef } from "@/lib/files.js";
 import { HttpError } from "@/lib/http.js";
 import { idParams } from "@/lib/http-input.js";
 import { MAX_FILE_BYTES, MAX_FILES_PER_UPLOAD, MAX_ZIP_BYTES } from "@/lib/limits.js";
@@ -115,11 +115,13 @@ export function filesRoutes(services: Services): FastifyPluginAsync {
         }
         stored.set(target, { path: target, ...blob });
       }
-      if (stored.size > 0) {
-        await applyWorkingChanges(id, { upserts: [...stored.values()] });
-        await audit({ action: "files.upload", result: "ok", siteId: id, siteSlug: site.slug, detail: `${stored.size} fichier(s)` });
+      const { kept, rejected: conflicts } = splitCaseConflicts([...stored.values()], await workingPaths(id));
+      rejected.push(...conflicts);
+      if (kept.length > 0) {
+        await applyWorkingChanges(id, { upserts: kept });
+        await audit({ action: "files.upload", result: "ok", siteId: id, siteSlug: site.slug, detail: `${kept.length} fichier(s)` });
       }
-      return { accepted: [...stored.keys()], rejected, files: await listFiles(id) };
+      return { accepted: kept.map((f) => f.path), rejected, files: await listFiles(id) };
     });
 
     app.post("/api/sites/:id/files/delete", async (request) => {
@@ -162,12 +164,15 @@ export function filesRoutes(services: Services): FastifyPluginAsync {
       }
       const movingPaths = new Set(moving.map((f) => f.path));
       const existing = new Set(all.filter((f) => !movingPaths.has(f.path)).map((f) => f.path));
+      const existingLower = new Map([...existing].map((p) => [p.toLowerCase(), p]));
       const upserts: FileRef[] = [];
       for (const f of moving) {
         const next = from.kind === "dir" ? `${to.path}/${f.path.slice(from.path.length + 1)}` : to.path;
         const { path: target, verdict } = checkSitePath(next);
         if (verdict.action !== "accept") throw new HttpError(400, `${target.slice(0, 200)} : ${verdict.reason}`);
         if (existing.has(target)) throw new HttpError(409, `Un fichier porte déjà ce nom : ${target.slice(0, 200)}`);
+        const other = existingLower.get(target.toLowerCase());
+        if (other !== undefined) throw new HttpError(409, CASE_CONFLICT(other.slice(0, 200)));
         upserts.push({ path: target, sha256: f.sha256, size: f.size });
       }
       await applyWorkingChanges(id, { deletePaths: [...movingPaths], upserts });
@@ -204,6 +209,11 @@ export function filesRoutes(services: Services): FastifyPluginAsync {
         if (mode !== "replace" && mode !== "merge") throw new HttpError(400, "Champ « mode » attendu : replace ou merge.");
 
         const extraction = await extractZip(zipPath, services.blobs);
+        if (mode === "merge") {
+          const { kept, rejected: conflicts } = splitCaseConflicts(extraction.accepted, await workingPaths(id));
+          extraction.accepted = kept;
+          extraction.rejected.push(...conflicts);
+        }
         if (extraction.accepted.length > 0) {
           await applyWorkingChanges(id, { upserts: extraction.accepted, replaceAll: mode === "replace" });
           await audit({
