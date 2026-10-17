@@ -13,6 +13,16 @@ Outil interne de l'EI Kouzia, sur `hub.kouzia.com`. Il héberge les versions de 
 - L'outil tourne sur le Proxmox d'Alexandre, comme l'ERP (CT Alpine, OpenRC, tunnel Cloudflare).
 - Clients : lus depuis l'ERP en lecture seule ; rien n'est ressaisi.
 
+## Décisions d'Alexandre (17/10/2026, deuxième série, verrouillées)
+
+Elles remplacent les points correspondants ci-dessus et du cadrage (`docs/cadrage.md`, section 9).
+
+- **Pas de code d'accès** : Alexandre donne directement le lien `<client>.kouzia.com`. La version de travail reste non indexée (`X-Robots-Tag: noindex, nofollow`, `robots.txt` en `Disallow: /`) et les adresses `pages.dev` redirigent vers le sous-domaine.
+- **Bouton off = l'adresse ne répond plus** : retrait du CNAME puis du domaine du projet. Le rallumage remet le domaine et le CNAME (quelques minutes de certificat), l'interface le dit.
+- **Sites perso** : un site peut n'être lié à aucun client de l'ERP, avec l'étiquette « Perso » et un filtre Clients / Perso.
+- **Fichiers « comme un FTP »** : explorateur de fichiers dans la fiche du site (parcourir, ajouter, remplacer, supprimer, puis « Publier »), plus l'envoi du site entier en zip. Chaque publication est une version gardée, republiable.
+- **Défauts retenus par le superviseur** : tunnel propre au hub ; `hubctl` copié de `kouziactl` ; zip et explorateur d'abord, GitHub plus tard ; vignette capturée automatiquement avec repli sur une image envoyée ; sous-domaine proposé depuis le nom du client, modifiable, liste de noms interdits.
+
 ## Garde-fous
 
 - Aucun secret dans le dépôt, le chat ou les journaux. Le jeton API Cloudflare est créé par Alexandre, avec les droits minimaux, et placé par lui dans `.env`.
