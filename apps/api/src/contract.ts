@@ -54,7 +54,10 @@ export type SiteSummary = {
   clientName: string | null;
   state: SiteState;
   domainStatus: DomainStatus;
-  /** Opération en cours ou dernière opération échouée (null sinon). */
+  /**
+   * Opération en cours, dernière opération échouée, ou dernière création / remise en ligne dont l'étape
+   * « certificate » attend encore (status DONE, étape « waiting ») ; null sinon.
+   */
   operation: Operation | null;
   /** Fichiers de travail modifiés depuis la dernière publication. */
   workingDirty: boolean;
@@ -122,6 +125,8 @@ export type RejectedFile = { path: string; reason: string };
 export type UploadResult = {
   accepted: string[];
   rejected: RejectedFile[];
+  /** Zip seulement : dossier racine unique retiré automatiquement (ex. « dist/ »), null sinon. */
+  strippedRoot?: string | null;
   files: FilesResponse;
 };
 
@@ -176,6 +181,7 @@ export type SystemStatus = {
 //
 // GET    /api/sites                              : CatalogResponse
 // GET    /api/sites/slug-check?slug=             : SlugCheck
+// GET    /api/sites/slug-check?name=             : SlugCheck du sous-domaine proposé depuis un nom (minuscules, sans accent)
 // POST   /api/sites                    CreateSiteInput : SiteDetail (opération CREATE lancée)
 // GET    /api/sites/:id                          : SiteDetail
 // PATCH  /api/sites/:id                UpdateSiteInput : SiteDetail
