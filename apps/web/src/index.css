@@ -65,14 +65,6 @@
   --shadow: 0 1.5rem 3rem -1rem rgb(0 0 0 / 0.6);
   --shadow-sm: 0 0.125rem 0.5rem rgb(0 0 0 / 0.25);
   --shadow-card: 0 0.25rem 1.5rem rgb(0 0 0 / 0.3);
-  /* Recadrage : voile autour de la zone gardée (ombre portée très étendue, sans élément en plus). */
-  --crop-mask: 0 0 0 100vmax rgb(11 16 32 / 0.65);
-  /* Aperçu des cartes de kouzia.com : valeurs du site (src/styles/global.css), indépendantes de l'accent de l'espace. */
-  --apercu-accent: #fe9a00;
-  --apercu-logo-fond: #eef0fa;
-  --apercu-voile: rgb(11 16 32 / 0.88);
-  --apercu-voile-leger: rgb(11 16 32 / 0.65);
-  --apercu-reflet: rgb(255 255 255 / 0.03);
   /* Typographie : marque pour les titres, système pour les données (lisibilité, chiffres). */
   --font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu,
     Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
@@ -86,22 +78,18 @@
   --text-meta: 0.8125rem;
   /* Libellés des onglets du bas : « Messages » entier sur 5 onglets à 320 px. */
   --text-tab: clamp(0.75rem, 0.45rem + 1.1vw, 0.8125rem);
+  /* Catalogue : largeur de page, largeur minimale d'une carte (1 colonne à 360 px, 2 sur tablette),
+     carte de la rangée « Modifiés récemment », format des vignettes (capture 1280 × 800). */
+  --page-max: 90rem;
+  --card-min: 17rem;
+  --recent-w: min(82%, 19rem);
+  --thumb-ratio: 16 / 10;
+  /* Fond du QR code de la double authentification (les applications lisent mal un QR sur fond sombre). */
+  --qr-bg: #ffffff;
   /* Mouvement */
   --duration-fast: 150ms;
   --duration-base: 300ms;
   --ease: cubic-bezier(0.2, 0, 0, 1);
-}
-
-/*
- * Espace « Site » : son propre accent, pour savoir d'un coup d'oeil quel espace on modifie.
- * Lavande, choisie par Alexandre (2026-10-14) : rappelle l'indigo nocturne de kouzia.com.
- * Contrastes : --primary 6,6:1 sur --surface-hover et 8,9:1 sur --bg ; --primary-fg sur --primary 8,9:1.
- */
-:root[data-space="site"] {
-  --primary: #a5abff;
-  --primary-fg: #0b1020;
-  --primary-hover: #c3c7ff;
-  --primary-soft: rgb(165 171 255 / 0.12);
 }
 
 *,
@@ -212,6 +200,8 @@ h3 {
   letter-spacing: 0.01em;
 }
 
+/* Composants N1 dans la couche components : une classe utilitaire (bordure d'alerte) peut les nuancer. */
+@layer components {
 /* Carte (N1) : surface pleine, sans flou (règle web-design). */
 .ui-card {
   border: 1px solid var(--border);
@@ -229,6 +219,8 @@ h3 {
 }
 .btn-accent:hover:not(:disabled) {
   background: var(--primary-hover);
+}
+
 }
 
 /* Tableaux */
@@ -306,6 +298,11 @@ h3 {
   width: 1%;
 }
 
+/* Cellule d'actions : le menu déroulant dépasse de la cellule. */
+.ui-table td.col-actions {
+  overflow: visible;
+}
+
 .ui-table td.wrap {
   white-space: normal;
   word-break: break-word;
@@ -314,7 +311,9 @@ h3 {
 }
 
 @media (max-width: 767px) {
+  /* Bloc et non tableau : sinon la largeur minimale du contenu (texte tronqué) élargit le tableau hors de l'écran. */
   .ui-table-stack {
+    display: block;
     width: 100%;
   }
   .ui-table-stack thead {
@@ -376,14 +375,6 @@ h3 {
   }
 }
 
-.ui-chip {
-  display: inline-flex;
-  min-height: 44px;
-  align-items: center;
-  justify-content: center;
-  touch-action: manipulation;
-}
-
 .no-scrollbar {
   scrollbar-width: none;
   -ms-overflow-style: none;
@@ -414,54 +405,6 @@ h3 {
   background-color: rgb(255 255 255 / 0.28);
 }
 
-/* react-data-table-component : forcer le thème sombre (évite les lignes blanches) */
-.rdt_Table {
-  background-color: transparent !important;
-  color: var(--text);
-}
-.rdt_noData {
-  background-color: transparent !important;
-  color: var(--text) !important;
-}
-.rdt_TableHeadRow {
-  background-color: var(--bg-subtle) !important;
-  border-bottom: 1px solid var(--border);
-}
-.rdt_TableHeadRow .rdt_TableCol {
-  color: var(--muted) !important;
-}
-.rdt_TableRow {
-  background-color: var(--surface) !important;
-  color: var(--text) !important;
-}
-.rdt_TableRow:hover {
-  background-color: var(--surface-raised) !important;
-}
-.rdt_TableCell {
-  background-color: inherit !important;
-  color: var(--text) !important;
-}
-.rdt_Pagination {
-  background-color: var(--surface) !important;
-  color: var(--muted) !important;
-  border-top: 1px solid var(--border) !important;
-}
-.rdt_Pagination select,
-.rdt_Pagination option {
-  background-color: var(--surface-hover) !important;
-  color: var(--text) !important;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  min-height: 44px;
-}
-.rdt_Pagination button {
-  min-height: 44px;
-  min-width: 44px;
-}
-.rdt_Pagination button svg {
-  fill: var(--primary) !important;
-}
-
 /* Selects / options / hovers restés blancs par défaut navigateur */
 select,
 select option {
@@ -478,12 +421,6 @@ option:hover {
   color: var(--primary);
 }
 
-
-/* Cursor blanc RDT */
-.rdt_TableRow:hover .rdt_TableCell {
-  background-color: var(--surface-raised) !important;
-  color: var(--text) !important;
-}
 
 /* Texte secondaire (classe text-xs, lue par Tailwind dans --text-xs) : 13 px sous 640 px pour la
    lecture au téléphone, 12 px au-delà pour la densité du bureau. Badges : tailles dédiées. */
@@ -504,4 +441,196 @@ option:hover {
   :root {
     --gutter: 2rem;
   }
+}
+
+@layer components {
+/* ---- Composants du hub (N1) ---- */
+
+/* Vignette 16:10 : réserve sa place avant le chargement (pas de décalage), repli sobre sans image. */
+.thumb {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: var(--thumb-ratio);
+  color: var(--muted);
+  background: var(--surface-raised);
+  overflow: hidden;
+}
+
+.thumb-empty {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  color: var(--border-strong);
+  background:
+    radial-gradient(ellipse 70% 60% at 50% 0%, var(--primary-soft), transparent 70%),
+    var(--surface-raised);
+}
+
+/* Carte du catalogue : la carte entière est cliquable par le lien étiré du titre. */
+.site-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+  transition: border-color var(--duration-fast) var(--ease);
+}
+
+.site-card:hover {
+  border-color: var(--border-strong);
+}
+
+.site-card:has(.site-card-link:focus-visible) {
+  border-color: var(--primary);
+}
+
+.site-card-link {
+  color: inherit;
+}
+
+.site-card-link::after {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  content: "";
+}
+
+.site-card-link:focus-visible {
+  outline: none;
+}
+
+.site-card-link:focus-visible::after {
+  border-radius: var(--radius-lg);
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.site-card:hover .site-card-link {
+  color: var(--primary-hover);
+}
+
+/* Grille du catalogue : colonnes automatiques, aucune largeur d'appareil. */
+.catalog-grid {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--card-min)), 1fr));
+  list-style: none;
+}
+
+/* Rangée « Modifiés récemment » : défilement horizontal manuel, arrêt sur chaque carte, jamais automatique. */
+.recent-row {
+  display: flex;
+  margin: 0 calc(var(--gutter) * -1);
+  padding: 0.25rem var(--gutter) 1rem;
+  gap: 1rem;
+  list-style: none;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-padding-inline: var(--gutter);
+  scroll-snap-type: x mandatory;
+}
+
+.recent-item {
+  display: flex;
+  width: var(--recent-w);
+  flex: 0 0 auto;
+  scroll-snap-align: start;
+}
+
+/* Zone de dépôt : signalée pendant le survol (contour plein, fond teinté), plus large que le cadre visible. */
+.dropzone {
+  position: relative;
+  border: 1px dashed var(--border-input);
+  border-radius: var(--radius-lg);
+  transition:
+    border-color var(--duration-fast) var(--ease),
+    background-color var(--duration-fast) var(--ease);
+}
+
+.dropzone[data-over="true"] {
+  border-style: solid;
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+/* Barre de progression (envoi, publication). */
+.progress {
+  display: block;
+  width: 100%;
+  height: 0.5rem;
+  border-radius: 999rem;
+  background: var(--surface-hover);
+  overflow: hidden;
+}
+
+.progress > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+  transition: width var(--duration-fast) linear;
+}
+
+/* Case à cocher native, à la taille d'une cible tactile (la case elle-même reste native). */
+.ui-check {
+  width: 1.125rem;
+  height: 1.125rem;
+  accent-color: var(--primary);
+}
+
+/* Zone de dépôt fondue dans sa carte : invisible au repos, signalée pendant le survol (règle ci-dessus, plus spécifique). */
+.dropzone-quiet {
+  border-color: transparent;
+}
+
+.dropzone-quiet[data-over="true"] {
+  border-color: var(--primary);
+}
+
+/* Ligne de l'explorateur : case, nom, taille (dès 640 px), date (dès 768 px), menu. */
+.file-row {
+  display: grid;
+  min-height: var(--tap);
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  column-gap: 0.5rem;
+  grid-template-columns: var(--tap) minmax(0, 1fr) var(--tap);
+}
+
+.file-row:last-child {
+  border-bottom: 0;
+}
+
+.file-row:hover {
+  background: var(--surface-raised);
+}
+
+@media (min-width: 40rem) {
+  .file-row {
+    grid-template-columns: var(--tap) minmax(0, 1fr) auto var(--tap);
+  }
+}
+
+@media (min-width: 48rem) {
+  .file-row {
+    grid-template-columns: var(--tap) minmax(0, 1fr) 10rem 11rem var(--tap);
+  }
+}
+
+.file-name {
+  display: inline-flex;
+  min-height: var(--tap);
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.25rem 0;
+  font-size: 0.875rem;
+}
 }
