@@ -66,6 +66,8 @@ export type SiteSummary = {
   thumbnailUrl: string | null;
   touchedAt: string;
   createdAt: string;
+  /** Surveillance du site (null si aucune cible surveillée). */
+  monitor: SiteMonitorBadge | null;
 };
 
 export type CanonicalHost = "www" | "apex";
@@ -259,3 +261,118 @@ export type SystemStatus = {
 // POST   /api/orphans/check                      : OrphanReport
 // POST   /api/orphans/dns/delete       { name: string } : OrphanReport
 // GET    /api/audit?siteId=&limit=               : AuditEntry[]
+
+// --- Surveillance (cadrage section 10) ---
+
+export type MonitorVerdict = "up" | "down" | "local_only" | "edge_only" | "unknown";
+export type MonitorSource = "site" | "cloudflare" | "manual";
+
+/** Résumé de surveillance d'un site, porté par SiteSummary.monitor (null si aucune cible). */
+export type SiteMonitorBadge = {
+  /** Pire verdict des cibles surveillées du site ; "unknown" si aucune observation. */
+  verdict: MonitorVerdict;
+  /** Nombre de cibles surveillées (interrupteur actif). */
+  watched: number;
+  /** Disponibilité des 30 derniers jours en %, null si pas assez de données. */
+  uptime30d: number | null;
+  /** Incident ouvert le plus ancien (ISO), null sinon. */
+  openIncidentSince: string | null;
+};
+
+export type MonitorCheckKind = "http" | "tls" | "domain" | "dns" | "content" | "speed";
+
+export type MonitorTargetEntry = {
+  id: string;
+  siteId: string | null;
+  /** Slug du site lié (lien vers la fiche), null si domaine seul. */
+  siteSlug: string | null;
+  label: string;
+  url: string;
+  hostname: string;
+  source: MonitorSource;
+  erpClientId: string | null;
+  clientName: string | null;
+  enabled: boolean;
+  keyword: string | null;
+  verdict: MonitorVerdict;
+  /** Points de contrôle pris en compte par le verdict. */
+  basis: Array<"hub" | "edge">;
+  lastHub: { at: string; ok: boolean; status: number | null; ms: number | null; reason: string | null } | null;
+  lastEdge: { at: string; ok: boolean; status: number | null; ms: number | null; reason: string | null } | null;
+  uptime24h: number | null;
+  uptime30d: number | null;
+  /** Certificat : échéance (ISO) et jours restants, null si non contrôlé. */
+  certificate: { validTo: string; daysLeft: number; issuer: string | null; ok: boolean; error: string | null } | null;
+  /** Échéance du domaine par RDAP, null si inconnue. */
+  domainExpiry: { expiresAt: string | null; daysLeft: number | null; registrar: string | null; checkedAt: string } | null;
+  dns: { status: "ok" | "drift" | "no_reference" | "error"; checkedAt: string | null; detail: string | null } | null;
+  content: { status: "ok" | "changed" | "no_reference" | "error"; checkedAt: string | null } | null;
+  speed: { measuredAt: string; ttfbMs: number | null; lcpMs: number | null; cls: number | null; bytes: number | null; requests: number | null } | null;
+  openIncident: { id: string; startedAt: string; basis: Array<"hub" | "edge"> } | null;
+  createdAt: string;
+};
+
+export type MonitorIncidentEntry = {
+  id: string;
+  targetId: string;
+  targetLabel: string;
+  startedAt: string;
+  endedAt: string | null;
+  durationMs: number | null;
+  cause: string | null;
+  basis: Array<"hub" | "edge">;
+};
+
+export type MonitorOverview = {
+  targets: MonitorTargetEntry[];
+  stats: { watched: number; up: number; down: number; warnings: number; openIncidents: number };
+  /** État des deux points de contrôle et des notifications. */
+  health: {
+    edge: { configured: boolean; lastSeenAt: string | null; lastSyncAt: string | null; error: string | null };
+    hubChecksRunning: boolean;
+    push: { configured: boolean; devices: number };
+    zonesToken: boolean;
+  };
+  recentIncidents: MonitorIncidentEntry[];
+};
+
+export type CreateMonitorTargetInput = {
+  url: string;
+  label: string;
+  erpClientId?: string | null;
+  keyword?: string | null;
+};
+export type UpdateMonitorTargetInput = { label?: string; enabled?: boolean; keyword?: string | null; erpClientId?: string | null };
+
+export type MonitorHistoryPoint = { hour: string; observer: "hub" | "edge"; checks: number; failures: number; avgMs: number | null; p95Ms: number | null };
+
+export type MonitorTargetDetail = MonitorTargetEntry & {
+  history: MonitorHistoryPoint[];
+  incidents: MonitorIncidentEntry[];
+  reports: Array<{ id: string; month: string; createdAt: string }>;
+};
+
+export type CloudflareZoneSuggestion = { name: string; alreadyWatched: boolean };
+
+export type PushDevice = { id: string; label: string; createdAt: string; lastSuccessAt: string | null; lastError: string | null };
+
+// Routes de la surveillance
+//
+// GET    /api/monitor                              : MonitorOverview
+// POST   /api/monitor/targets   CreateMonitorTargetInput : MonitorTargetEntry (domaine ajouté à la main)
+// GET    /api/monitor/targets/:id?days=30          : MonitorTargetDetail
+// PATCH  /api/monitor/targets/:id  UpdateMonitorTargetInput : MonitorTargetEntry (interrupteur « Surveillé »)
+// DELETE /api/monitor/targets/:id                  : { ok: true } (cibles manuelles ou cloudflare seulement)
+// POST   /api/monitor/targets/:id/check            : MonitorTargetEntry (contrôle HTTP immédiat par le hub)
+// POST   /api/monitor/targets/:id/dns/accept       : MonitorTargetEntry (l'état DNS actuel devient la référence)
+// POST   /api/monitor/targets/:id/content/accept   : MonitorTargetEntry (l'accueil actuel devient la référence)
+// GET    /api/monitor/targets/:id/reports/:month.pdf : PDF (mois AAAA-MM ; généré à la demande s'il manque)
+// GET    /api/monitor/zones                        : { available: boolean; zones: CloudflareZoneSuggestion[] }
+// POST   /api/monitor/zones/:name/watch            : MonitorTargetEntry (zone proposée ajoutée en https://<zone>)
+// GET    /api/sites/:id/monitor                    : MonitorTargetEntry[] (cibles du site : version de travail, domaine final)
+//
+// GET    /api/push/config                          : { publicKey: string | null }
+// GET    /api/push/devices                         : PushDevice[]
+// POST   /api/push/subscribe   { subscription: PushSubscriptionJSON, label: string } : PushDevice
+// DELETE /api/push/devices/:id                     : { ok: true }
+// POST   /api/push/test                            : { sent: number; failed: number }

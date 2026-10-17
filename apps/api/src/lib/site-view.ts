@@ -66,6 +66,7 @@ export async function toSummary(site: Site, services: Services, erp: ErpNames): 
     thumbnailUrl: site.thumbnailPath && site.thumbnailAt ? `/api/sites/${site.id}/thumbnail?v=${site.thumbnailAt.getTime()}` : null,
     touchedAt: site.touchedAt.toISOString(),
     createdAt: site.createdAt.toISOString(),
+    monitor: null,
   };
 }
 
