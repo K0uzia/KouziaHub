@@ -6,7 +6,7 @@ import { faArrowUpRightFromSquare } from "@fortawesome/free-solid-svg-icons";
 import type { OperationKind, SiteDetail, VersionEntry } from "@hub/contract";
 import { useResource } from "@/lib/useResource";
 import { useTitle } from "@/lib/useTitle";
-import { isSettling, OPERATION_TITLE } from "@/lib/sites";
+import { isSettling, OPERATION_TITLE, waitsForCertificate } from "@/lib/sites";
 import { Card, EmptyState, PageHeader } from "@/components/ui/Card";
 import { Button, ButtonLink, buttonClass } from "@/components/ui/Button";
 import { Tabs, useTabParam } from "@/components/ui/Tabs";
@@ -44,13 +44,18 @@ export function SitePage() {
     if (!data) return;
     const prev = lastOp.current;
     const op = data.operation;
-    if (prev && prev.status === "RUNNING" && (!op || op.id !== prev.id || op.status !== "RUNNING")) {
-      if (op && op.id === prev.id && op.status === "FAILED") toast.error(`${OPERATION_TITLE[prev.kind]} : échec, voir le détail.`);
+    // « CERT » : opération terminée sauf le certificat (étape en attente).
+    const status = op ? (waitsForCertificate(data) ? "CERT" : op.status) : null;
+    if (prev && (prev.status === "RUNNING" || prev.status === "CERT") && status !== prev.status) {
+      const same = op?.id === prev.id;
+      if (same && status === "FAILED") toast.error(`${OPERATION_TITLE[prev.kind]} : échec, voir le détail.`);
+      else if (same && status === "CERT") toast.info(`${OPERATION_TITLE[prev.kind]} : certificat en cours, quelques minutes.`);
+      else if (prev.status === "CERT") toast.success(`Certificat actif : ${data.hostname} répond.`);
       else toast.success(`${OPERATION_TITLE[prev.kind]} : terminé`);
       setRefreshKey((k) => k + 1);
       void reloadVersions();
     }
-    lastOp.current = op ? { id: op.id, kind: op.kind, status: op.status } : null;
+    lastOp.current = op && status ? { id: op.id, kind: op.kind, status } : null;
   }, [data, reloadVersions]);
 
   const onSite = site.setData;
@@ -86,7 +91,8 @@ export function SitePage() {
   }
 
   const nextVersion = Math.max(0, ...(versions.data ?? []).map((v) => v.number), data.currentVersion?.number ?? 0) + 1;
-  const showOperation = data.operation && (data.operation.status === "RUNNING" || data.operation.status === "FAILED");
+  const showOperation =
+    data.operation && (data.operation.status === "RUNNING" || data.operation.status === "FAILED" || waitsForCertificate(data));
 
   return (
     <>

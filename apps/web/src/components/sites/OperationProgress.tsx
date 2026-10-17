@@ -29,6 +29,8 @@ export function OperationProgress({
 }) {
   const [busy, setBusy] = useState(false);
   const failed = operation.status === "FAILED";
+  // Opération terminée sauf le certificat (étape « waiting ») : ni échec, ni fin.
+  const certWaiting = operation.status === "DONE";
   const done = operation.steps.filter((s) => s.status === "done").length;
   const current = operation.steps.find((s) => s.status === "running" || s.status === "waiting" || s.status === "failed");
 
@@ -50,10 +52,12 @@ export function OperationProgress({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <h2 className="text-base font-semibold">
-            {OPERATION_TITLE[operation.kind]} : {failed ? "interrompue" : "en cours"}
+            {OPERATION_TITLE[operation.kind]} : {failed ? "interrompue" : certWaiting ? "certificat en cours" : "en cours"}
           </h2>
           <p aria-live="polite" className="mt-1 text-sm text-[var(--muted)]">
-            {failed
+            {certWaiting
+              ? "Tout est prêt sauf le certificat : l'adresse répondra d'ici quelques minutes."
+              : failed
               ? `Arrêt à l'étape « ${current?.label ?? "inconnue"} ».`
               : `${done} étape${done > 1 ? "s" : ""} sur ${operation.steps.length} terminée${done > 1 ? "s" : ""}${current ? `. En cours : ${current.label}.` : "."}`}
           </p>

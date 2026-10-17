@@ -17,31 +17,28 @@ const MAX = 500;
  */
 const ACTION_LABEL: Record<string, string> = {
   "auth.login": "Connexion",
-  "auth.logout": "Déconnexion",
-  "auth.2fa.enable": "Double authentification activée",
-  "auth.2fa.recovery": "Codes de secours régénérés",
   "site.create": "Création du site",
   "site.update": "Modification du site",
-  "site.enable": "Mise en ligne",
+  "site.enable": "Remise en ligne",
   "site.disable": "Mise hors ligne",
   "site.delete": "Suppression du site",
-  "site.publish": "Publication",
-  "site.republish": "Republication",
-  "site.restore": "Restauration d'une version",
+  "site.certificate": "Certificat de l'adresse",
+  "version.publish": "Publication",
+  "version.republish": "Republication d'une version",
   "files.upload": "Envoi de fichiers",
-  "files.zip": "Envoi d'un zip",
   "files.delete": "Suppression de fichiers",
   "files.move": "Renommage",
-  "thumbnail.capture": "Capture de la vignette",
+  "files.zip": "Envoi d'un zip",
+  "files.restore": "Restauration d'une version",
   "thumbnail.upload": "Vignette envoyée",
-  "orphans.check": "Vérification des orphelins",
-  "orphans.dns.delete": "Suppression d'un enregistrement DNS",
+  "thumbnail.capture": "Capture de la vignette",
+  "orphan.delete": "Suppression d'un enregistrement DNS orphelin",
 };
 
 export function AuditSection() {
   const ids = useId();
   const [limit, setLimit] = useState(PAGE);
-  const audit = useResource<AuditEntry[]>(`/api/audit?limit=${limit}`);
+  const audit = useResource<AuditEntry[]>(`/api/audit?limit=${limit}`, null, { keepData: true });
   const list = audit.data ?? [];
 
   return (

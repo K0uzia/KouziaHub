@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faCircleCheck, faCircleExclamation } from "@fortawesome/free-solid-svg-icons";
 import type { CreateSiteInput, ErpClient, SiteDetail, SiteKind, SlugCheck } from "@hub/contract";
-import { api, errorMessage, isAbort } from "@/lib/api";
+import { api, errorMessage, isAbort, type ApiError } from "@/lib/api";
 import { cleanSlugInput, slugify } from "@/lib/slug";
 import { useDebounced } from "@/lib/useResource";
 import { useSitesDomain } from "@/lib/system";
@@ -54,11 +54,25 @@ export function NewSiteDialog({ open, onClose }: { open: boolean; onClose: () =>
   }, [open]);
 
   // Sous-domaine proposé depuis le nom du client (ou le libellé d'un site perso) tant qu'il n'a pas été modifié.
+  // Proposition immédiate en local, puis celle du serveur (GET slug-check?name=), qui fait foi et arrive vérifiée.
+  const source = slugTouched ? "" : kind === "CLIENT" ? (client?.displayName ?? "") : label;
+  const debouncedSource = useDebounced(source, 300);
   useEffect(() => {
     if (slugTouched) return;
-    const source = kind === "CLIENT" ? (client?.displayName ?? "") : label;
     setSlug(slugify(source));
-  }, [kind, client, label, slugTouched]);
+  }, [source, slugTouched]);
+  useEffect(() => {
+    if (!open || slugTouched || !debouncedSource.trim()) return;
+    const ctrl = new AbortController();
+    api<SlugCheck>(`/api/sites/slug-check?name=${encodeURIComponent(debouncedSource)}`, { signal: ctrl.signal })
+      .then((res) => {
+        if (!res.slug) return;
+        setCheck({ status: res.ok ? "ok" : "bad", reason: res.reason, slug: res.slug });
+        setSlug(res.slug);
+      })
+      .catch(() => undefined);
+    return () => ctrl.abort();
+  }, [debouncedSource, open, slugTouched]);
 
   const debouncedSlug = useDebounced(slug, 400);
   useEffect(() => {
@@ -67,6 +81,8 @@ export function NewSiteDialog({ open, onClose }: { open: boolean; onClose: () =>
       setCheck({ status: "idle", reason: null, slug: "" });
       return;
     }
+    // Déjà vérifié (proposition du serveur) : pas de second appel.
+    if (checkRef.current.slug === debouncedSlug && (checkRef.current.status === "ok" || checkRef.current.status === "bad")) return;
     const ctrl = new AbortController();
     setCheck({ status: "checking", reason: null, slug: debouncedSlug });
     api<SlugCheck>(`/api/sites/slug-check?slug=${encodeURIComponent(debouncedSlug)}`, { signal: ctrl.signal })
@@ -78,6 +94,8 @@ export function NewSiteDialog({ open, onClose }: { open: boolean; onClose: () =>
     return () => ctrl.abort();
   }, [debouncedSlug, open]);
 
+  const checkRef = useRef(check);
+  checkRef.current = check;
   const checkFresh = check.slug === slug;
   const clientError = submitted && kind === "CLIENT" && !client ? "Choisissez le client du site." : null;
   const labelError = submitted && kind === "PERSO" && !label.trim() ? "Donnez un nom à ce site perso." : null;
@@ -117,7 +135,11 @@ export function NewSiteDialog({ open, onClose }: { open: boolean; onClose: () =>
       navigate(`/sites/${site.id}`);
     } catch (err) {
       const message = errorMessage(err, "Création impossible.");
-      setServerError(message);
+      // 409 : sous-domaine pris entre-temps ; la raison s'affiche sous le champ.
+      if ((err as ApiError).status === 409) {
+        setCheck({ status: "bad", reason: message, slug });
+        slugRef.current?.focus();
+      } else setServerError(message);
       toast.error(message);
     } finally {
       setBusy(false);

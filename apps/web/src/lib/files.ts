@@ -81,6 +81,45 @@ async function walk(entry: FileSystemEntry, base: string, out: PickedFile[]): Pr
   }
 }
 
+/** Fichiers par requête d'envoi (plafond du serveur : 1 000). */
+export const FILES_PER_REQUEST = 1000;
+/** Poids cumulé par requête : sous les 100 Mo du tunnel Cloudflare gratuit, marge pour l'enveloppe multipart. */
+export const BYTES_PER_REQUEST = 90 * 1024 * 1024;
+
+export function batchSize(batch: PickedFile[]): number {
+  return batch.reduce((n, p) => n + p.file.size, 0);
+}
+
+/**
+ * Découpe un envoi en requêtes (nombre de fichiers et poids cumulé) ; un fichier au-dessus du plafond
+ * par fichier est écarté d'emblée, avec sa raison (il serait refusé après un envoi inutile).
+ */
+export function planBatches(
+  picked: PickedFile[],
+  maxFileBytes: number | null,
+): { batches: PickedFile[][]; rejected: { path: string; reason: string }[] } {
+  const batches: PickedFile[][] = [];
+  const rejected: { path: string; reason: string }[] = [];
+  let current: PickedFile[] = [];
+  let bytes = 0;
+  const cap = Math.min(maxFileBytes ?? BYTES_PER_REQUEST, BYTES_PER_REQUEST);
+  for (const p of picked) {
+    if (p.file.size > cap) {
+      rejected.push({ path: p.path, reason: `Fichier de plus de ${Math.round(cap / (1024 * 1024))} Mo.` });
+      continue;
+    }
+    if (current.length >= FILES_PER_REQUEST || (current.length > 0 && bytes + p.file.size > BYTES_PER_REQUEST)) {
+      batches.push(current);
+      current = [];
+      bytes = 0;
+    }
+    current.push(p);
+    bytes += p.file.size;
+  }
+  if (current.length) batches.push(current);
+  return { batches, rejected };
+}
+
 /** Fichiers d'un champ « fichier » : chemin relatif gardé pour un envoi de dossier (webkitdirectory). */
 export function filesFromInput(list: FileList | null): PickedFile[] {
   return Array.from(list ?? []).map((file) => ({ file, path: file.webkitRelativePath || file.name }));

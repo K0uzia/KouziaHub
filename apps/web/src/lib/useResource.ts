@@ -16,7 +16,12 @@ export type Resource<T> = {
  * Lecture d'une route GET. pollMs : relecture périodique tant que la valeur est fournie (null pour arrêter) ;
  * l'appelant la calcule depuis la donnée (opération en cours), elle s'arrête donc d'elle-même.
  */
-export function useResource<T>(path: string | null, pollMs: number | null = null): Resource<T> {
+export function useResource<T>(
+  path: string | null,
+  pollMs: number | null = null,
+  /** keepData : la donnée reste affichée pendant la lecture d'une variante (« Afficher plus »). */
+  { keepData = false }: { keepData?: boolean } = {},
+): Resource<T> {
   const [data, setDataState] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(path !== null);
@@ -44,12 +49,12 @@ export function useResource<T>(path: string | null, pollMs: number | null = null
   }, []);
 
   useEffect(() => {
-    setDataState(null);
+    if (!keepData) setDataState(null);
     setError(null);
     setLoading(path !== null);
     void load();
     return () => controller.current?.abort();
-  }, [path, load]);
+  }, [path, load, keepData]);
 
   useEffect(() => {
     if (!pollMs || !path) return;

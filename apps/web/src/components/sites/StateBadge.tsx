@@ -15,10 +15,10 @@ export function StateBadge({ site, className = "" }: { site: Pick<SiteSummary, "
 }
 
 /** Étiquette « Perso » ou nom du client (ERP). */
-export function OwnerLabel({ site }: { site: Pick<SiteSummary, "kind" | "clientName"> }) {
+export function OwnerLabel({ site, wrap = false }: { site: Pick<SiteSummary, "kind" | "clientName">; wrap?: boolean }) {
   if (site.kind === "PERSO") return <Badge tone="violet">Perso</Badge>;
   return site.clientName ? (
-    <span className="truncate">{site.clientName}</span>
+    <span className={wrap ? "break-words" : "truncate"}>{site.clientName}</span>
   ) : (
     <span className="text-[var(--muted)]">Client non lu (ERP indisponible)</span>
   );

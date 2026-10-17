@@ -11,6 +11,7 @@ import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Segmented } from "@/components/ui/Segmented";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { Banner } from "@/components/ui/Banner";
 import { RejectedSummary, UploadProgress, type Progress } from "@/components/sites/UploadFeedback";
 
 type Mode = "replace" | "merge";
@@ -87,8 +88,8 @@ export function ZipUpload({
       });
       onDone(res);
       toast.success(`${plural(res.accepted.length, "fichier reçu", "fichiers reçus")} depuis le zip`);
+      if (res.rejected.length || res.strippedRoot) setResult(res);
       if (res.rejected.length) {
-        setResult(res);
         toast.warning(plural(res.rejected.length, "fichier écarté", "fichiers écartés"));
       }
     } catch (err) {
@@ -160,7 +161,14 @@ export function ZipUpload({
             </p>
           ) : null}
           {progress ? <UploadProgress progress={progress} /> : null}
-          {result ? <RejectedSummary accepted={result.accepted.length} rejected={result.rejected} onClose={() => setResult(null)} /> : null}
+          {result?.strippedRoot ? (
+            <Banner level="info" role="status">
+              Le zip contenait un seul dossier, <span className="font-mono">{result.strippedRoot}</span> : son contenu a été placé à la racine du site.
+            </Banner>
+          ) : null}
+          {result && result.rejected.length ? (
+            <RejectedSummary accepted={result.accepted.length} rejected={result.rejected} onClose={() => setResult(null)} />
+          ) : null}
         </div>
       </section>
 

@@ -23,6 +23,8 @@ import {
   finePointer,
   listDir,
   nameProblem,
+  batchSize,
+  planBatches,
   type DirEntry,
   type PickedFile,
 } from "@/lib/files";
@@ -115,35 +117,50 @@ export function FilesTab({
   async function send(picked: PickedFile[]) {
     if (!picked.length || progress) return;
     const existing = new Set(all.map((f) => f.path));
-    const form = new FormData();
-    form.append("dir", dir);
-    for (const p of picked) form.append("files", p.file, p.path);
+    const prefix = dir ? `${dir}/` : "";
+    // Envoi découpé (nombre de fichiers et poids par requête) ; un fichier trop lourd est écarté avant l'envoi.
+    const plan = planBatches(picked, files.data?.limits.maxFileBytes ?? null);
+    const totalBytes = plan.batches.reduce((n, batch) => n + batchSize(batch), 0) || 1;
     const ctrl = new AbortController();
     const label = plural(picked.length, "fichier", "fichiers");
+    const accepted: string[] = [];
+    const rejectedAll = plan.rejected.map((p) => ({ path: prefix + p.path, reason: p.reason }));
+    let sent = 0;
     setRejected(null);
     setProgress({ fraction: 0, label, cancel: () => ctrl.abort() });
     try {
-      const res = await upload<UploadResult>(`/api/sites/${site.id}/files`, form, {
-        signal: ctrl.signal,
-        onProgress: (fraction) => setProgress((p) => (p ? { ...p, fraction } : p)),
-      });
-      applyFiles(res.files);
-      const replaced = res.accepted.filter((p) => existing.has(p)).length;
-      const added = res.accepted.length - replaced;
-      const parts = [
-        added ? plural(added, "fichier ajouté", "fichiers ajoutés") : null,
-        replaced ? plural(replaced, "fichier remplacé", "fichiers remplacés") : null,
-      ].filter(Boolean);
-      if (parts.length) toast.success(parts.join(", "));
-      if (res.rejected.length) {
-        setRejected({ accepted: res.accepted.length, rejected: res.rejected });
-        toast.warning(plural(res.rejected.length, "fichier écarté", "fichiers écartés"));
+      for (const batch of plan.batches) {
+        const form = new FormData();
+        form.append("dir", dir);
+        for (const p of batch) form.append("files", p.file, p.path);
+        const bytes = batchSize(batch);
+        const res = await upload<UploadResult>(`/api/sites/${site.id}/files`, form, {
+          signal: ctrl.signal,
+          onProgress: (fraction) =>
+            setProgress((p) => (p ? { ...p, fraction: Math.min(1, (sent + fraction * bytes) / totalBytes) } : p)),
+        });
+        sent += bytes;
+        accepted.push(...res.accepted);
+        rejectedAll.push(...res.rejected);
+        applyFiles(res.files);
       }
     } catch (err) {
-      if (isAbort(err)) toast.info("Envoi annulé");
+      if (isAbort(err))
+        toast.info(accepted.length ? `Envoi arrêté après ${plural(accepted.length, "fichier reçu", "fichiers reçus")}` : "Envoi annulé");
       else toast.error(errorMessage(err, "Envoi impossible."));
     } finally {
       setProgress(null);
+    }
+    const replaced = accepted.filter((p) => existing.has(p)).length;
+    const added = accepted.length - replaced;
+    const parts = [
+      added ? plural(added, "fichier ajouté", "fichiers ajoutés") : null,
+      replaced ? plural(replaced, "fichier remplacé", "fichiers remplacés") : null,
+    ].filter(Boolean);
+    if (parts.length) toast.success(parts.join(", "));
+    if (rejectedAll.length) {
+      setRejected({ accepted: accepted.length, rejected: rejectedAll });
+      toast.warning(plural(rejectedAll.length, "fichier écarté", "fichiers écartés"));
     }
   }
 

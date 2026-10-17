@@ -30,7 +30,7 @@ export function SiteTable({ sites }: { sites: SiteSummary[] }) {
                 </div>
               </td>
               <td data-label="Client" className="wrap">
-                <OwnerLabel site={site} />
+                <OwnerLabel site={site} wrap />
               </td>
               <td data-label="État" className="nowrap">
                 <StateBadge site={site} />
