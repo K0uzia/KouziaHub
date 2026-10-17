@@ -1,0 +1,21 @@
+# Exclus de la copie du code vers le CT (deploy-rsync.sh, install.sh --from) :
+# jamais les données, les secrets, les dépendances installées ni les fichiers de travail.
+# Motifs commençant par « / » : seulement à la racine du dépôt.
+node_modules/
+.git/
+/.worktrees/
+/.claude/
+/data/
+.env
++ .env.example
+.env.*
+*.db
+*.db-*
+/.deploy-state/
+/.npm/
+dist/
+coverage/
+*.tsbuildinfo
+*.log
+.DS_Store
+scripts/.tmp-check/

@@ -1,0 +1,8 @@
+# Exemples crontab (install.sh pose déjà /etc/periodic/daily/kouziahub-backup, lancé par crond vers 2 h).
+# À n'utiliser que pour une autre heure ou une tâche de plus : crontab -e (root).
+#
+# Sauvegarde quotidienne à 3 h 15 au lieu de /etc/periodic/daily
+# 15 3 * * * /bin/sh /opt/kouziahub/scripts/alpine/backup.sh --tag quotidienne >/dev/null 2>&1
+#
+# Contrôle mensuel d'une sauvegarde (lecture seule, rien n'est modifié)
+# 0 9 1 * * /bin/sh /opt/kouziahub/scripts/alpine/restore.sh --check "$(ls -1d /var/backup/kouziahub/kouziahub-* | tail -n 1)" >> /var/log/kouziahub/backup.log 2>&1
