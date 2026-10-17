@@ -249,7 +249,7 @@ export function CatalogPage() {
                         type="search"
                         value={query}
                         autoComplete="off"
-                        placeholder="Nom, client ou sous-domaine"
+                        placeholder="Site ou client"
                         onChange={(e) => setParam("q", e.target.value, "")}
                         className={`${inputClass} pl-9`}
                       />
