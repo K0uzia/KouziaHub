@@ -74,7 +74,8 @@ export async function computeDirty(siteId: string): Promise<boolean> {
     where: { id: site.currentVersionId },
     select: { source: true, files: { select: { path: true, sha256: true } } },
   });
-  if (!version || version.source === "placeholder") return true;
+  // Page d'attente servie : rien à publier tant qu'il manque index.html (un .htaccess seul ne compte pas).
+  if (!version || version.source === "placeholder") return working.some((f) => f.path === "index.html");
   return fingerprint(working) !== fingerprint(version.files);
 }
 

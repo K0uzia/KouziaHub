@@ -68,6 +68,32 @@ export type SiteSummary = {
   createdAt: string;
 };
 
+export type CanonicalHost = "www" | "apex";
+
+/**
+ * .htaccess de la version de travail (hébergement final Apache ou LiteSpeed), généré depuis le profil :
+ * « generated » = identique au dernier écrit par le hub ; « modified » = changé à la main ou par un zip ;
+ * « missing » = absent. Hors « generated », le hub ne le réécrit qu'avec force (confirmation).
+ */
+export type ServerConfigState = {
+  status: "generated" | "modified" | "missing";
+  path: ".htaccess";
+  /** Dernière écriture par le hub, null si jamais. */
+  generatedAt: string | null;
+  /** La page 404 du profil existe dans la version de travail. */
+  notFoundPagePresent: boolean;
+};
+
+/** Aperçu de ce que le hub génère depuis le profil (rien n'est écrit). */
+export type ServerConfigPreview = {
+  htaccess: string;
+  /** Envoyés à Cloudflare Pages au déploiement (fusionnés avec _headers et _redirects du site), null si vides. */
+  pagesHeaders: string | null;
+  pagesRedirects: string | null;
+  /** Le site pose lui-même Cache-Control dans _headers : le hub n'ajoute alors aucune règle de cache. */
+  hubCacheRules: boolean;
+};
+
 export type SiteDetail = SiteSummary & {
   pagesProject: string;
   /** Adresse <projet>.pages.dev (redirigée vers le sous-domaine). */
@@ -77,6 +103,11 @@ export type SiteDetail = SiteSummary & {
   thumbnailSource: "capture" | "upload" | null;
   fileCount: number;
   totalBytes: number;
+  /** Profil serveur : domaine final (sans « www. »), forme canonique, page 404. */
+  finalDomain: string | null;
+  canonicalHost: CanonicalHost;
+  notFoundPage: string;
+  serverConfig: ServerConfigState;
 };
 
 export type CatalogResponse = {
@@ -106,7 +137,17 @@ export type CreateSiteInput =
   | { kind: "CLIENT"; erpClientId: string; slug: string; label?: string | null }
   | { kind: "PERSO"; slug: string; label: string };
 
-export type UpdateSiteInput = { label?: string | null; erpClientId?: string | null };
+/**
+ * Un changement de finalDomain, canonicalHost ou notFoundPage régénère le .htaccess s'il est encore
+ * « generated » (sinon il reste tel quel, état renvoyé dans serverConfig).
+ */
+export type UpdateSiteInput = {
+  label?: string | null;
+  erpClientId?: string | null;
+  finalDomain?: string | null;
+  canonicalHost?: CanonicalHost;
+  notFoundPage?: string;
+};
 
 export type WorkingFileEntry = { path: string; size: number; updatedAt: string; sha256: string };
 
@@ -203,6 +244,10 @@ export type SystemStatus = {
 // GET    /api/sites/:id/versions                 : VersionEntry[]
 // POST   /api/sites/:id/versions/:vid/publish    : SiteDetail (republie cette version, opération PUBLISH)
 // POST   /api/sites/:id/versions/:vid/restore    : FilesResponse (la version devient la version de travail)
+//
+// GET    /api/sites/:id/server-config/preview   : ServerConfigPreview
+// POST   /api/sites/:id/server-config/regenerate  { force?: boolean } : SiteDetail
+//                                ; 409 code "server_config_modified" si le .htaccess est modifié ou absent sans force
 //
 // GET    /api/sites/:id/thumbnail                : image WebP (privée, Cache-Control private)
 // POST   /api/sites/:id/thumbnail  multipart image : SiteDetail

@@ -118,6 +118,15 @@ model Site {
   currentVersionId String?
   /// Fichiers de la version de travail modifiés depuis la dernière publication.
   workingDirty     Boolean      @default(false)
+  /// Domaine final du client (nom d'hôte seul, sans « www. »), pour la redirection d'hôte du .htaccess.
+  finalDomain      String?
+  /// Forme canonique sur le domaine final : "www" ou "apex".
+  canonicalHost    String       @default("www")
+  /// Page 404 (chemin depuis la racine du site).
+  notFoundPage     String       @default("/404.html")
+  /// SHA-256 du dernier .htaccess écrit par le hub : différent du fichier actuel = modifié à la main.
+  serverConfigHash String?
+  serverConfigAt   DateTime?
   thumbnailPath    String?
   /// "capture" ou "upload".
   thumbnailSource  String?

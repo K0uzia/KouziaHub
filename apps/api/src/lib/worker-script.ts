@@ -1,3 +1,5 @@
+import { CACHE_RULES } from "@/lib/server-config.js";
+
 /** Corps de robots.txt des versions de travail (et du hub) : rien n'est à explorer. */
 export const NOINDEX_ROBOTS = "User-agent: *\nDisallow: /\n";
 
@@ -14,12 +16,15 @@ export const SITE_HEADERS: Record<string, string> = {
  * Programme _worker.js (mode avancé de Pages Functions) injecté par le hub dans chaque déploiement.
  * Les valeurs sont insérées par JSON.stringify : aucune chaîne ne peut sortir de son littéral.
  */
-export function buildWorkerScript(hostname: string): string {
+export function buildWorkerScript(hostname: string, options: { cacheRules?: boolean } = {}): string {
   const host = hostname.toLowerCase();
+  // Cache posé aussi par le worker : _headers ne s'appliquerait peut-être pas derrière env.ASSETS.fetch.
+  const cache = options.cacheRules === false ? [] : CACHE_RULES.map((r) => [r.pattern, r.cacheControl]);
   return `// Généré par le hub Kouzia : ne pas modifier.
 const HOST = ${JSON.stringify(host)};
 const ROBOTS = ${JSON.stringify(NOINDEX_ROBOTS)};
 const HEADERS = ${JSON.stringify(SITE_HEADERS)};
+const CACHE = ${JSON.stringify(cache)}.map(([pattern, value]) => [new RegExp(pattern, "i"), value]);
 
 // Fichiers de développement jamais servis (403) : segment caché sauf /.well-known/, notes, journaux,
 // sauvegardes et cartes de sources. Testé sur le chemin décodé (%2e ne contourne pas la règle).
@@ -51,7 +56,12 @@ export default {
     if (isForbidden(url.pathname)) {
       return withHeaders(new Response("Accès refusé", { status: 403, headers: { "Content-Type": "text/plain; charset=utf-8" } }));
     }
-    return withHeaders(await env.ASSETS.fetch(request));
+    const response = withHeaders(await env.ASSETS.fetch(request));
+    if (response.status === 200) {
+      const rule = CACHE.find(([re]) => re.test(url.pathname));
+      if (rule) response.headers.set("Cache-Control", rule[1]);
+    }
+    return response;
   },
 };
 `;
