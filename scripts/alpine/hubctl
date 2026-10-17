@@ -1,0 +1,193 @@
+#!/bin/sh
+# hubctl : outil unique d'exploitation du hub Kouzia (CT Alpine), calqué sur kouziactl de l'ERP.
+#
+#   hubctl               menu
+#   hubctl <commande>    commande directe (hubctl help)
+# Dans le PATH : /usr/local/bin/hubctl, lien vers ce fichier (posé par install et update).
+
+set -eu
+
+SELF="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$SELF")" && pwd)"
+if [ ! -f "${SCRIPT_DIR}/lib.sh" ] && [ -f /opt/kouziahub/scripts/alpine/lib.sh ]; then
+  SCRIPT_DIR=/opt/kouziahub/scripts/alpine
+fi
+[ -f "${SCRIPT_DIR}/lib.sh" ] || { echo "ERREUR : scripts du hub introuvables." >&2; exit 1; }
+# shellcheck source=lib.sh
+. "${SCRIPT_DIR}/lib.sh"
+
+usage() {
+  cat <<EOF
+${C_BOLD}hubctl${C_RESET} : exploitation du hub Kouzia
+
+  hubctl                      menu
+  hubctl <commande>           commande directe
+
+Installation et mise à jour
+  install                     installer ou réparer (rejouable, garde .env et données)
+  update                      mettre à jour (sauvegarde automatique avant, retour arrière si souci)
+  update --no-git             code déjà copié sur le CT (rsync), sans GitHub
+  update --force              réinstaller les dépendances même si rien n'a changé
+  rollback                    revenir à la version d'avant la dernière mise à jour
+
+Suivi
+  status                      état : service, santé, migrations, disque, sauvegardes, tunnel
+  logs [app|erreurs|tunnel|sauvegarde] [lignes]
+  start | stop | restart
+
+Données
+  backup                      sauvegarder maintenant
+  restore [sauvegarde]        remettre une sauvegarde (liste et choix si rien n'est indiqué)
+  restore --check <sauvegarde>  vérifier une sauvegarde sans rien modifier
+
+Réglages (rien n'est affiché à l'écran)
+  cloudflare                  jeton du tunnel Cloudflare du hub
+  secrets [access|api]        Cloudflare Access (domaine d'équipe, AUD) et API Cloudflare (jeton, compte, zone)
+  chromium                    installer Chromium pour les vignettes automatiques
+  admin                       créer le compte ou changer le mot de passe, puis double authentification
+  2fa-reset                   couper la double authentification (téléphone perdu), puis : hubctl admin
+EOF
+}
+
+run_cmd() {
+  _cmd="$1"
+  shift
+  case "$_cmd" in
+    install)
+      sh "${SCRIPT_DIR}/install.sh" "$@"
+      ;;
+    update|deploy)
+      sh "${SCRIPT_DIR}/update.sh" "$@"
+      ;;
+    rollback)
+      sh "${SCRIPT_DIR}/update.sh" --rollback "$@"
+      ;;
+    status)
+      sh "${SCRIPT_DIR}/status.sh"
+      ;;
+    backup)
+      require_root
+      _path="$(sh "${SCRIPT_DIR}/backup.sh" "$@")"
+      ok "Sauvegarde : ${_path}"
+      ;;
+    restore)
+      sh "${SCRIPT_DIR}/restore.sh" "$@"
+      ;;
+    cloudflare|tunnel)
+      sh "${SCRIPT_DIR}/configure.sh" cloudflare
+      ;;
+    secrets)
+      sh "${SCRIPT_DIR}/configure.sh" "${1:-secrets}"
+      ;;
+    access|api|chromium)
+      sh "${SCRIPT_DIR}/configure.sh" "$_cmd"
+      ;;
+    admin)
+      require_root
+      [ -t 0 ] || die "hubctl admin se lance dans un terminal (questions et code QR)."
+      run_as_app "npm run --silent admin:create"
+      ;;
+    2fa-reset)
+      require_root
+      echo "  La double authentification du compte sera coupée et ses sessions fermées."
+      confirm "Continuer ?" n || { echo "  Annulé."; return 0; }
+      run_as_app "npm run --silent admin:2fa-reset"
+      echo "  Réactivez-la tout de suite avec le nouveau téléphone : hubctl admin"
+      ;;
+    logs)
+      _which="${1:-app}"
+      _n="${2:-80}"
+      case "$_n" in *[!0-9]*|'') die "Nombre de lignes invalide : $_n" ;; esac
+      case "$_which" in
+        app) tail -n "$_n" "${KH_LOG_DIR}/app.log" ;;
+        erreurs|err|errors) tail -n "$_n" "${KH_LOG_DIR}/app.err" ;;
+        tunnel|cloudflared) tail -n "$_n" "${KH_LOG_DIR}/cloudflared.err" "${KH_LOG_DIR}/cloudflared.log" 2>/dev/null ;;
+        sauvegarde|backup) tail -n "$_n" "${KH_LOG_DIR}/backup.log" ;;
+        *) die "logs : app, erreurs, tunnel ou sauvegarde" ;;
+      esac
+      ;;
+    start)
+      require_root
+      start_app || { show_app_errors; exit 1; }
+      ;;
+    stop)
+      require_root
+      stop_app
+      ok "Hub arrêté."
+      ;;
+    restart)
+      require_root
+      restart_app || { show_app_errors; exit 1; }
+      ;;
+    menu)
+      show_menu
+      ;;
+    help|-h|--help)
+      usage
+      ;;
+    *)
+      die "Commande inconnue : ${_cmd} (hubctl help)"
+      ;;
+  esac
+}
+
+# Une commande du menu qui échoue ne ferme pas le menu.
+menu_run() {
+  ( run_cmd "$@" ) || warn "La commande s'est arrêtée sur une erreur (message ci-dessus)."
+  pause_enter
+}
+
+menu_item() {
+  printf '  %s%3s)%s %-26s %s\n' "$C_GREEN" "$1" "$C_RESET" "$2" "${C_YELLOW}${3:-}${C_RESET}"
+}
+
+show_menu() {
+  while true; do
+    printf '\n%s\n' "${C_BOLD}Hub Kouzia${C_RESET}  (hubctl, CT $(hostname))"
+    printf '\n  %s\n' "${C_BOLD}Tous les jours${C_RESET}"
+    menu_item 1 "État" "service, santé, sauvegardes"
+    menu_item 2 "Mettre à jour" "sauvegarde, GitHub, redémarrage"
+    menu_item 3 "Sauvegarder maintenant" ""
+    menu_item 4 "Remettre une sauvegarde" "liste et choix"
+    menu_item 5 "Journal des erreurs" ""
+    menu_item 6 "Redémarrer le hub" ""
+    printf '\n  %s\n' "${C_BOLD}Réglages${C_RESET}"
+    menu_item 7 "Tunnel Cloudflare" "jeton du tunnel du hub"
+    menu_item 8 "Cloudflare Access" "domaine d'équipe, AUD"
+    menu_item 9 "Jeton API Cloudflare" "jeton, compte, zone"
+    menu_item 10 "Mon compte" "mot de passe, double authentification"
+    menu_item 11 "Vignettes (Chromium)" "facultatif"
+    printf '\n  %s\n' "${C_BOLD}Secours${C_RESET}"
+    menu_item 12 "Revenir à la version d'avant" "après une mise à jour"
+    menu_item 13 "Couper la double authentification" "téléphone perdu"
+    menu_item 14 "Installer ou réparer" "long"
+    menu_item q "Quitter" ""
+    printf '\n  Choix : '
+    _choice=""
+    IFS= read -r _choice || exit 0
+    case "$_choice" in
+      1) menu_run status ;;
+      2) menu_run update ;;
+      3) menu_run backup ;;
+      4) menu_run restore ;;
+      5) menu_run logs erreurs 40 ;;
+      6) menu_run restart ;;
+      7) menu_run cloudflare ;;
+      8) menu_run secrets access ;;
+      9) menu_run secrets api ;;
+      10) menu_run admin ;;
+      11) menu_run chromium ;;
+      12) menu_run rollback ;;
+      13) menu_run 2fa-reset ;;
+      14) menu_run install ;;
+      q|Q|0) exit 0 ;;
+      *) warn "Choix inconnu : ${_choice}" ;;
+    esac
+  done
+}
+
+if [ $# -eq 0 ]; then
+  show_menu
+else
+  run_cmd "$@"
+fi

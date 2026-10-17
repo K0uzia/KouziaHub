@@ -1,7 +1,7 @@
 # Cibles portables : Windows (PowerShell, cmd, Git Bash), Linux et macOS.
 # Toute logique passe par node ou npm : GNU make sous Windows lance cmd.exe.
 # Windows : GNU make (ex. choco install make) et Node.js 22 dans le PATH.
-.PHONY: setup dev dev-lan build test typecheck db-deploy admin
+.PHONY: setup dev dev-lan build test typecheck db-deploy admin alpine-deploy alpine-status
 
 # Premier lancement : .env de dev, dépendances, base, puis compte (e-mail et mot de passe demandés).
 setup:
@@ -41,3 +41,14 @@ db-deploy:
 
 admin:
 	npm run admin:create
+
+# CT Alpine du hub, depuis le PC (rsync et ssh nécessaires) :
+#   make alpine-deploy HOST=root@<ip-du-ct>   copie du code puis hubctl update --no-git sur le CT
+#   make alpine-status HOST=root@<ip-du-ct>   hubctl status sur le CT
+alpine-deploy:
+	@node -e "if(!process.argv[1])(console.error('Usage : make alpine-deploy HOST=root@<ip-du-ct>'),process.exit(1))" "$(HOST)"
+	sh scripts/alpine/deploy-rsync.sh "$(HOST)"
+
+alpine-status:
+	@node -e "if(!process.argv[1])(console.error('Usage : make alpine-status HOST=root@<ip-du-ct>'),process.exit(1))" "$(HOST)"
+	ssh $(HOST) hubctl status

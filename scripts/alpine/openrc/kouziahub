@@ -1,0 +1,49 @@
+#!/sbin/openrc-run
+# OpenRC : hub Kouzia (API qui sert aussi l'interface compilée). Réglages : /etc/conf.d/kouziahub
+
+description="Hub Kouzia (API et interface)"
+
+: "${KH_APP_DIR:=/opt/kouziahub}"
+: "${KH_USER:=kouziahub}"
+: "${KH_GROUP:=kouziahub}"
+: "${KH_LOG_DIR:=/var/log/kouziahub}"
+
+name="kouziahub"
+command="${KH_APP_DIR}/node_modules/.bin/tsx"
+command_args="--env-file=${KH_APP_DIR}/.env --tsconfig apps/api/tsconfig.json apps/api/src/index.ts"
+command_user="${KH_USER}:${KH_GROUP}"
+directory="${KH_APP_DIR}"
+umask=027
+# supervise-daemon relance le processus s'il s'arrête : 10 relances au plus en 60 s,
+# au-delà le service reste arrêté (visible dans « hubctl status »).
+supervisor=supervise-daemon
+respawn_delay=5
+respawn_max=10
+respawn_period=60
+
+output_log="${KH_LOG_DIR}/app.log"
+error_log="${KH_LOG_DIR}/app.err"
+
+depend() {
+  need net
+  after firewall
+}
+
+start_pre() {
+  checkpath -d -o root:root -m 0755 "$KH_LOG_DIR"
+  checkpath -f -o "${KH_USER}:${KH_GROUP}" -m 0640 "$output_log" "$error_log"
+  if [ ! -x "$command" ]; then
+    eerror "tsx introuvable : $command (hubctl update)"
+    return 1
+  fi
+  if [ ! -f "${KH_APP_DIR}/.env" ]; then
+    eerror ".env manquant : ${KH_APP_DIR}/.env (hubctl install)"
+    return 1
+  fi
+  # Sans Cloudflare Access, l'API refuse de démarrer en production : message clair plutôt que 10 relances.
+  if ! grep -Eq '^CF_ACCESS_TEAM_DOMAIN="?[^"[:space:]]' "${KH_APP_DIR}/.env" \
+    || ! grep -Eq '^CF_ACCESS_AUD="?[^"[:space:]]' "${KH_APP_DIR}/.env"; then
+    eerror "Cloudflare Access pas encore renseigné : hubctl secrets access"
+    return 1
+  fi
+}
