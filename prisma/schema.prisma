@@ -1,0 +1,262 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// --- Administration (repris de l'ERP : mot de passe argon2, TOTP, codes de secours) ---
+
+model User {
+  id                         String                @id @default(cuid())
+  email                      String                @unique
+  name                       String?
+  passwordHash               String
+  /// Secret TOTP actif (base32), chiffré avec ENCRYPTION_KEY. Null = 2FA non activée.
+  totpSecretEncrypted        String?
+  /// Secret en cours d'enrôlement, activé après vérification d'un premier code.
+  totpPendingSecretEncrypted String?
+  totpEnabledAt              DateTime?
+  /// Dernier pas TOTP accepté : un pas inférieur ou égal est refusé (anti-rejeu).
+  totpLastStep               Int?
+  /// Échecs consécutifs (mot de passe ou code) venus du tunnel, remis à zéro au succès.
+  failedLogins               Int                   @default(0)
+  lockedUntil                DateTime?
+  createdAt                  DateTime              @default(now())
+  updatedAt                  DateTime              @updatedAt
+  sessions                   Session[]
+  recoveryCodes              AdminRecoveryCode[]
+  loginChallenges            AdminLoginChallenge[]
+}
+
+model AdminRecoveryCode {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codeHash  String    @unique
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+/// Étape intermédiaire de connexion : mot de passe validé, code TOTP attendu. id = SHA-256 du jeton du cookie.
+model AdminLoginChallenge {
+  id        String   @id
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  attempts  Int      @default(0)
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+/// Session serveur (cookie httpOnly opaque). id = SHA-256 du jeton.
+model Session {
+  id         String    @id
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt  DateTime
+  createdAt  DateTime  @default(now())
+  lastSeenAt DateTime?
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// --- Sites ---
+
+enum SiteKind {
+  /// Lié à un client de l'ERP (erpClientId renseigné).
+  CLIENT
+  /// Site d'Alexandre, sans client.
+  PERSO
+}
+
+enum SiteState {
+  /// Création en cours ou interrompue (voir la dernière opération).
+  CREATING
+  /// Domaine et CNAME en place : l'adresse répond.
+  ONLINE
+  /// CNAME et domaine retirés : l'adresse ne répond plus.
+  OFFLINE
+  /// Suppression en cours ou interrompue.
+  DELETING
+}
+
+enum DomainStatus {
+  NONE
+  /// Domaine ajouté, certificat pas encore émis.
+  PENDING
+  ACTIVE
+  ERROR
+}
+
+model Site {
+  id               String       @id @default(cuid())
+  /// Sous-domaine : <slug>.kouzia.com. Unique, noms réservés refusés.
+  slug             String       @unique
+  kind             SiteKind
+  /// Identifiant du client dans l'ERP (jamais son nom ni son adresse). Null pour un site perso.
+  erpClientId      String?
+  /// Nom affiché. Obligatoire pour un site perso ; facultatif pour un site client (nom lu dans l'ERP).
+  label            String?
+  /// Projet Cloudflare Pages (kz-<slug>), unique.
+  pagesProject     String       @unique
+  /// Adresse <projet>.pages.dev renvoyée par Cloudflare : cible du CNAME.
+  pagesSubdomain   String?
+  dnsRecordId      String?
+  domainStatus     DomainStatus @default(NONE)
+  state            SiteState    @default(CREATING)
+  /// Version servie par Cloudflare (dernier déploiement réussi).
+  currentVersionId String?
+  /// Fichiers de la version de travail modifiés depuis la dernière publication.
+  workingDirty     Boolean      @default(false)
+  thumbnailPath    String?
+  /// "capture" ou "upload".
+  thumbnailSource  String?
+  thumbnailAt      DateTime?
+  /// Dernière activité visible (fichiers, publication, réglages) : tri « Modifiés récemment ».
+  touchedAt        DateTime     @default(now())
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  versions         Version[]
+  workingFiles     WorkingFile[]
+  operations       Operation[]
+
+  @@index([erpClientId])
+  @@index([touchedAt])
+}
+
+/// Fichier de la version de travail (explorateur « comme un FTP »). Contenu dans le magasin d'objets
+/// (data/blobs/<sha256>), partagé avec les versions publiées.
+model WorkingFile {
+  id        String   @id @default(cuid())
+  siteId    String
+  site      Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  /// Chemin relatif normalisé, séparateur « / », sans « / » initial (ex. « assets/app.css »).
+  path      String
+  size      Int
+  sha256    String
+  updatedAt DateTime @updatedAt
+
+  @@unique([siteId, path])
+  @@index([sha256])
+}
+
+enum VersionStatus {
+  /// Envoi vers Cloudflare en cours.
+  UPLOADING
+  PUBLISHED
+  FAILED
+  /// Déploiement supprimé chez Cloudflare et fichiers libérés (rétention).
+  PURGED
+}
+
+/// Une publication : instantané des fichiers de travail, republiable.
+model Version {
+  id              String        @id @default(cuid())
+  siteId          String
+  site            Site          @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  /// 1, 2, 3... par site.
+  number          Int
+  note            String?
+  /// "files" (explorateur), "zip", "placeholder" (page d'attente de la création), "republish".
+  source          String
+  /// Version d'origine d'une republication.
+  sourceVersionId String?
+  fileCount       Int
+  totalBytes      Int
+  status          VersionStatus @default(UPLOADING)
+  cfDeploymentId  String?
+  cfDeploymentUrl String?
+  error           String?
+  createdAt       DateTime      @default(now())
+  publishedAt     DateTime?
+  purgedAt        DateTime?
+  files           VersionFile[]
+
+  @@unique([siteId, number])
+  @@index([siteId, createdAt])
+}
+
+model VersionFile {
+  id        String  @id @default(cuid())
+  versionId String
+  version   Version @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  path      String
+  size      Int
+  sha256    String
+
+  @@unique([versionId, path])
+  @@index([sha256])
+}
+
+enum OperationKind {
+  CREATE
+  ENABLE
+  DISABLE
+  DELETE
+  PUBLISH
+}
+
+enum OperationStatus {
+  RUNNING
+  FAILED
+  DONE
+}
+
+/// Opération à étapes rejouables (création, on/off, suppression, publication). Une seule en cours par site.
+model Operation {
+  id         String          @id @default(cuid())
+  /// Null après la suppression du site (l'historique reste lisible par slug).
+  siteId     String?
+  site       Site?           @relation(fields: [siteId], references: [id], onDelete: SetNull)
+  siteSlug   String
+  kind       OperationKind
+  status     OperationStatus @default(RUNNING)
+  /// JSON : [{ key, label, status: "todo"|"running"|"done"|"failed"|"waiting", detail? }]
+  steps      String
+  /// Paramètres de l'opération (ex. { versionId }), JSON.
+  params     String?
+  error      String?
+  startedAt  DateTime        @default(now())
+  finishedAt DateTime?
+
+  @@index([siteId, startedAt])
+  @@index([status])
+}
+
+/// Journal des actions (sans secret ni donnée personnelle).
+model AuditEvent {
+  id       String   @id @default(cuid())
+  siteId   String?
+  siteSlug String?
+  /// ex. site.create, site.enable, site.disable, site.delete, files.upload, files.delete, files.zip,
+  /// version.publish, version.republish, thumbnail.upload, orphan.delete, auth.login
+  action   String
+  /// "ok" ou "error".
+  result   String
+  detail   String?
+  at       DateTime @default(now())
+
+  @@index([siteId, at])
+  @@index([at])
+}
+
+/// Résultat du dernier contrôle des orphelins (quotidien ou à la demande).
+model OrphanCheck {
+  id        String   @id @default(cuid())
+  checkedAt DateTime @default(now())
+  /// "real" ou "fake" (adaptateur Cloudflare utilisé).
+  mode      String
+  /// JSON : [{ type: "dns"|"project"|"site", name, detail }]
+  findings  String
+  error     String?
+}

@@ -1,0 +1,23 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+*.log
+.DS_Store
+
+# secrets
+.env
+.env*.local
+!.env.example
+
+# données locales (base, fichiers des sites, vignettes, sauvegardes)
+data/
+*.db
+*.db-journal
+prisma/*.db*
+
+# worktrees des sessions
+.worktrees/
+
+# captures de recette jetables
+scripts/.tmp-check/

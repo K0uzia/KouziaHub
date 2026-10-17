@@ -1,0 +1,6 @@
+# Fins de ligne LF partout : les scripts shell du CT Alpine cassent en CRLF.
+* text=auto eol=lf
+*.woff2 binary
+*.png binary
+*.webp binary
+*.zip binary

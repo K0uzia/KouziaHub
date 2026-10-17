@@ -1,0 +1,507 @@
+@import "tailwindcss";
+
+/* Polices de marque auto-hébergées (même fichiers que kouzia.com). */
+@font-face {
+  font-family: "Exo 2";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("/fonts/exo2-latin.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Share Tech Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/share-tech-mono-latin.woff2") format("woff2");
+}
+
+/* Familles exposées à Tailwind : classes font-display et font-mono. */
+@theme {
+  --font-display: "Exo 2", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "Share Tech Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+/*
+ * Tokens N0 : identité Kouzia (nuit, ambre), alignée sur kouzia.com.
+ * Contrastes vérifiés sur --bg, --surface, --surface-raised et --surface-hover :
+ * texte et --muted ≥ 5,4:1, --primary ≥ 6,5:1, --primary-fg sur --primary 8,7:1,
+ * --border-input ≥ 3,2:1 (contour de champ, WCAG 1.4.11).
+ */
+:root {
+  color-scheme: dark;
+  --bg: #0b1020;
+  --bg-subtle: #0e1427;
+  --surface: #121a2e;
+  --surface-raised: #19233c;
+  --surface-hover: #202b47;
+  --text: #e8eaf8;
+  --muted: #9aa1bf;
+  --border: #232d47;
+  --border-strong: #3a4566;
+  --border-input: #64719c;
+  /* Accent ambre : actions principales, liens, focus. */
+  --primary: #fe9a00;
+  --primary-fg: #1a1103;
+  --primary-hover: #ffb900;
+  --primary-soft: rgb(254 154 0 / 0.12);
+  --accent-2: #8b93ff;
+  --accent-2-soft: rgb(124 134 255 / 0.12);
+  --danger: #ff9b8f;
+  --danger-soft: rgb(255 155 143 / 0.12);
+  --success: #5ee0a0;
+  --success-soft: rgb(94 224 160 / 0.12);
+  --warning: #ffd166;
+  --warning-soft: rgb(255 209 102 / 0.12);
+  --info: #8bb4ff;
+  --info-soft: rgb(139 180 255 / 0.12);
+  --orange: #ff8a4c;
+  --orange-soft: rgb(255 138 76 / 0.12);
+  /* Formes */
+  --radius: 0.875rem;
+  --radius-sm: 0.5rem;
+  --radius-lg: 1.125rem;
+  --shadow: 0 1.5rem 3rem -1rem rgb(0 0 0 / 0.6);
+  --shadow-sm: 0 0.125rem 0.5rem rgb(0 0 0 / 0.25);
+  --shadow-card: 0 0.25rem 1.5rem rgb(0 0 0 / 0.3);
+  /* Recadrage : voile autour de la zone gardée (ombre portée très étendue, sans élément en plus). */
+  --crop-mask: 0 0 0 100vmax rgb(11 16 32 / 0.65);
+  /* Aperçu des cartes de kouzia.com : valeurs du site (src/styles/global.css), indépendantes de l'accent de l'espace. */
+  --apercu-accent: #fe9a00;
+  --apercu-logo-fond: #eef0fa;
+  --apercu-voile: rgb(11 16 32 / 0.88);
+  --apercu-voile-leger: rgb(11 16 32 / 0.65);
+  --apercu-reflet: rgb(255 255 255 / 0.03);
+  /* Typographie : marque pour les titres, système pour les données (lisibilité, chiffres). */
+  --font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu,
+    Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+  /* Gabarit applicatif */
+  --sidebar-w: 15.5rem;
+  --topbar-h: 3.75rem;
+  /* Mise en page mobile d'abord : marge latérale des pages (élargie plus bas), cible tactile
+     minimale (44 px), texte secondaire (13 px, lisible au téléphone). */
+  --gutter: 1rem;
+  --tap: 2.75rem;
+  --text-meta: 0.8125rem;
+  /* Libellés des onglets du bas : « Messages » entier sur 5 onglets à 320 px. */
+  --text-tab: clamp(0.75rem, 0.45rem + 1.1vw, 0.8125rem);
+  /* Mouvement */
+  --duration-fast: 150ms;
+  --duration-base: 300ms;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+}
+
+/*
+ * Espace « Site » : son propre accent, pour savoir d'un coup d'oeil quel espace on modifie.
+ * Lavande, choisie par Alexandre (2026-10-14) : rappelle l'indigo nocturne de kouzia.com.
+ * Contrastes : --primary 6,6:1 sur --surface-hover et 8,9:1 sur --bg ; --primary-fg sur --primary 8,9:1.
+ */
+:root[data-space="site"] {
+  --primary: #a5abff;
+  --primary-fg: #0b1020;
+  --primary-hover: #c3c7ff;
+  --primary-soft: rgb(165 171 255 / 0.12);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  min-height: 100dvh;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font);
+  background-color: var(--bg);
+  background-image:
+    radial-gradient(ellipse 80% 45% at 50% -10%, rgb(97 95 255 / 0.14), transparent 60%),
+    radial-gradient(ellipse 45% 35% at 100% 0%, rgb(254 154 0 / 0.06), transparent 55%);
+  background-attachment: fixed;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Dans @layer base : hors couche, ces règles l'emportaient sur les classes utilitaires de
+   Tailwind 4 (une couleur ou une taille posée sur un lien était ignorée). */
+@layer base {
+  button,
+  a,
+  [role="button"],
+  input,
+  select,
+  textarea {
+    font: inherit;
+    touch-action: manipulation;
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+}
+
+/* Liens texte (profils, tableaux) */
+.link {
+  color: var(--primary);
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+.link:hover {
+  color: var(--primary-hover);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* Liens ligne (listes documents, factures liées) */
+.link-row {
+  display: flex;
+  min-height: var(--tap);
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 0.625rem;
+  margin: 0 -0.625rem;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  text-decoration: none;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+.link-row:hover {
+  background-color: var(--primary-soft);
+  color: var(--primary-hover);
+}
+.link-row-muted {
+  color: var(--muted);
+  transition: color 0.15s ease;
+}
+.link-row:hover .link-row-muted {
+  color: var(--text);
+}
+
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+  letter-spacing: 0.01em;
+}
+
+/* Carte (N1) : surface pleine, sans flou (règle web-design). */
+.ui-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+
+/* Bouton principal (N1) : ambre plein, texte foncé. */
+.btn-accent {
+  border-color: transparent;
+  color: var(--primary-fg);
+  background: var(--primary);
+  font-weight: 600;
+}
+.btn-accent:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
+/* Tableaux */
+.ui-table-wrap {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
+
+.ui-swipe-hint {
+  position: relative;
+}
+
+.ui-swipe-hint::after {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 2rem;
+  background: linear-gradient(to right, transparent, var(--bg));
+}
+
+@media (min-width: 768px) {
+  .ui-swipe-hint::after {
+    display: none;
+  }
+}
+
+.ui-table {
+  width: 100%;
+  table-layout: auto;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+  text-align: left;
+}
+
+.ui-table thead {
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  background: var(--bg-subtle);
+}
+
+.ui-table th {
+  padding: 0.625rem 1rem;
+  font-weight: 600;
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ui-table td {
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--border);
+  vertical-align: middle;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: transparent;
+}
+
+.ui-table tbody tr:hover td {
+  background: var(--surface-raised);
+}
+
+.ui-table td.nowrap,
+.ui-table th.nowrap,
+.ui-table .col-actions {
+  white-space: nowrap;
+  width: 1%;
+}
+
+.ui-table td.wrap {
+  white-space: normal;
+  word-break: break-word;
+  overflow: visible;
+  text-overflow: unset;
+}
+
+@media (max-width: 767px) {
+  .ui-table-stack {
+    width: 100%;
+  }
+  .ui-table-stack thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+  .ui-table-stack tbody,
+  .ui-table-stack tr,
+  .ui-table-stack td {
+    display: block;
+    width: 100%;
+  }
+  .ui-table-stack tbody tr {
+    margin-bottom: 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface-raised);
+    padding: 0.75rem 1rem;
+  }
+  .ui-table-stack tbody td {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 0.75rem;
+    border: 0;
+    padding: 0.4rem 0;
+    overflow: visible;
+    text-overflow: unset;
+    white-space: normal;
+    word-break: break-word;
+  }
+  /* En carte, une cellule « nowrap » ne doit ni rester sur une ligne ni élargir la carte. */
+  .ui-table-stack tbody td.nowrap,
+  .ui-table-stack tbody td.col-actions {
+    width: 100%;
+    white-space: normal;
+  }
+  .ui-table-stack tbody td > * {
+    min-width: 0;
+  }
+  .ui-table-stack tbody td::before {
+    content: attr(data-label);
+    text-align: left;
+    color: var(--muted);
+    font-size: 0.75rem;
+    font-weight: 500;
+    flex: 0 0 38%;
+    max-width: 9rem;
+  }
+  .ui-table-stack tbody td.col-actions {
+    justify-content: flex-end;
+    padding-top: 0.75rem;
+  }
+  .ui-table-stack tbody td.col-actions::before {
+    content: none;
+  }
+}
+
+.ui-chip {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  touch-action: manipulation;
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Scrollbar discrète alignée au thème */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 0.18) transparent;
+}
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background-color: rgb(255 255 255 / 0.16);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(255 255 255 / 0.28);
+}
+
+/* react-data-table-component : forcer le thème sombre (évite les lignes blanches) */
+.rdt_Table {
+  background-color: transparent !important;
+  color: var(--text);
+}
+.rdt_noData {
+  background-color: transparent !important;
+  color: var(--text) !important;
+}
+.rdt_TableHeadRow {
+  background-color: var(--bg-subtle) !important;
+  border-bottom: 1px solid var(--border);
+}
+.rdt_TableHeadRow .rdt_TableCol {
+  color: var(--muted) !important;
+}
+.rdt_TableRow {
+  background-color: var(--surface) !important;
+  color: var(--text) !important;
+}
+.rdt_TableRow:hover {
+  background-color: var(--surface-raised) !important;
+}
+.rdt_TableCell {
+  background-color: inherit !important;
+  color: var(--text) !important;
+}
+.rdt_Pagination {
+  background-color: var(--surface) !important;
+  color: var(--muted) !important;
+  border-top: 1px solid var(--border) !important;
+}
+.rdt_Pagination select,
+.rdt_Pagination option {
+  background-color: var(--surface-hover) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  min-height: 44px;
+}
+.rdt_Pagination button {
+  min-height: 44px;
+  min-width: 44px;
+}
+.rdt_Pagination button svg {
+  fill: var(--primary) !important;
+}
+
+/* Selects / options / hovers restés blancs par défaut navigateur */
+select,
+select option {
+  background-color: var(--surface-raised);
+  color: var(--text);
+}
+select:hover,
+select:focus {
+  background-color: var(--surface-hover);
+}
+option:checked,
+option:hover {
+  background-color: var(--primary-soft);
+  color: var(--primary);
+}
+
+
+/* Cursor blanc RDT */
+.rdt_TableRow:hover .rdt_TableCell {
+  background-color: var(--surface-raised) !important;
+  color: var(--text) !important;
+}
+
+/* Texte secondaire (classe text-xs, lue par Tailwind dans --text-xs) : 13 px sous 640 px pour la
+   lecture au téléphone, 12 px au-delà pour la densité du bureau. Badges : tailles dédiées. */
+@media (max-width: 39.99rem) {
+  :root {
+    --text-xs: var(--text-meta);
+    --text-xs--line-height: calc(1.125 / 0.8125);
+  }
+}
+
+/* Marge latérale des pages selon la largeur (token --gutter). */
+@media (min-width: 40rem) {
+  :root {
+    --gutter: 1.5rem;
+  }
+}
+@media (min-width: 64rem) {
+  :root {
+    --gutter: 2rem;
+  }
+}
