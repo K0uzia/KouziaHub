@@ -43,7 +43,9 @@ export function AppLayout() {
         Aller au contenu
       </a>
 
-      <header className="z-30 flex h-[var(--topbar-h)] min-w-0 shrink-0 items-center gap-2 border-b border-[var(--border)] bg-[var(--bg)] px-[var(--gutter)] pt-[env(safe-area-inset-top)]">
+      {/* Barre pleine largeur (filet), contenu calé sur la même colonne que les pages : marque et actions alignées sur le contenu. */}
+      <header className="topbar custom-scrollbar z-30 shrink-0 border-b border-[var(--border)] bg-[var(--bg)] pt-[env(safe-area-inset-top)]">
+        <div className="page-frame flex h-[var(--topbar-h)] min-w-0 items-center gap-2">
         <Link to="/" className="flex min-h-11 min-w-0 items-center gap-2.5 rounded-[var(--radius-sm)]" aria-label="Kouzia Hub, catalogue des sites">
           <BrandMark className="h-8 w-8" />
           <span className="truncate font-display text-lg font-semibold tracking-wide text-[var(--text)]">
@@ -95,6 +97,7 @@ export function AppLayout() {
             <span className="sr-only sm:not-sr-only">Se déconnecter</span>
           </button>
         </div>
+        </div>
       </header>
 
       {/* Région qui défile : atteignable au clavier, contour visible seulement au focus clavier. */}
@@ -102,9 +105,9 @@ export function AppLayout() {
         id="contenu"
         ref={mainRef}
         tabIndex={-1}
-        className="custom-scrollbar relative min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden focus:outline-none"
+        className="custom-scrollbar main-scroll relative min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden focus:outline-none"
       >
-        <div className="mx-auto w-full min-w-0 max-w-[var(--page-max)] px-[var(--gutter)] py-5 lg:py-7">
+        <div className="page-frame py-5 lg:py-7">
           <Outlet />
         </div>
       </main>

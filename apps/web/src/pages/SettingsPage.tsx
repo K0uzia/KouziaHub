@@ -24,7 +24,7 @@ export function SettingsPage() {
   }, [hash]);
 
   return (
-    <>
+    <div className="page-narrow">
       <PageHeader title="Réglages" subtitle="Sécurité du compte, état des services et journal des actions." />
       <nav aria-label="Sections des réglages" className="mb-6">
         <ul className="flex flex-wrap gap-2">
@@ -40,11 +40,11 @@ export function SettingsPage() {
           ))}
         </ul>
       </nav>
-      <div className="max-w-4xl space-y-8">
+      <div className="space-y-8">
         <SecuritySection />
         <ControlsSection />
         <AuditSection />
       </div>
-    </>
+    </div>
   );
 }

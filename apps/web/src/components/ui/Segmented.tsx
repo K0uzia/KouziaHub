@@ -6,6 +6,7 @@ export function Segmented<T extends string>({
   label,
   className = "",
   wrap = false,
+  fieldHeight = false,
 }: {
   options: ReadonlyArray<{ id: T; label: string }>;
   value: T;
@@ -14,6 +15,8 @@ export function Segmented<T extends string>({
   className?: string;
   /** Plus de trois choix : grille de deux colonnes au téléphone, en ligne à partir de 640 px. */
   wrap?: boolean;
+  /** Dès 768 px, même hauteur hors tout qu'un champ (44 px) quand il est aligné avec des champs. */
+  fieldHeight?: boolean;
 }) {
   return (
     <div
@@ -29,7 +32,7 @@ export function Segmented<T extends string>({
             type="button"
             aria-pressed={active}
             onClick={() => onChange(o.id)}
-            className={`min-h-11 flex-1 whitespace-nowrap rounded-[calc(var(--radius-sm)-0.125rem)] px-3 text-sm transition-colors ${
+            className={`min-h-11 ${fieldHeight ? "md:min-h-9" : ""} flex-1 whitespace-nowrap rounded-[calc(var(--radius-sm)-0.125rem)] px-3 text-sm transition-colors ${
               active
                 ? "bg-[var(--surface-hover)] font-medium text-[var(--text)] shadow-[inset_0_0_0_1px_var(--primary)]"
                 : "text-[var(--muted)] hover:text-[var(--text)]"
