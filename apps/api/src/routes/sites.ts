@@ -3,7 +3,9 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import type { VersionEntry } from "@/contract.js";
+import type { ServerConfigPreview, VersionEntry } from "@/contract.js";
+import { buildHtaccess, normalizeFinalDomain, notFoundPageError, pagesDeployConfig } from "@/lib/server-config.js";
+import { profileOf, writeServerConfig } from "@/lib/server-config-store.js";
 import { audit } from "@/lib/audit.js";
 import { requireAuth } from "@/lib/auth.js";
 import { ERP_CLIENT_ID, ErpUnavailableError } from "@/lib/erp/types.js";
@@ -27,8 +29,15 @@ const createSchema = z.discriminatedUnion("kind", [
 ]);
 
 const updateSchema = z
-  .object({ label: label.nullable().optional(), erpClientId: z.string().regex(ERP_CLIENT_ID).nullable().optional() })
+  .object({
+    label: label.nullable().optional(),
+    erpClientId: z.string().regex(ERP_CLIENT_ID).nullable().optional(),
+    finalDomain: z.string().max(260).nullable().optional(),
+    canonicalHost: z.enum(["www", "apex"]).optional(),
+    notFoundPage: z.string().max(220).optional(),
+  })
   .strict();
+const regenerateSchema = z.object({ force: z.boolean().optional() }).nullish();
 
 const slugQuery = z.object({ slug: z.string().max(64).optional(), name: z.string().max(200).optional() });
 const opParams = z.object({ id: routeParam, opId: routeParam });
@@ -90,6 +99,7 @@ export function sitesRoutes(services: Services): FastifyPluginAsync {
           state: "CREATING",
         },
       });
+      await writeServerConfig(services.blobs, site.id, { reason: "création du site" });
       await services.engine.start(site.id, "CREATE");
       return reply.code(201).send(await siteDetail(site.id, services));
     });
@@ -108,11 +118,26 @@ export function sitesRoutes(services: Services): FastifyPluginAsync {
       const nextClient = parsed.data.erpClientId !== undefined ? parsed.data.erpClientId : site.erpClientId;
       if (!nextClient && !nextLabel) throw new HttpError(400, "Un site perso doit avoir un libellé.");
       if (nextClient && nextClient !== site.erpClientId) await ensureErpClient(services, nextClient);
+      let finalDomain = site.finalDomain;
+      if (parsed.data.finalDomain !== undefined) {
+        if (parsed.data.finalDomain === null || parsed.data.finalDomain.trim() === "") finalDomain = null;
+        else {
+          const normalized = normalizeFinalDomain(parsed.data.finalDomain);
+          if (!normalized.ok) throw new HttpError(400, normalized.reason);
+          finalDomain = normalized.value;
+        }
+      }
+      const notFoundPage = parsed.data.notFoundPage ?? site.notFoundPage;
+      const notFoundError = notFoundPageError(notFoundPage);
+      if (notFoundError) throw new HttpError(400, notFoundError);
+      const canonicalHost = parsed.data.canonicalHost ?? site.canonicalHost;
+      const profileChanged = finalDomain !== site.finalDomain || canonicalHost !== site.canonicalHost || notFoundPage !== site.notFoundPage;
       await prisma.site.update({
         where: { id },
-        data: { label: nextLabel, erpClientId: nextClient, kind: nextClient ? "CLIENT" : "PERSO", touchedAt: new Date() },
+        data: { label: nextLabel, erpClientId: nextClient, kind: nextClient ? "CLIENT" : "PERSO", finalDomain, canonicalHost, notFoundPage, touchedAt: new Date() },
       });
       await audit({ action: "site.update", result: "ok", siteId: id, siteSlug: site.slug });
+      if (profileChanged) await writeServerConfig(services.blobs, id, { reason: "profil modifié" });
       return siteDetail(id, services);
     });
 
@@ -228,6 +253,45 @@ export function sitesRoutes(services: Services): FastifyPluginAsync {
       await audit({ action: "files.restore", result: "ok", siteId: id, siteSlug: site.slug, detail: `version ${version.number}` });
       void services.blobs.gc().catch(() => undefined);
       return listFiles(id);
+    });
+
+    // --- Configuration serveur (.htaccess de l'hébergement final, _headers et _redirects de Pages) ---
+
+    app.get("/api/sites/:id/server-config/preview", async (request): Promise<ServerConfigPreview> => {
+      const { id } = idParams.parse(request.params);
+      const site = await loadSite(id);
+      const userFiles = await prisma.workingFile.findMany({ where: { siteId: id, path: { in: ["_headers", "_redirects"] } } });
+      const read = async (p: string) => {
+        const f = userFiles.find((x) => x.path === p);
+        return f ? (await services.blobs.read(f.sha256)).toString("utf8") : undefined;
+      };
+      const user = { headers: await read("_headers"), redirects: await read("_redirects") };
+      const config = pagesDeployConfig(profileOf(site), new Set(), user);
+      return {
+        htaccess: buildHtaccess(profileOf(site)),
+        pagesHeaders: config.headersFile ?? null,
+        pagesRedirects: config.redirectsFile ?? null,
+        hubCacheRules: config.cacheRules,
+      };
+    });
+
+    app.post("/api/sites/:id/server-config/regenerate", async (request) => {
+      const { id } = idParams.parse(request.params);
+      const parsed = regenerateSchema.safeParse(request.body);
+      if (!parsed.success) throw badRequest(parsed.error);
+      const site = await loadSite(id);
+      if (site.state === "DELETING") throw new HttpError(409, "Suppression en cours.");
+      const result = await writeServerConfig(services.blobs, id, { force: parsed.data?.force === true, reason: "régénération demandée" });
+      if (!result.written) {
+        throw new HttpError(
+          409,
+          result.state.status === "modified"
+            ? "Le .htaccess a été modifié à la main : confirmer pour le remplacer par la version générée."
+            : "Le .htaccess a été supprimé : confirmer pour le recréer.",
+          "server_config_modified",
+        );
+      }
+      return siteDetail(id, services);
     });
 
     // --- Vignettes ---

@@ -6,6 +6,8 @@ import { KEPT_VERSIONS } from "@/lib/limits.js";
 import { prisma } from "@/lib/prisma.js";
 import { CONFIG_FILES } from "@/lib/site-paths.js";
 import { buildWorkerScript } from "@/lib/worker-script.js";
+import { HTACCESS_PATH, pagesDeployConfig } from "@/lib/server-config.js";
+import { profileOf } from "@/lib/server-config-store.js";
 import type { Services } from "@/lib/services.js";
 import type { DeployFile } from "@/lib/cloudflare/types.js";
 
@@ -98,24 +100,28 @@ export async function deployVersion(services: Services, siteId: string, versionI
   await prisma.version.update({ where: { id: versionId }, data: { status: "UPLOADING", error: null } });
 
   const files: DeployFile[] = [];
-  let headersFile: string | undefined;
-  let redirectsFile: string | undefined;
+  const user: { headers?: string; redirects?: string } = {};
   for (const f of version.files) {
     if (CONFIG_FILES.has(f.path)) {
       const text = (await services.blobs.read(f.sha256)).toString("utf8");
-      if (f.path === "_headers") headersFile = text;
-      else redirectsFile = text;
+      if (f.path === "_headers") user.headers = text;
+      else user.redirects = text;
       continue;
     }
+    // .htaccess : configuration de l'hébergement final, sans effet sur Pages, jamais envoyé.
+    if (f.path === HTACCESS_PATH) continue;
     files.push({ path: f.path, sha256: f.sha256, size: f.size, read: () => services.blobs.read(f.sha256) });
   }
+  const config = pagesDeployConfig(profileOf(site), new Set(version.files.map((f) => f.path)), user);
+  const notFound = config.notFoundCopyFrom ? files.find((f) => f.path === config.notFoundCopyFrom) : undefined;
+  if (notFound) files.push({ ...notFound, path: "404.html" });
 
   try {
     const deployment = await services.cloudflare.deploy(site.pagesProject, {
       files,
-      workerJs: buildWorkerScript(hostnameOf(site.slug, services.sitesDomain)),
-      ...(headersFile !== undefined ? { headersFile } : {}),
-      ...(redirectsFile !== undefined ? { redirectsFile } : {}),
+      workerJs: buildWorkerScript(hostnameOf(site.slug, services.sitesDomain), { cacheRules: config.cacheRules }),
+      ...(config.headersFile !== undefined ? { headersFile: config.headersFile } : {}),
+      ...(config.redirectsFile !== undefined ? { redirectsFile: config.redirectsFile } : {}),
     });
     const now = new Date();
     await prisma.version.update({

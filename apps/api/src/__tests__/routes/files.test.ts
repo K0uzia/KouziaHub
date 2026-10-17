@@ -11,6 +11,8 @@ beforeEach(async () => {
   await resetDb();
   hub = await buildTestHub();
   siteId = await createPersoSite(hub, "alpha");
+  // Le .htaccess généré à la création est testé à part (server-config.test.ts) : retiré ici pour des comptes simples.
+  await hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/files/delete`, headers: hub.headers, payload: { paths: [".htaccess"] } });
 });
 afterEach(async () => {
   await hub.app.close();
@@ -57,7 +59,8 @@ describe("explorateur de fichiers", () => {
     expect(body.rejected).toHaveLength(4);
     expect(body.rejected.find((r) => r.path === "assets/.env")?.reason).toMatch(/\.env/);
     expect(body.rejected.find((r) => r.path === "assets/.DS_Store")?.reason).toMatch(/système/);
-    expect(body.files).toMatchObject({ hasIndex: false, workingDirty: true, totalBytes: 12, limits: { maxFiles: 20000 } });
+    // Page d'attente servie et pas d'index.html : rien à publier, donc pas « modifié ».
+    expect(body.files).toMatchObject({ hasIndex: false, workingDirty: false, totalBytes: 12, limits: { maxFiles: 20000 } });
   });
 
   it("refuse _worker.js envoyé à la racine et un dossier cible piégé", async () => {
@@ -228,7 +231,12 @@ describe("publication et versions", () => {
     expect(site).toMatchObject({ workingDirty: false, currentVersion: { number: 2 } });
     const deployment = hub.cf.deployments("kz-alpha").at(-1)!;
     expect(Object.keys(deployment.manifest)).toEqual(["/index.html"]);
-    expect(deployment.headersFile).toBe("/*\n  X-Client: 1\n");
+    // Règles de cache du hub d'abord, puis celles du site.
+    expect(deployment.headersFile).toBe(
+      "# Hub Kouzia : cache des fichiers au nom hashé (sécurité et autres règles : _worker.js).\n" +
+        "/assets/*\n  Cache-Control: public, max-age=31536000, immutable\n/_astro/*\n  Cache-Control: public, max-age=31536000, immutable\n\n" +
+        "# Règles du site\n/*\n  X-Client: 1\n",
+    );
     expect(deployment.redirectsFile).toBe("/old /new 301\n");
     expect(deployment.workerJs).toContain('"alpha.kouzia.com"');
     const list = await versions();
