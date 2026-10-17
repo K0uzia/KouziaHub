@@ -1,0 +1,44 @@
+/** Choix exclusif compact (période, vue) : groupe de boutons à bascule. */
+export function Segmented<T extends string>({
+  options,
+  value,
+  onChange,
+  label,
+  className = "",
+  wrap = false,
+}: {
+  options: ReadonlyArray<{ id: T; label: string }>;
+  value: T;
+  onChange: (id: T) => void;
+  label: string;
+  className?: string;
+  /** Plus de trois choix : grille de deux colonnes au téléphone, en ligne à partir de 640 px. */
+  wrap?: boolean;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label={label}
+      className={`${wrap ? "grid grid-cols-2 sm:inline-flex" : "inline-flex"} rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface)] p-1 ${className}`}
+    >
+      {options.map((o) => {
+        const active = o.id === value;
+        return (
+          <button
+            key={o.id}
+            type="button"
+            aria-pressed={active}
+            onClick={() => onChange(o.id)}
+            className={`min-h-11 flex-1 whitespace-nowrap rounded-[calc(var(--radius-sm)-0.125rem)] px-3 text-sm transition-colors ${
+              active
+                ? "bg-[var(--surface-hover)] font-medium text-[var(--text)] shadow-[inset_0_0_0_1px_var(--primary)]"
+                : "text-[var(--muted)] hover:text-[var(--text)]"
+            }`}
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
