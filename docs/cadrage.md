@@ -275,6 +275,7 @@ Rétention : 10 versions de contenu par site sur le CT et chez Cloudflare ; au-d
 - **Retour arrière** : Vercel affiche la version actuelle et la version choisie côte à côte, rappelle les domaines touchés, puis confirme [VERCEL-ROLLBACK] ; Cloudflare propose « Rollback to this deployment » dans le menu de chaque ligne de la liste des déploiements [CF-ROLLBACKS].
 - **Mise à jour par dépôt** : Netlify place la zone de dépôt en bas de la page des déploiements d'un site, à côté de l'historique [NETLIFY-DEPLOY]. Le hub fait de même dans la fiche.
 - **Rangée « Modifiés récemment » (motif « catalogue de streaming »)** : jamais de défilement automatique sur mobile, une partie de l'élément suivant visible pour signaler la suite, peu d'éléments, et tout contenu de la rangée présent aussi ailleurs (ici dans la grille), car une rangée défilante est souvent ignorée [NNG-CAROUSEL]. Si un défilement automatique existait, il s'arrêterait dès qu'un élément reçoit le focus ; les commandes ne déplacent pas le focus [WAI-CAROUSEL]. Le hub retient une rangée à défilement manuel (scroll-snap), sans rotation ni points indicateurs, chaque carte étant un lien atteignable au clavier.
+- **Filtres du catalogue (retour d'Alexandre, 18/10/2026)** : un filtre par dimension du contenu plutôt qu'une seule rangée de puces mêlant les dimensions [NNG-FACETS] : un contrôle segmenté Type (Tous, Clients, Perso), une liste État qui affiche le nombre de sites par état, et la recherche. Les sites en erreur ne sont pas cachés derrière un filtre : un bandeau en tête les signale (« 1 site en erreur ») avec un lien qui filtre. Filtres gardés dans l'URL.
 - **Explorateur de fichiers** : fil d'Ariane des dossiers qui montre la hiérarchie et non l'historique, dernier élément non cliquable et distinct, pas de retour à la ligne sur mobile (au besoin seul le dossier parent) [NNG-BREADCRUMBS] ; liste plutôt que cartes pour parcourir et comparer des fichiers [NNG-CARDS] ; envoi par bouton toujours présent et glisser-déposer en plus [GOVUK-UPLOAD] [NNG-DND] ; suppression confirmée en nommant le nombre d'éléments [NNG-CONFIRM].
 - **Identité et primitives** : celles de l'ERP (thème sombre, nuit et ambre, Exo 2 pour les titres, tokens de `index.css`, `PageHeader`, `StatStrip`, `DataTable`, `FilterChips`, `Tabs`, `Card`, `Modal`, `ConfirmDialog`, `sonner`), copiées dans le hub puis maintenues à l'identique.
 
@@ -282,7 +283,7 @@ Rétention : 10 versions de contenu par site sur le CT et chez Cloudflare ; au-d
 
 - `PageHeader` « Sites » avec le bouton principal « Nouveau site ».
 - `StatStrip` : actifs, en pause, projets utilisés sur 100.
-- `FilterChips` : Tous, Actifs, En pause, Brouillons ; recherche par client ou sous-domaine.
+- Filtres : Type segmenté (Tous, Clients, Perso), liste État avec les nombres, recherche par nom, client ou sous-domaine (voir 5.1) ; bandeau des sites en erreur.
 - Grille de cartes en `auto-fit` : une colonne sur un Samsung en portrait (360 à 412 px), deux dès qu'il y a la place, plus sur grand écran. Chaque carte : vignette 16:10 (`aspect-ratio`, chargement différé), libellé, client, état en texte et icône (jamais la couleur seule), date de la dernière version. La carte entière est un lien vers la fiche ; aucune action destructrice sur la carte.
 - Bascule « Liste » : `DataTable` avec les colonnes essentielles (site, client, état, dernière version).
 - État vide : « Aucun site pour l'instant » avec le bouton de création. État d'erreur ERP : bandeau, catalogue toujours affiché.
@@ -431,6 +432,7 @@ Autres :
 - [NETLIFY-DEPLOY] Netlify, Create deploys : https://docs.netlify.com/deploy/create-deploys/
 - [NNG-CARDS] Nielsen Norman Group, Cards: UI-Component Definition : https://www.nngroup.com/articles/cards-component/
 - [NNG-DND] Nielsen Norman Group, Drag and Drop: How to Design for Ease of Use : https://www.nngroup.com/articles/drag-drop/
+- [NNG-FACETS] Nielsen Norman Group, Kathryn Whitenton, Filters vs. Facets: Definitions (16/03/2014) : https://www.nngroup.com/articles/filters-vs-facets/
 - [NNG-CAROUSEL] Nielsen Norman Group, Carousel Usability: Designing an Effective UI for Websites with Content Overload : https://www.nngroup.com/articles/designing-effective-carousels/
 - [WAI-CAROUSEL] W3C WAI-ARIA Authoring Practices, Carousel Pattern : https://www.w3.org/WAI/ARIA/apg/patterns/carousel/
 - [NNG-BREADCRUMBS] Nielsen Norman Group, Breadcrumbs: 11 Design Guidelines for Desktop and Mobile : https://www.nngroup.com/articles/breadcrumbs/

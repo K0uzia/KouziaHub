@@ -19,12 +19,16 @@ export const GENERATED_MARKER = "# Généré par le hub Kouzia.";
 
 /**
  * Règles de cache (règle web-perf-eco), source unique du .htaccess, du _headers et du _worker.js.
- * Ordre : la première règle qui correspond s'applique.
+ * Ordre : la première règle qui correspond s'applique. `pattern` s'applique au chemin de l'URL.
+ * Immuable seulement par dossier (/assets/, /_astro/ : noms hashés par Vite et Astro) : un motif sur
+ * le nom (« .xxxxxxxx.js ») prendrait « jquery.carousel.js » pour un fichier hashé et figerait un an
+ * un fichier qui change.
  */
-export const CACHE_RULES: ReadonlyArray<{ label: string; pattern: string; cacheControl: string; pagesPaths: string[] }> = [
+export const CACHE_RULES: ReadonlyArray<{ label: string; pattern: string; cacheControl: string; pagesPaths: string[]; byPath?: true }> = [
   {
     label: "Fichiers au nom hashé (Vite /assets/, Astro /_astro/) : 1 an, immuables",
-    pattern: "\\.[0-9a-zA-Z_-]{8,}\\.(?:css|js|mjs|woff2?|webp|avif|svg|png|jpe?g|gif)$",
+    pattern: "^/(?:assets|_astro)/",
+    byPath: true,
     cacheControl: "public, max-age=31536000, immutable",
     pagesPaths: ["/assets/*", "/_astro/*"],
   },
@@ -170,8 +174,22 @@ export function buildHtaccess(profile: ServerProfile): string {
     "# Cache (la dernière règle qui correspond l'emporte : la plus précise en bas)",
     "<IfModule mod_headers.c>",
   );
+  // Les règles par dossier passent par une variable d'environnement (FilesMatch ne voit que le nom du
+  // fichier) ; les règles par type l'excluent, car les FilesMatch s'appliquent après et l'écraseraient.
+  const byPath = CACHE_RULES.filter((r) => r.byPath);
+  const guard = byPath.length > 0 ? " env=!HUB_PATH_CACHE" : "";
   for (const rule of [...CACHE_RULES].reverse()) {
-    add(`    # ${rule.label}`, `    <FilesMatch "${rule.pattern}">`, `        Header set Cache-Control "${rule.cacheControl}"`, "    </FilesMatch>");
+    if (rule.byPath) continue;
+    add(`    # ${rule.label}`, `    <FilesMatch "${rule.pattern}">`, `        Header set Cache-Control "${rule.cacheControl}"${guard}`, "    </FilesMatch>");
+  }
+  for (const rule of byPath) {
+    add(
+      `    # ${rule.label}`,
+      "    <IfModule mod_setenvif.c>",
+      `        SetEnvIf Request_URI "${rule.pattern}" HUB_PATH_CACHE`,
+      "    </IfModule>",
+      `    Header set Cache-Control "${rule.cacheControl}" env=HUB_PATH_CACHE`,
+    );
   }
   add("</IfModule>", "");
   return lines.join("\n");

@@ -152,3 +152,20 @@ describe("cache posé par le _worker.js (même source)", () => {
     expect(res.headers.get("Cache-Control")).toBe("public, max-age=0, must-revalidate");
   });
 });
+
+describe("cache immuable seulement par dossier", () => {
+  it("un nom à points (jquery.carousel.js) n'est jamais figé un an ; /assets/ et /_astro/ le sont", () => {
+    const hashed = CACHE_RULES.find((r) => r.cacheControl.includes("immutable"))!;
+    const re = new RegExp(hashed.pattern, "i");
+    expect(re.test("/js/jquery.carousel.js")).toBe(false);
+    expect(re.test("/css/bootstrap.min.css")).toBe(false);
+    expect(re.test("/assets/index-BwAGXDJI.js")).toBe(true);
+    expect(re.test("/_astro/page.Dk3x9a.css")).toBe(true);
+    const h = buildHtaccess(base);
+    expect(h).toContain('SetEnvIf Request_URI "^/(?:assets|_astro)/" HUB_PATH_CACHE');
+    expect(h).toContain('Header set Cache-Control "public, max-age=31536000, immutable" env=HUB_PATH_CACHE');
+    // Les règles par type n'écrasent pas la règle par dossier (FilesMatch s'applique après).
+    expect(h).toContain('Header set Cache-Control "public, max-age=604800" env=!HUB_PATH_CACHE');
+    expect(h).not.toMatch(/<FilesMatch "[^"]*immutable/);
+  });
+});
