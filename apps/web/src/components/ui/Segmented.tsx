@@ -7,6 +7,8 @@ export function Segmented<T extends string>({
   className = "",
   wrap = false,
   fieldHeight = false,
+  disabled = false,
+  describedBy,
 }: {
   options: ReadonlyArray<{ id: T; label: string }>;
   value: T;
@@ -17,11 +19,15 @@ export function Segmented<T extends string>({
   wrap?: boolean;
   /** Dès 768 px, même hauteur hors tout qu'un champ (44 px) quand il est aligné avec des champs. */
   fieldHeight?: boolean;
+  /** Choix indisponible pour l'instant ; describedBy : id du texte qui dit pourquoi. */
+  disabled?: boolean;
+  describedBy?: string;
 }) {
   return (
     <div
       role="group"
       aria-label={label}
+      aria-describedby={describedBy}
       className={`${wrap ? "grid grid-cols-2 sm:inline-flex" : "inline-flex"} rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface)] p-1 ${className}`}
     >
       {options.map((o) => {
@@ -31,8 +37,9 @@ export function Segmented<T extends string>({
             key={o.id}
             type="button"
             aria-pressed={active}
+            disabled={disabled}
             onClick={() => onChange(o.id)}
-            className={`min-h-11 ${fieldHeight ? "md:min-h-9" : ""} flex-1 whitespace-nowrap rounded-[calc(var(--radius-sm)-0.125rem)] px-3 text-sm transition-colors ${
+            className={`min-h-11 ${fieldHeight ? "md:min-h-9" : ""} flex-1 whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50 rounded-[calc(var(--radius-sm)-0.125rem)] px-3 text-sm transition-colors ${
               active
                 ? "bg-[var(--surface-hover)] font-medium text-[var(--text)] shadow-[inset_0_0_0_1px_var(--primary)]"
                 : "text-[var(--muted)] hover:text-[var(--text)]"
