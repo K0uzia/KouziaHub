@@ -19,7 +19,7 @@ function erp(handler: (call: Call) => Response, now = () => 1_760_000_000_000) {
     calls.push(call);
     return handler(call);
   }) as typeof fetch;
-  return { calls, dir: new HttpErpDirectory({ baseUrl: "http://203.0.113.50:3000/", secret: SECRET, fetch: fetchImpl, now }) };
+  return { calls, dir: new HttpErpDirectory({ baseUrl: "http://203.0.113.50:3100/", secret: SECRET, fetch: fetchImpl, now }) };
 }
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -30,7 +30,7 @@ describe("annuaire ERP par HTTP (fetch injecté)", () => {
     await dir.list();
     expect(calls).toHaveLength(1);
     const call = calls[0]!;
-    expect(call.url).toBe("http://203.0.113.50:3000/api/hub/clients");
+    expect(call.url).toBe("http://203.0.113.50:3100/api/hub/clients");
     expect(call.method).toBe("GET");
     const ts = call.headers.get("x-kouzia-hub-timestamp");
     expect(ts).toBe("1760000000");
@@ -68,7 +68,7 @@ describe("annuaire ERP par HTTP (fetch injecté)", () => {
 
   it("ERP injoignable, en erreur ou illisible : ErpUnavailableError", async () => {
     const down = new HttpErpDirectory({
-      baseUrl: "http://203.0.113.50:3000",
+      baseUrl: "http://203.0.113.50:3100",
       secret: SECRET,
       fetch: (async () => {
         throw new TypeError("fetch failed");
@@ -76,7 +76,45 @@ describe("annuaire ERP par HTTP (fetch injecté)", () => {
     });
     await expect(down.list()).rejects.toBeInstanceOf(ErpUnavailableError);
     await expect(erp(() => json({}, 500)).dir.list()).rejects.toBeInstanceOf(ErpUnavailableError);
-    await expect(erp(() => json({ clients: [{ id: "x" }] })).dir.list()).rejects.toBeInstanceOf(ErpUnavailableError);
+    await expect(erp(() => json({ error: "x" })).dir.list()).rejects.toBeInstanceOf(ErpUnavailableError);
+    await expect(erp(() => json({ clients: "x" })).dir.list()).rejects.toBeInstanceOf(ErpUnavailableError);
+    await expect(erp(() => new Response("<html>", { status: 200 })).dir.list()).rejects.toBeInstanceOf(ErpUnavailableError);
+  });
+
+  it("écarte un client invalide seul, garde les autres, et ne journalise que le nombre", async () => {
+    const warnings: string[] = [];
+    const invalid = [
+      { id: "v1", clientNumber: null, displayName: "", type: "B2B" },
+      { id: "v2", clientNumber: null, displayName: "Nom secret".padEnd(301, "x"), type: "B2B" },
+      { id: "v3", clientNumber: "N".repeat(65), displayName: "Numéro trop long", type: "B2B" },
+      { id: "v4", clientNumber: null, displayName: "Type inconnu", type: "PARTICULIER" },
+      { id: "../v5", clientNumber: null, displayName: "Identifiant invalide", type: "B2C" },
+      "pas un objet",
+    ];
+    const dir = new HttpErpDirectory({
+      baseUrl: "http://203.0.113.50:3100",
+      secret: SECRET,
+      fetch: (async () => json({ clients: [CLIENTS[0], ...invalid, CLIENTS[1]] })) as typeof fetch,
+      warn: (m) => warnings.push(m),
+    });
+    expect((await dir.list()).map((c) => c.id).sort()).toEqual(["c1", "c2"]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("6 client(s) écarté(s)");
+    for (const c of [...CLIENTS, ...invalid]) {
+      if (typeof c === "object" && c.displayName) expect(warnings[0]).not.toContain(c.displayName.slice(0, 8));
+    }
+  });
+
+  it("un client invalide lu seul vaut « inconnu », pas « ERP indisponible »", async () => {
+    const warnings: string[] = [];
+    const dir = new HttpErpDirectory({
+      baseUrl: "http://203.0.113.50:3100",
+      secret: SECRET,
+      fetch: (async () => json({ client: { id: "c1", clientNumber: null, displayName: "", type: "B2B" } })) as typeof fetch,
+      warn: (m) => warnings.push(m),
+    });
+    expect(await dir.get("c1")).toBeNull();
+    expect(warnings).toEqual(["[erp] 1 client(s) écarté(s) : réponse de l'ERP invalide pour ces fiches"]);
   });
 
   it("annuaire factice : clients marqués démonstration", async () => {

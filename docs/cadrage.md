@@ -210,6 +210,7 @@ Ce changement se fait dans le dépôt KouziaCRM, annoncé au superviseur et vali
 
 Le hub contient déjà le client de lecture (`apps/api/src/lib/erp/http.ts`), testé contre un faux serveur. Il n'est actif que si `ERP_BASE_URL` est posée ; sinon une liste de démonstration sert en dev. Si `ERP_BASE_URL` est posée sans `HUB_READ_SECRET`, le hub refuse de démarrer.
 
+- **Écouteur dédié côté ERP** : la route n'est servie que sur un écouteur à part, port 3100, sur l'IP du CT ERP dans le réseau local du Proxmox (jamais par le tunnel ni sur le port de l'interface). Une règle du pare-feu Proxmox, côté CT ERP, n'ouvre le port 3100 qu'à l'IP du CT du hub. Côté hub : `ERP_BASE_URL=http://<IP du CT ERP>:3100`.
 - **Requêtes** : `GET {ERP_BASE_URL}/api/hub/clients` (liste complète) et `GET {ERP_BASE_URL}/api/hub/clients/:id` (identifiant encodé dans l'URL, accepté seulement s'il respecte `^[A-Za-z0-9_-]{1,64}$`, sinon le hub n'appelle pas). Aucune autre méthode, aucun paramètre de requête : la recherche se fait côté hub.
 - **En-têtes** :
   - `x-kouzia-hub-timestamp` : horodatage en secondes Unix ;
@@ -218,10 +219,11 @@ Le hub contient déjà le client de lecture (`apps/api/src/lib/erp/http.ts`), te
 - **Réponses** :
   - liste : `{ "clients": [ { "id": string, "clientNumber": string | null, "displayName": string, "type": "B2B" | "B2C" | "ASSOCIATION" } ] }` ;
   - un client : `{ "client": { mêmes champs } }` ; 404 = client inconnu ;
-  - aucun autre champ (ni adresse, ni téléphone, ni SIRET, ni notes).
+  - aucun autre champ (ni adresse, ni téléphone, ni SIRET, ni notes) ;
+  - chaque client est validé à part : `displayName` de 1 à 300 caractères, `clientNumber` de 64 caractères au plus ou null, `type` parmi les trois valeurs, `id` conforme au motif ci-dessus. Un client invalide est écarté seul et le hub ne journalise que le nombre d'écartés, jamais un nom. Seuls un JSON illisible, une enveloppe absente (`clients` ou `client`) ou une réponse non 2xx valent « ERP indisponible ». Un client invalide lu seul vaut « inconnu ».
 - **Comportement du hub** : délai de 3 s ; liste gardée 5 minutes en mémoire ; toute erreur réseau, réponse non 2xx ou JSON invalide vaut « ERP indisponible » (catalogue toujours servi, bandeau affiché, création d'un site client refusée en 503). Le hub ne stocke que `erpClientId`.
 - **Lien vers la fiche** : `ERP_PUBLIC_ORIGIN` + `/clients/:id` (route de l'interface de l'ERP).
-- **Variables** : hub `ERP_BASE_URL`, `HUB_READ_SECRET`, `ERP_PUBLIC_ORIGIN` ; ERP `HUB_READ_SECRET` (même valeur), `HUB_ALLOWED_IPS` (IP du CT du hub).
+- **Variables** : hub `ERP_BASE_URL` (`http://<IP du CT ERP>:3100`), `HUB_READ_SECRET`, `ERP_PUBLIC_ORIGIN` ; ERP `HUB_READ_SECRET` (même valeur), `HUB_ALLOWED_IPS` (IP du CT du hub).
 
 ---
 

@@ -9,6 +9,8 @@ export type HttpErpOptions = {
   timeoutMs?: number;
   cacheMs?: number;
   now?: () => number;
+  /** Journal des clients écartés (le nombre seulement, jamais un nom). Défaut : console.warn. */
+  warn?: (message: string) => void;
 };
 
 const clientSchema = z.object({
@@ -17,8 +19,10 @@ const clientSchema = z.object({
   displayName: z.string().min(1).max(300),
   type: z.enum(["B2B", "B2C", "ASSOCIATION"]),
 });
-const listSchema = z.object({ clients: z.array(clientSchema).max(10_000) });
-const oneSchema = z.object({ client: clientSchema });
+// Enveloppe validée en bloc (sinon « ERP indisponible ») ; chaque client l'est à part : un client
+// invalide est écarté seul, sans priver le hub des autres.
+const listSchema = z.object({ clients: z.array(z.unknown()).max(10_000) });
+const oneSchema = z.object({ client: z.unknown() });
 
 export const ERP_LIST_PATH = "/api/hub/clients";
 
@@ -39,6 +43,7 @@ export class HttpErpDirectory implements ErpDirectory {
   private readonly timeoutMs: number;
   private readonly cacheMs: number;
   private readonly now: () => number;
+  private readonly warn: (message: string) => void;
   private cache: { at: number; clients: ErpClient[] } | null = null;
   private inflight: Promise<ErpClient[]> | null = null;
 
@@ -49,6 +54,18 @@ export class HttpErpDirectory implements ErpDirectory {
     this.timeoutMs = options.timeoutMs ?? 3000;
     this.cacheMs = options.cacheMs ?? 5 * 60_000;
     this.now = options.now ?? Date.now;
+    this.warn = options.warn ?? ((message) => console.warn(message));
+  }
+
+  private keepValid(items: unknown[]): ErpClient[] {
+    const clients: ErpClient[] = [];
+    for (const item of items) {
+      const parsed = clientSchema.safeParse(item);
+      if (parsed.success) clients.push(parsed.data);
+    }
+    const skipped = items.length - clients.length;
+    if (skipped > 0) this.warn(`[erp] ${skipped} client(s) écarté(s) : réponse de l'ERP invalide pour ces fiches`);
+    return clients;
   }
 
   private async request(pathname: string): Promise<Response> {
@@ -76,8 +93,9 @@ export class HttpErpDirectory implements ErpDirectory {
         if (!res.ok) throw new ErpUnavailableError();
         const parsed = listSchema.safeParse(await res.json().catch(() => null));
         if (!parsed.success) throw new ErpUnavailableError("Réponse de l'ERP illisible.");
-        this.cache = { at: this.now(), clients: parsed.data.clients };
-        return parsed.data.clients;
+        const clients = this.keepValid(parsed.data.clients);
+        this.cache = { at: this.now(), clients };
+        return clients;
       } finally {
         this.inflight = null;
       }
@@ -98,6 +116,6 @@ export class HttpErpDirectory implements ErpDirectory {
     if (!res.ok) throw new ErpUnavailableError();
     const parsed = oneSchema.safeParse(await res.json().catch(() => null));
     if (!parsed.success) throw new ErpUnavailableError("Réponse de l'ERP illisible.");
-    return parsed.data.client;
+    return this.keepValid([parsed.data.client])[0] ?? null;
   }
 }

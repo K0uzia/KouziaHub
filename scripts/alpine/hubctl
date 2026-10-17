@@ -42,7 +42,7 @@ Données
 
 Réglages (rien n'est affiché à l'écran)
   cloudflare                  jeton du tunnel Cloudflare du hub
-  secrets [access|api]        Cloudflare Access (domaine d'équipe, AUD) et API Cloudflare (jeton, compte, zone)
+  secrets [access|api|erp]    Cloudflare Access (domaine d'équipe, AUD), API Cloudflare (jeton, compte, zone), lien ERP
   chromium                    installer Chromium pour les vignettes automatiques
   admin                       créer le compte ou changer le mot de passe, puis double authentification
   2fa-reset                   couper la double authentification (téléphone perdu), puis : hubctl admin
@@ -79,7 +79,7 @@ run_cmd() {
     secrets)
       sh "${SCRIPT_DIR}/configure.sh" "${1:-secrets}"
       ;;
-    access|api|chromium)
+    access|api|erp|chromium)
       sh "${SCRIPT_DIR}/configure.sh" "$_cmd"
       ;;
     admin)

@@ -84,6 +84,15 @@ Relever aussi, sur la page de `kouzia.com` dans Cloudflare (colonne de droite, r
 
 Dans le CT : `hubctl secrets api`. Avant l'expiration, refaire un jeton et relancer la même commande.
 
+### 7. Plus tard : relier l'ERP (lecture des clients)
+
+Tant que ce lien n'est pas posé, le hub montre des clients de démonstration (il le signale).
+
+1. Côté ERP (après sa mise à jour qui ajoute la lecture pour le hub) : l'ERP sert la liste des clients sur un écouteur dédié, **port 3100**, sur l'IP de son CT dans le réseau local.
+2. Dans Proxmox, sur le CT de l'ERP : Firewall > Add, règle « IN », ACCEPT, port de destination 3100, source = l'IP du CT du hub ; aucune autre source.
+3. Créer un secret partagé une seule fois (`openssl rand -hex 32`) et le poser à l'identique dans le `.env` de l'ERP (`HUB_READ_SECRET`).
+4. Dans le CT du hub : `hubctl secrets erp` : IP du CT de l'ERP (le hub en fait `http://<IP du CT ERP>:3100`), puis le secret (invisible), puis l'adresse `https://erp.kouzia.com` pour le lien vers les fiches.
+
 ## Tous les jours
 
 | Commande | Effet |

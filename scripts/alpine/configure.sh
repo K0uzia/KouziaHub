@@ -156,6 +156,42 @@ EOF
   V=""
 }
 
+# --- Lien avec l'ERP (lecture seule des clients) ---
+
+configure_erp() {
+  title "Lien avec l'ERP (lecture des clients)"
+  cat <<EOF
+  Le hub lit la liste des clients sur l'écouteur dédié de l'ERP : port 3100, sur l'IP du CT de
+  l'ERP dans le réseau local du Proxmox (jamais par Internet). Dans Proxmox, sur le CT de l'ERP,
+  une règle du pare-feu n'ouvre le port 3100 qu'à l'IP de ce CT du hub.
+  Le secret partagé : une seule valeur, posée à l'identique dans le .env de l'ERP (HUB_READ_SECRET).
+  Pour la créer : openssl rand -hex 32 (sur un des deux CT), puis la coller ici et côté ERP.
+  État : adresse de l'ERP $(present ERP_BASE_URL), secret $(present HUB_READ_SECRET), lien vers les fiches $(present ERP_PUBLIC_ORIGIN).
+  Entrée sans rien saisir = garder la valeur actuelle.
+EOF
+  ask V "IP du CT de l'ERP sur le réseau local (ex. 203.0.113.20)"
+  if [ -n "$V" ]; then
+    printf '%s' "$V" | grep -Eq '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' || die "IP invalide (4 nombres séparés par des points). Rien n'a changé."
+    env_set ERP_BASE_URL "http://${V}:3100"
+    ok "Adresse de l'ERP enregistrée (port 3100)."
+  fi
+  ask_secret V "Secret partagé avec l'ERP (invisible)"
+  if [ -n "$V" ]; then
+    printf '%s' "$V" | grep -Eq '^[A-Za-z0-9+/=_-]{32,200}$'       || die "Secret invalide (${#V} caractères reçus, 32 au moins). Rien n'a changé."
+    env_set HUB_READ_SECRET "$V"
+    ok "Secret enregistré."
+  fi
+  ask V "Adresse de l'ERP dans le navigateur, pour le lien vers les fiches" "https://erp.kouzia.com"
+  if [ -n "$V" ]; then
+    printf '%s' "$V" | grep -Eq '^https://[A-Za-z0-9.-]+$' || die "Adresse invalide (attendu : https://nom.domaine)."
+    env_set ERP_PUBLIC_ORIGIN "$V"
+  fi
+  V=""
+  if env_has ERP_BASE_URL && ! env_has HUB_READ_SECRET; then
+    warn "Adresse de l'ERP posée sans secret : le hub refuse de démarrer tant que le secret manque."
+  fi
+}
+
 # --- API Cloudflare ---
 
 configure_api() {
@@ -237,6 +273,11 @@ case "$SECTION" in
     configure_api
     restart_if_needed
     ;;
+  erp)
+    [ -f "$KH_ENV_FILE" ] || die ".env absent : lancer « hubctl install »."
+    configure_erp
+    restart_if_needed
+    ;;
   secrets|"")
     [ -f "$KH_ENV_FILE" ] || die ".env absent : lancer « hubctl install »."
     configure_access
@@ -249,6 +290,6 @@ case "$SECTION" in
     restart_if_needed
     ;;
   *)
-    die "Réglage inconnu : $SECTION (cloudflare, secrets, secrets access, secrets api, chromium)"
+    die "Réglage inconnu : $SECTION (cloudflare, secrets, secrets access, secrets api, secrets erp, chromium)"
     ;;
 esac

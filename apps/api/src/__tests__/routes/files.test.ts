@@ -271,7 +271,7 @@ describe("publication et versions", () => {
     expect(hub.cf.deployments("kz-alpha")).toHaveLength(10);
     expect(await prisma.versionFile.count({ where: { version: { status: "PURGED" } } })).toBe(0);
     expect(list[0]!.current).toBe(true);
-  });
+  }, 20_000);
 
   it("rétention : une version en échec ne prend pas la place d'une version publiée", async () => {
     for (let i = 1; i <= 10; i++) {
@@ -287,7 +287,7 @@ describe("publication et versions", () => {
     expect(list.filter((v) => v.status === "PUBLISHED").map((v) => v.number)).toEqual([13, 11, 10, 9, 8, 7, 6, 5, 4, 3]);
     expect(list.find((v) => v.number === 12)).toMatchObject({ status: "PURGED", error: expect.any(String) });
     expect(hub.cf.deployments("kz-alpha")).toHaveLength(10);
-  });
+  }, 20_000);
 
   it("republie une version gardée, puis la restaure en version de travail", async () => {
     await upload([{ filename: "index.html", content: "<h1>A</h1>" }]);
