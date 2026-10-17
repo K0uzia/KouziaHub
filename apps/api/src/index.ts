@@ -1,6 +1,7 @@
 import { assertSecurityEnv, accessConfig, getApiPort, isProduction } from "@/lib/env.js";
 import { enableWal, prisma } from "@/lib/prisma.js";
 import { buildApp } from "@/app.js";
+import { createServices, startBackground } from "@/lib/services.js";
 import { checkPendingMigrations, checkPrismaClientUpToDate } from "@/lib/migration-check.js";
 
 // Une promesse rejetée sans gestionnaire ne doit jamais arrêter le hub : on journalise.
@@ -32,7 +33,10 @@ async function main() {
     console.warn("[boot] contrôle des migrations impossible", err instanceof Error ? err.message : err);
   }
 
-  const app = await buildApp();
+  const services = createServices();
+  if (services.cloudflare.mode === "fake") console.warn("[boot] Cloudflare simulé (pas de CLOUDFLARE_API_TOKEN) : rien n'est créé en vrai");
+  const app = await buildApp({ services });
+  await startBackground(services);
   const port = getApiPort();
 
   let closing = false;
