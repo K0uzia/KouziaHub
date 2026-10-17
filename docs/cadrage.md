@@ -1,6 +1,8 @@
 # Hub Kouzia : cadrage
 
-Document de cadrage du hub interne de l'EI Kouzia (`hub.kouzia.com`). Aucun code applicatif n'est écrit à ce stade. Les décisions verrouillées d'Alexandre (`.claude/rules/kouzia.md`, 17/10/2026) sont prises comme cadre et ne sont pas rediscutées ici.
+Document de cadrage du hub interne de l'EI Kouzia (`hub.kouzia.com`). Document écrit avant le code ; le code suit désormais ses sections 2 à 6, avec les mises à jour ci-dessous. Les décisions verrouillées d'Alexandre (`.claude/rules/kouzia.md`, 17/10/2026) sont prises comme cadre et ne sont pas rediscutées ici.
+
+> **Mise à jour du 17/10/2026 (deuxième série)** : les décisions de `.claude/rules/kouzia.md` remplacent ce document là où ils divergent. Pas de code d'accès (la section 1.4 ne s'applique plus : le `_worker.js` injecté ne fait que rediriger `pages.dev`, servir `robots.txt` en `Disallow` et poser `X-Robots-Tag: noindex, nofollow`) ; « couper » un site retire le CNAME puis le domaine (méthode B de 1.3) ; sites « Perso » sans client ; explorateur de fichiers en plus du zip.
 
 Sources consultées le 17/10/2026 (liste complète en fin de document). Quand la documentation officielle ne tranche pas un point, le document le dit et le classe « à vérifier au lot X ».
 
@@ -203,6 +205,23 @@ Ce changement se fait dans le dépôt KouziaCRM, annoncé au superviseur et vali
 
 - Le hub ne stocke que l'identifiant ERP du client (`erpClientId`), jamais son nom ni son adresse. Le nom est lu à l'affichage, avec un cache en mémoire de quelques minutes.
 - Si l'ERP ne répond pas, le catalogue reste utilisable : il affiche le libellé du site (non personnel) et un avertissement « Clients de l'ERP indisponibles ».
+
+### 3.4 Spécification exacte attendue par le hub (côté hub écrit le 17/10/2026, côté ERP à faire après validation)
+
+Le hub contient déjà le client de lecture (`apps/api/src/lib/erp/http.ts`), testé contre un faux serveur. Il n'est actif que si `ERP_BASE_URL` est posée ; sinon une liste de démonstration sert en dev. Si `ERP_BASE_URL` est posée sans `HUB_READ_SECRET`, le hub refuse de démarrer.
+
+- **Requêtes** : `GET {ERP_BASE_URL}/api/hub/clients` (liste complète) et `GET {ERP_BASE_URL}/api/hub/clients/:id` (identifiant encodé dans l'URL, accepté seulement s'il respecte `^[A-Za-z0-9_-]{1,64}$`, sinon le hub n'appelle pas). Aucune autre méthode, aucun paramètre de requête : la recherche se fait côté hub.
+- **En-têtes** :
+  - `x-kouzia-hub-timestamp` : horodatage en secondes Unix ;
+  - `x-kouzia-hub-signature` : `sha256=` suivi du HMAC-SHA256 en hexadécimal de `<horodatage>.GET.<chemin>`, avec la clé `HUB_READ_SECRET` ; le chemin signé est le pathname exact, sans requête (même format `sha256=` que le webhook existant de l'ERP).
+- **Contrôles côté ERP** : horodatage à plus ou moins 5 minutes, comparaison en temps constant, `request.viaTunnel` faux, IP dans `HUB_ALLOWED_IPS`, limite de débit ; tout refus répond la même 404.
+- **Réponses** :
+  - liste : `{ "clients": [ { "id": string, "clientNumber": string | null, "displayName": string, "type": "B2B" | "B2C" | "ASSOCIATION" } ] }` ;
+  - un client : `{ "client": { mêmes champs } }` ; 404 = client inconnu ;
+  - aucun autre champ (ni adresse, ni téléphone, ni SIRET, ni notes).
+- **Comportement du hub** : délai de 3 s ; liste gardée 5 minutes en mémoire ; toute erreur réseau, réponse non 2xx ou JSON invalide vaut « ERP indisponible » (catalogue toujours servi, bandeau affiché, création d'un site client refusée en 503). Le hub ne stocke que `erpClientId`.
+- **Lien vers la fiche** : `ERP_PUBLIC_ORIGIN` + `/clients/:id` (route de l'interface de l'ERP).
+- **Variables** : hub `ERP_BASE_URL`, `HUB_READ_SECRET`, `ERP_PUBLIC_ORIGIN` ; ERP `HUB_READ_SECRET` (même valeur), `HUB_ALLOWED_IPS` (IP du CT du hub).
 
 ---
 
