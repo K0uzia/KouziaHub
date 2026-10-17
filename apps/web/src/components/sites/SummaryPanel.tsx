@@ -16,6 +16,8 @@ export function SummaryPanel({ site, onSite }: { site: SiteDetail; onSite: (s: S
   const [busy, setBusy] = useState(false);
   const running = site.operation?.status === "RUNNING";
   const online = site.state === "ONLINE";
+  // Remise en ligne en attente ou en erreur de certificat : l'adresse est posée, « couper » la retire.
+  const addressPending = site.state === "OFFLINE" && site.domainStatus !== "NONE";
   const locked = running || site.state === "CREATING" || site.state === "DELETING";
 
   async function toggle(next: boolean) {
@@ -44,6 +46,8 @@ export function SummaryPanel({ site, onSite }: { site: SiteDetail; onSite: (s: S
         ? "Une opération est en cours : l'interrupteur revient à la fin."
     : online
       ? "Couper le site retire son adresse : elle ne répondra plus."
+      : addressPending
+        ? "Remise en ligne demandée, certificat en attente. Couper le site retire son adresse."
       : "L'adresse ne répond pas. La remise en ligne prend quelques minutes (certificat).";
 
   return (
@@ -96,7 +100,7 @@ export function SummaryPanel({ site, onSite }: { site: SiteDetail; onSite: (s: S
 
       <div className="mt-4 border-t border-[var(--border)] pt-3">
         <Switch
-          checked={online}
+          checked={online || addressPending}
           onChange={(next) => (next ? void toggle(true) : setConfirmOff(true))}
           label="Site accessible"
           stateLabels={{ on: "En ligne", off: "Hors ligne" }}

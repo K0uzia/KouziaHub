@@ -215,9 +215,20 @@ describe("moteur d'opérations", () => {
   });
 
   it("refuse le CNAME si un enregistrement hors hub occupe le nom", async () => {
+    // Enregistrement créé hors hub entre le contrôle du sous-domaine et l'étape DNS : posé à l'ajout du
+    // domaine, juste avant l'étape CNAME (sans fenêtre de temps, le test ne dépend pas de l'ordonnancement).
+    class RacingCloudflare extends FakeCloudflare {
+      override async addDomain(project: string, hostname: string) {
+        const domain = await super.addDomain(project, hostname);
+        if (!this.snapshot().dns.some((r) => r.name === hostname)) {
+          this.seedDnsRecord({ type: "A", name: hostname, content: "192.0.2.1", proxied: false, comment: null });
+        }
+        return domain;
+      }
+    }
+    await hub.app.close();
+    hub = await buildTestHub({ cloudflare: new RacingCloudflare() });
     const res = await hub.app.inject({ method: "POST", url: "/api/sites", headers: hub.headers, payload: { kind: "PERSO", slug: "alpha", label: "A" } });
-    // Enregistrement créé hors hub entre le contrôle du sous-domaine et l'étape DNS.
-    hub.cf.seedDnsRecord({ type: "A", name: "alpha.kouzia.com", content: "192.0.2.1", proxied: false, comment: null });
     await settle(hub);
     const site = await get(res.json().id);
     expect(site.operation).toMatchObject({ status: "FAILED", error: expect.stringMatching(/hors du hub/) });
