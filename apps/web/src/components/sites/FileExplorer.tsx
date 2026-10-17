@@ -30,7 +30,7 @@ import {
 } from "@/lib/files";
 import { useResource } from "@/lib/useResource";
 import { useDropTarget } from "@/lib/useDropTarget";
-import { Card, EmptyState } from "@/components/ui/Card";
+import { Badge, Card, EmptyState } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { MoreMenu } from "@/components/ui/MoreMenu";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -378,6 +378,11 @@ export function FilesTab({
                           <FontAwesomeIcon icon={faFile} className="h-4 w-4 shrink-0 text-[var(--muted)]" aria-hidden />
                           <span className="min-w-0 break-all">{entry.name}</span>
                           <span className="sr-only">, télécharger</span>
+                          {entry.path === site.serverConfig.path && site.serverConfig.status !== "missing" ? (
+                            <Badge tone={site.serverConfig.status === "generated" ? "green" : "amber"}>
+                              {site.serverConfig.status === "generated" ? "généré" : "modifié"}
+                            </Badge>
+                          ) : null}
                         </a>
                       )}
                       <p className="text-xs text-[var(--muted)] sm:hidden">

@@ -702,6 +702,56 @@ option:hover {
   }
 }
 
+/* Code en lecture seule (aperçu du .htaccess) : repliable, défilement horizontal interne seulement. */
+.code-details {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-subtle);
+  padding: 0 0.75rem 0.5rem;
+}
+
+.code-summary {
+  display: flex;
+  min-height: var(--tap);
+  align-items: center;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text);
+  gap: 0.625rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.code-summary::-webkit-details-marker {
+  display: none;
+}
+
+/* Chevron : tourné quand le bloc est ouvert (l'état est porté par l'attribut open). */
+.code-chevron {
+  transition: transform var(--duration-fast) var(--ease);
+}
+
+.code-details[open] .code-chevron {
+  transform: rotate(90deg);
+}
+
+.code-block {
+  max-width: 100%;
+  max-height: 24rem;
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg);
+  white-space: pre;
+  overflow: auto;
+}
+
 /* Zone de dépôt fondue dans sa carte : invisible au repos, signalée pendant le survol (règle ci-dessus, plus spécifique). */
 .dropzone-quiet {
   border-color: transparent;

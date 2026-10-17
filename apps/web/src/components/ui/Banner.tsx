@@ -43,7 +43,7 @@ export function Banner({
       className={`flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[var(--radius)] border px-4 py-3 text-sm text-[var(--text)] ${look.box} ${className}`}
     >
       <FontAwesomeIcon icon={look.icon} className={`mt-0.5 h-4 w-4 shrink-0 ${look.ink}`} aria-hidden />
-      <div className="min-w-0 flex-[1_1_12rem] leading-relaxed">
+      <div className="min-w-0 flex-[1_1_9rem] leading-relaxed">
         <span className="sr-only">{look.word} : </span>
         {children}
       </div>
