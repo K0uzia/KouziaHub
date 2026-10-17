@@ -1,0 +1,50 @@
+#!/sbin/openrc-run
+# OpenRC : tunnel Cloudflare du hub (propre au hub, distinct de celui de l'ERP).
+# Jeton : /etc/kouziahub/tunnel.token (600, root), posé par « hubctl cloudflare ».
+
+description="Tunnel Cloudflare du hub Kouzia"
+
+: "${KH_TUNNEL_TOKEN_FILE:=/etc/kouziahub/tunnel.token}"
+: "${KH_LOG_DIR:=/var/log/kouziahub}"
+
+name="cloudflared"
+command="/usr/local/bin/cloudflared"
+command_args="tunnel --no-autoupdate run"
+# Le jeton est lu ici en root puis passé par l'environnement (TUNNEL_TOKEN) : jamais sur la ligne
+# de commande visible dans la liste des processus. cloudflared tourne ensuite sans droits.
+command_user="nobody"
+supervisor=supervise-daemon
+# Coupure réseau : relance sans limite, toutes les 10 s.
+respawn_delay=10
+respawn_max=0
+
+output_log="${KH_LOG_DIR}/cloudflared.log"
+error_log="${KH_LOG_DIR}/cloudflared.err"
+
+depend() {
+  need net
+  after kouziahub
+}
+
+start_pre() {
+  checkpath -d -o root:root -m 0755 "$KH_LOG_DIR"
+  checkpath -f -o nobody -m 0640 "$output_log" "$error_log"
+  if [ ! -x "$command" ]; then
+    eerror "cloudflared introuvable : $command (hubctl cloudflare)"
+    return 1
+  fi
+  if [ ! -s "$KH_TUNNEL_TOKEN_FILE" ]; then
+    eerror "Jeton du tunnel absent : $KH_TUNNEL_TOKEN_FILE (hubctl cloudflare)"
+    return 1
+  fi
+  TUNNEL_TOKEN="$(tr -d '\r\n' < "$KH_TUNNEL_TOKEN_FILE")"
+  if [ -z "$TUNNEL_TOKEN" ]; then
+    eerror "Jeton du tunnel vide : $KH_TUNNEL_TOKEN_FILE (hubctl cloudflare)"
+    return 1
+  fi
+  export TUNNEL_TOKEN
+}
+
+start_post() {
+  unset TUNNEL_TOKEN
+}

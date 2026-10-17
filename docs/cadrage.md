@@ -253,6 +253,8 @@ Rétention : 10 versions de contenu par site sur le CT et chez Cloudflare ; au-d
 - **Confirmation** : texte précis sur la conséquence, bouton qui nomme l'action (« Mettre en pause » et non « Oui »), réservée aux actions graves, saisie du nom pour l'action la plus destructrice, et annulation possible plutôt que confirmation quand c'est faisable [NNG-CONFIRM].
 - **Retour arrière** : Vercel affiche la version actuelle et la version choisie côte à côte, rappelle les domaines touchés, puis confirme [VERCEL-ROLLBACK] ; Cloudflare propose « Rollback to this deployment » dans le menu de chaque ligne de la liste des déploiements [CF-ROLLBACKS].
 - **Mise à jour par dépôt** : Netlify place la zone de dépôt en bas de la page des déploiements d'un site, à côté de l'historique [NETLIFY-DEPLOY]. Le hub fait de même dans la fiche.
+- **Rangée « Modifiés récemment » (motif « catalogue de streaming »)** : jamais de défilement automatique sur mobile, une partie de l'élément suivant visible pour signaler la suite, peu d'éléments, et tout contenu de la rangée présent aussi ailleurs (ici dans la grille), car une rangée défilante est souvent ignorée [NNG-CAROUSEL]. Si un défilement automatique existait, il s'arrêterait dès qu'un élément reçoit le focus ; les commandes ne déplacent pas le focus [WAI-CAROUSEL]. Le hub retient une rangée à défilement manuel (scroll-snap), sans rotation ni points indicateurs, chaque carte étant un lien atteignable au clavier.
+- **Explorateur de fichiers** : fil d'Ariane des dossiers qui montre la hiérarchie et non l'historique, dernier élément non cliquable et distinct, pas de retour à la ligne sur mobile (au besoin seul le dossier parent) [NNG-BREADCRUMBS] ; liste plutôt que cartes pour parcourir et comparer des fichiers [NNG-CARDS] ; envoi par bouton toujours présent et glisser-déposer en plus [GOVUK-UPLOAD] [NNG-DND] ; suppression confirmée en nommant le nombre d'éléments [NNG-CONFIRM].
 - **Identité et primitives** : celles de l'ERP (thème sombre, nuit et ambre, Exo 2 pour les titres, tokens de `index.css`, `PageHeader`, `StatStrip`, `DataTable`, `FilterChips`, `Tabs`, `Card`, `Modal`, `ConfirmDialog`, `sonner`), copiées dans le hub puis maintenues à l'identique.
 
 ### 5.2 Catalogue (accueil)
@@ -408,6 +410,9 @@ Autres :
 - [NETLIFY-DEPLOY] Netlify, Create deploys : https://docs.netlify.com/deploy/create-deploys/
 - [NNG-CARDS] Nielsen Norman Group, Cards: UI-Component Definition : https://www.nngroup.com/articles/cards-component/
 - [NNG-DND] Nielsen Norman Group, Drag and Drop: How to Design for Ease of Use : https://www.nngroup.com/articles/drag-drop/
+- [NNG-CAROUSEL] Nielsen Norman Group, Carousel Usability: Designing an Effective UI for Websites with Content Overload : https://www.nngroup.com/articles/designing-effective-carousels/
+- [WAI-CAROUSEL] W3C WAI-ARIA Authoring Practices, Carousel Pattern : https://www.w3.org/WAI/ARIA/apg/patterns/carousel/
+- [NNG-BREADCRUMBS] Nielsen Norman Group, Breadcrumbs: 11 Design Guidelines for Desktop and Mobile : https://www.nngroup.com/articles/breadcrumbs/
 - [NNG-CONFIRM] Nielsen Norman Group, Confirmation Dialogs Can Prevent User Errors : https://www.nngroup.com/articles/confirmation-dialog/
 - [GOVUK-UPLOAD] GOV.UK Design System, File upload : https://design-system.service.gov.uk/components/file-upload/
 - [LCEN-DSA] Définitions de l'hébergeur (LCEN art. 6-I-2 et DSA art. 6), synthèse : https://www.labase-lextenso.fr/ouvrages/droit-du-numerique-9782275153209/section-1-l-exemption-conditionnelle-de-responsabilite-des-fournisseurs-de-services-d-hebergement-9782275153209-145

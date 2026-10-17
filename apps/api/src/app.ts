@@ -15,6 +15,10 @@ import { authRoutes } from "@/routes/auth.js";
 import { RATE_LIMITED, registerErrorHandler } from "@/lib/http.js";
 import { logSerializers } from "@/lib/log-redact.js";
 import { registerInputGuards } from "@/lib/http-input.js";
+import { createServices, type Services } from "@/lib/services.js";
+import { sitesRoutes } from "@/routes/sites.js";
+import { filesRoutes } from "@/routes/files.js";
+import { systemRoutes } from "@/routes/system.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -30,6 +34,8 @@ export type BuildAppOptions = {
   serveStatic?: boolean;
   /** Vérificateur Access injecté (tests). Défaut : d'après le .env, null si coupé en dev. */
   accessVerifier?: AccessVerifier | null;
+  /** Services métier injectés (tests : Cloudflare et ERP factices en mémoire). Défaut : d'après le .env. */
+  services?: Services;
 };
 
 export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInstance> {
@@ -101,6 +107,11 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   });
 
   await app.register(authRoutes);
+  const services = opts.services ?? createServices();
+  app.addHook("onClose", async () => services.close());
+  await app.register(sitesRoutes(services));
+  await app.register(filesRoutes(services));
+  await app.register(systemRoutes(services));
 
   app.get("/api/health", async () => ({ ok: true, pendingMigrations: pendingMigrationCount() }));
   app.get("/robots.txt", async (_request, reply) => reply.type("text/plain; charset=utf-8").send(ROBOTS_TXT));

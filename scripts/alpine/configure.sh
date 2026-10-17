@@ -1,0 +1,254 @@
+#!/bin/sh
+# Réglages du hub, rejouables à tout moment. Aucune valeur saisie n'est affichée ni journalisée.
+#
+#   hubctl cloudflare        jeton du tunnel Cloudflare du hub (propre au hub, distinct de l'ERP)
+#   hubctl secrets access    Cloudflare Access : domaine d'équipe, AUD, adresse attendue
+#   hubctl secrets api       API Cloudflare : jeton, identifiant de compte, identifiant de zone
+#   hubctl secrets           les deux
+#   hubctl chromium          installer Chromium pour les vignettes automatiques (facultatif)
+
+set -eu
+
+SELF="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$SELF")" && pwd)"
+# shellcheck source=lib.sh
+. "${SCRIPT_DIR}/lib.sh"
+
+SECTION="${1:-}"
+NO_RESTART=0
+[ "${2:-}" != "--no-restart" ] || NO_RESTART=1
+
+present() {
+  if env_has "$1"; then echo "renseigné"; else echo "vide"; fi
+}
+
+# --- Tunnel ---
+
+# Le collage peut être le jeton seul ou toute la commande « cloudflared service install eyJ... ».
+extract_tunnel_token() {
+  set -f
+  for _w in $1; do
+    _w="$(printf '%s' "$_w" | tr -d "\"'")"
+    _w="${_w#--token=}"
+    case "$_w" in
+      eyJ*)
+        if printf '%s' "$_w" | grep -Eq '^[A-Za-z0-9_=+/-]{50,}$'; then
+          set +f
+          printf '%s' "$_w"
+          return 0
+        fi
+        ;;
+    esac
+  done
+  set +f
+  return 1
+}
+
+install_cloudflared() {
+  if [ -x "$KH_CLOUDFLARED_BIN" ]; then
+    return 0
+  fi
+  case "$(uname -m)" in
+    x86_64|amd64) _arch=amd64 ;;
+    aarch64|arm64) _arch=arm64 ;;
+    *) die "Processeur $(uname -m) non prévu pour cloudflared." ;;
+  esac
+  log "Téléchargement de cloudflared (GitHub, version officielle de Cloudflare)..."
+  _tmp="$(mktemp)"
+  curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${_arch}" -o "$_tmp" \
+    || { rm -f "$_tmp"; die "Téléchargement de cloudflared impossible (réseau)."; }
+  install -m 755 "$_tmp" "$KH_CLOUDFLARED_BIN"
+  rm -f "$_tmp"
+  ok "cloudflared installé : $("$KH_CLOUDFLARED_BIN" --version 2>/dev/null | head -n 1)"
+}
+
+configure_tunnel() {
+  title "Tunnel Cloudflare du hub"
+  cat <<EOF
+  Dans Cloudflare : Zero Trust > Networks (Réseaux) > Tunnels > Create a tunnel > Cloudflared.
+    1. Nom du tunnel : kouziahub (un tunnel à lui, pas celui de l'ERP).
+    2. Copier la commande d'installation affichée (elle contient une longue suite qui commence par eyJ).
+    3. Nom d'hôte public : hub.kouzia.com  >  service HTTP  >  127.0.0.1:$(api_port)
+  Collez ici la commande entière ou seulement le jeton eyJ... La saisie reste invisible.
+EOF
+  if [ -s "$KH_TUNNEL_TOKEN_FILE" ]; then
+    echo "  (un jeton est déjà enregistré ; Entrée sans rien coller = le garder)"
+  fi
+  ask_secret RAW "Jeton du tunnel"
+  if [ -z "$RAW" ]; then
+    if [ -s "$KH_TUNNEL_TOKEN_FILE" ]; then
+      ok "Jeton actuel gardé."
+    else
+      warn "Rien de collé : tunnel non configuré (plus tard : hubctl cloudflare)."
+      return 0
+    fi
+  else
+    if ! TOKEN="$(extract_tunnel_token "$RAW")"; then
+      _len="${#RAW}"
+      RAW=""
+      warn "Ce n'est pas un jeton de tunnel (${_len} caractères reçus). Il commence par eyJ et fait plus de 100 caractères."
+      warn "Attention à ne pas coller l'identifiant du tunnel (forme 1234abcd-....) : il faut la commande d'installation."
+      return 1
+    fi
+    RAW=""
+    mkdir -p "$KH_ETC_DIR"
+    chmod 700 "$KH_ETC_DIR"
+    _tmp="$(mktemp "${KH_ETC_DIR}/.tunnel.XXXXXX")"
+    chmod 600 "$_tmp"
+    printf '%s\n' "$TOKEN" > "$_tmp"
+    mv -f "$_tmp" "$KH_TUNNEL_TOKEN_FILE"
+    chmod 600 "$KH_TUNNEL_TOKEN_FILE"
+    TOKEN=""
+    ok "Jeton du tunnel enregistré (${KH_TUNNEL_TOKEN_FILE}, lisible par root seulement)."
+  fi
+
+  install_cloudflared
+  install -m 755 "${KH_APP_DIR}/scripts/alpine/openrc/cloudflared" /etc/init.d/cloudflared
+  rc-update add cloudflared default >/dev/null 2>&1 || true
+  rc-service cloudflared restart >/dev/null 2>&1 || rc-service cloudflared start >/dev/null 2>&1 || true
+  sleep 3
+  if service_running cloudflared; then
+    ok "Tunnel démarré. Dans Cloudflare, il doit passer « Healthy » d'ici une minute."
+  else
+    warn "Le tunnel ne démarre pas. Journal :"
+    tail -n 15 "${KH_LOG_DIR}/cloudflared.err" 2>/dev/null | sed 's/^/    /' || true
+    return 1
+  fi
+}
+
+# --- Cloudflare Access ---
+
+configure_access() {
+  title "Cloudflare Access devant hub.kouzia.com"
+  cat <<EOF
+  Le hub vérifie lui-même le passage par Access. Il lui faut deux valeurs :
+    - le domaine d'équipe : Zero Trust > Settings (Réglages) > « Team domain »,
+      de la forme <nom>.cloudflareaccess.com (le <nom> seul suffit) ;
+    - l'AUD : Zero Trust > Access > Applications > l'application hub.kouzia.com >
+      « Application Audience (AUD) Tag » (64 caractères).
+  État : domaine d'équipe $(present CF_ACCESS_TEAM_DOMAIN), AUD $(present CF_ACCESS_AUD), adresse $(present CF_ACCESS_EMAIL).
+  Entrée sans rien saisir = garder la valeur actuelle. La saisie reste invisible.
+EOF
+  ask_secret V "Domaine d'équipe"
+  if [ -n "$V" ]; then
+    V="$(printf '%s' "$V" | tr '[:upper:]' '[:lower:]' | sed -e 's#^https\{0,1\}://##' -e 's#/.*$##')"
+    case "$V" in *.cloudflareaccess.com) ;; *) V="${V}.cloudflareaccess.com" ;; esac
+    printf '%s' "$V" | grep -Eq '^[a-z0-9][a-z0-9-]*\.cloudflareaccess\.com$' \
+      || die "Domaine d'équipe invalide (attendu : <nom>.cloudflareaccess.com). Rien n'a changé."
+    env_set CF_ACCESS_TEAM_DOMAIN "$V"
+    ok "Domaine d'équipe enregistré."
+  fi
+  ask_secret V "AUD de l'application"
+  if [ -n "$V" ]; then
+    printf '%s' "$V" | grep -Eq '^[0-9a-fA-F]{64}$' \
+      || die "AUD invalide (${#V} caractères reçus, 64 attendus, chiffres et lettres a à f)."
+    env_set CF_ACCESS_AUD "$V"
+    ok "AUD enregistré."
+  fi
+  echo "  Facultatif : votre adresse e-mail, contrôlée en plus de la règle Access."
+  ask_secret V "Adresse e-mail autorisée (Entrée = garder / passer)"
+  if [ -n "$V" ]; then
+    V="$(printf '%s' "$V" | tr '[:upper:]' '[:lower:]')"
+    printf '%s' "$V" | grep -Eq '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$' || die "Adresse e-mail invalide."
+    env_set CF_ACCESS_EMAIL "$V"
+    ok "Adresse enregistrée."
+  fi
+  V=""
+}
+
+# --- API Cloudflare ---
+
+configure_api() {
+  title "Jeton API Cloudflare (création des sites)"
+  cat <<EOF
+  Sans jeton, le hub fonctionne en mode simulé : rien n'est créé chez Cloudflare.
+  Créer le jeton : Cloudflare > My Profile > API Tokens > Create Token > Custom token, avec
+  SEULEMENT ces droits :
+    - Account > Cloudflare Pages > Edit       (Account Resources : votre compte seulement)
+    - Zone > DNS > Edit                        (Zone Resources : Specific zone > kouzia.com)
+  Expiration : dans un an. Filtrage par adresse IP : oui si l'IP de la box est fixe.
+  Identifiants : page de kouzia.com dans Cloudflare, colonne de droite, rubrique « API »
+  (Zone ID et Account ID, 32 caractères chacun).
+  État : jeton $(present CLOUDFLARE_API_TOKEN), compte $(present CLOUDFLARE_ACCOUNT_ID), zone $(present CLOUDFLARE_ZONE_ID).
+  Entrée sans rien saisir = garder la valeur actuelle. La saisie reste invisible.
+EOF
+  ask_secret V "Jeton API"
+  if [ -n "$V" ]; then
+    printf '%s' "$V" | grep -Eq '^[A-Za-z0-9_.-]{30,200}$' \
+      || die "Jeton invalide (${#V} caractères reçus). Rien n'a changé."
+    env_set CLOUDFLARE_API_TOKEN "$V"
+    ok "Jeton API enregistré."
+  fi
+  ask_secret V "Account ID"
+  if [ -n "$V" ]; then
+    printf '%s' "$V" | grep -Eq '^[0-9a-fA-F]{32}$' || die "Account ID invalide (${#V} caractères reçus, 32 attendus)."
+    env_set CLOUDFLARE_ACCOUNT_ID "$V"
+    ok "Account ID enregistré."
+  fi
+  ask_secret V "Zone ID de kouzia.com"
+  if [ -n "$V" ]; then
+    printf '%s' "$V" | grep -Eq '^[0-9a-fA-F]{32}$' || die "Zone ID invalide (${#V} caractères reçus, 32 attendus)."
+    env_set CLOUDFLARE_ZONE_ID "$V"
+    ok "Zone ID enregistré."
+  fi
+  V=""
+  if env_has CLOUDFLARE_API_TOKEN && { ! env_has CLOUDFLARE_ACCOUNT_ID || ! env_has CLOUDFLARE_ZONE_ID; }; then
+    warn "Jeton présent mais identifiant de compte ou de zone vide : à compléter (hubctl secrets api)."
+  fi
+  echo "  Pensez à noter la date d'expiration du jeton : il faudra le remplacer avant (même commande)."
+}
+
+# --- Chromium (vignettes) ---
+
+configure_chromium() {
+  title "Vignettes automatiques (Chromium, facultatif)"
+  echo "  Chromium prend environ 300 Mo. Sans lui, vous envoyez vous-même une image par site."
+  if [ "${KH_ASSUME_YES:-0}" != "1" ]; then
+    confirm "Installer Chromium ?" n || { echo "  Pas de Chromium : vignettes envoyées à la main."; return 0; }
+  fi
+  disk_guard / 600
+  apk add --no-cache chromium nss freetype harfbuzz ca-certificates ttf-freefont
+  _bin=/usr/bin/chromium-browser
+  [ -x "$_bin" ] || _bin="$(command -v chromium-browser || command -v chromium || true)"
+  [ -n "$_bin" ] || die "Chromium installé mais introuvable."
+  env_set HUB_CHROMIUM_PATH "$_bin"
+  ok "Chromium installé (${_bin})."
+}
+
+restart_if_needed() {
+  [ "$NO_RESTART" -eq 0 ] || return 0
+  if access_configured && service_exists "$KH_SERVICE"; then
+    restart_app || { show_app_errors; return 1; }
+  fi
+}
+
+require_root
+case "$SECTION" in
+  cloudflare|tunnel)
+    configure_tunnel
+    ;;
+  access)
+    [ -f "$KH_ENV_FILE" ] || die ".env absent : lancer « hubctl install »."
+    configure_access
+    restart_if_needed
+    ;;
+  api)
+    [ -f "$KH_ENV_FILE" ] || die ".env absent : lancer « hubctl install »."
+    configure_api
+    restart_if_needed
+    ;;
+  secrets|"")
+    [ -f "$KH_ENV_FILE" ] || die ".env absent : lancer « hubctl install »."
+    configure_access
+    configure_api
+    restart_if_needed
+    ;;
+  chromium)
+    [ -f "$KH_ENV_FILE" ] || die ".env absent : lancer « hubctl install »."
+    configure_chromium
+    restart_if_needed
+    ;;
+  *)
+    die "Réglage inconnu : $SECTION (cloudflare, secrets, secrets access, secrets api, chromium)"
+    ;;
+esac
