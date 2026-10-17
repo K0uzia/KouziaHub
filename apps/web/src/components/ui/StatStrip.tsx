@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 
 export type StatItem = {
   label: string;
-  /** Libellé court quand les cases sont étroites (moins de 640 px, ou 4 colonnes entre 1024 et 1279 px) ; le libellé complet reste lu par les lecteurs d'écran. */
+  /** Libellé court sous 1280 px (cases étroites) ; le libellé complet reste lu par les lecteurs d'écran. */
   shortLabel?: string;
   value: ReactNode;
   /** Ligne secondaire (contexte, échéance). */
@@ -30,6 +30,13 @@ const cols: Record<number, string> = {
   7: "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-7",
 };
 
+/** Mode dense sous 640 px : une seule rangée. */
+const denseCols: Record<number, string> = {
+  3: "max-sm:grid-cols-3",
+  4: "max-sm:grid-cols-4",
+  5: "max-lg:grid-cols-5",
+};
+
 /** Dernière case d'un nombre impair : elle comble la ligne (2, 3 puis 4 colonnes), sans case vide. */
 const lastSpan: Record<number, string> = {
   5: "col-span-2 lg:col-span-1",
@@ -38,31 +45,42 @@ const lastSpan: Record<number, string> = {
 
 /** Bandeau d'indicateurs dans une seule carte ; les filets sont l'espace d'1 px entre cases. */
 /** busy : valeurs en cours de chargement (squelettes), annoncé aux lecteurs d'écran. */
-export function StatStrip({ items, className = "", busy = false }: { items: StatItem[]; className?: string; busy?: boolean }) {
+/** dense : sous 640 px, toutes les cases sur une rangée basse (chiffre au-dessus, libellé court dessous). */
+export function StatStrip({
+  items,
+  className = "",
+  busy = false,
+  dense = false,
+}: {
+  items: StatItem[];
+  className?: string;
+  busy?: boolean;
+  dense?: boolean;
+}) {
   return (
     <dl
       aria-busy={busy || undefined}
-      className={`ui-card grid gap-px overflow-hidden bg-[var(--border)] ${cols[items.length] ?? cols[4]} ${className}`}
+      className={`ui-card grid gap-px overflow-hidden bg-[var(--border)] ${cols[items.length] ?? cols[4]} ${dense ? (denseCols[items.length] ?? "") : ""} ${className}`}
     >
       {items.map((s, i) => {
         // Nombre impair sur 2 colonnes (téléphone) : la dernière case prend toute la largeur, sans vide.
         const lastOdd = i === items.length - 1 && items.length % 2 === 1 && items.length > 1;
         const content = (
           <>
-            <dt className="truncate text-xs font-medium text-[var(--muted)] sm:text-sm">
+            <dt className={`truncate text-xs font-medium text-[var(--muted)] sm:text-sm ${dense ? "max-sm:whitespace-normal max-sm:text-[length:var(--text-tab)] max-sm:leading-tight" : ""}`}>
               {s.shortLabel ? (
                 <>
-                  <span aria-hidden className="hidden max-sm:inline lg:max-xl:inline">
+                  <span aria-hidden className="hidden max-xl:inline">
                     {s.shortLabel}
                   </span>
-                  <span className="max-sm:sr-only lg:max-xl:sr-only">{s.label}</span>
+                  <span className="max-xl:sr-only">{s.label}</span>
                 </>
               ) : (
                 s.label
               )}
             </dt>
             <dd
-              className={`mt-1.5 font-display text-xl font-semibold tabular-nums tracking-tight sm:text-2xl ${toneClass[s.tone ?? "default"]}`}
+              className={`mt-1.5 ${dense ? "max-sm:mt-0 max-sm:mb-1 max-sm:whitespace-nowrap max-sm:text-base max-sm:leading-tight" : ""} font-display text-xl font-semibold tabular-nums tracking-tight sm:text-2xl ${toneClass[s.tone ?? "default"]}`}
             >
               {s.to ? (
                 // Lien étiré : son ::after couvre toute la case, la structure dt/dd reste valide.
@@ -78,13 +96,13 @@ export function StatStrip({ items, className = "", busy = false }: { items: Stat
                 s.value
               )}
             </dd>
-            {s.hint ? <dd className="mt-1 text-xs text-[var(--muted)]">{s.hint}</dd> : null}
+            {s.hint ? <dd className={`mt-1 text-xs text-[var(--muted)] ${dense ? "max-sm:hidden" : ""}`}>{s.hint}</dd> : null}
           </>
         );
         return (
           <div
             key={s.label}
-            className={`relative min-w-0 bg-[var(--surface)] p-4 sm:p-5 ${lastOdd ? (lastSpan[items.length] ?? "col-span-2 sm:col-span-1") : ""} ${s.to ? "transition-colors hover:bg-[var(--surface-raised)]" : ""}`}
+            className={`relative min-w-0 bg-[var(--surface)] p-4 sm:p-5 ${dense ? "max-sm:flex max-sm:flex-col-reverse max-sm:justify-end max-sm:px-1 max-sm:py-2.5 max-sm:text-center" : ""} ${lastOdd ? `${lastSpan[items.length] ?? "col-span-2 sm:col-span-1"} ${dense ? "max-lg:col-span-1" : ""}` : ""} ${s.to ? "transition-colors hover:bg-[var(--surface-raised)]" : ""}`}
           >
             {content}
           </div>

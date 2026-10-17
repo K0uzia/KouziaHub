@@ -2,7 +2,7 @@ import { useId, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faGlobe, faMagnifyingGlass, faPlus } from "@fortawesome/free-solid-svg-icons";
-import type { CatalogResponse, SiteSummary } from "@hub/contract";
+import type { CatalogResponse, Notice, SiteSummary } from "@hub/contract";
 import { useResource, useStoredChoice } from "@/lib/useResource";
 import { useTitle } from "@/lib/useTitle";
 import { isSettling, matchesState, type StateFilter } from "@/lib/sites";
@@ -26,6 +26,11 @@ const RECENT_MIN_SITES = 5;
 const RECENT_COUNT = 8;
 /** Relecture du catalogue tant qu'un site change d'état (création, mise en ligne, certificat). */
 const POLL_MS = 3000;
+/** Notices du mode démonstration, regroupées en un bandeau ; texte court au téléphone. */
+const DEMO_SHORT: Partial<Record<Notice["code"], string>> = {
+  cloudflare_fake: "Cloudflare simulé",
+  erp_fake: "clients d'essai",
+};
 
 function normalize(text: string): string {
   return text.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
@@ -86,16 +91,19 @@ export function CatalogPage() {
     { id: "error" as const, label: "Erreur", count: count((s) => matchesState(s, "error"), byQuery) },
   ];
 
+  const notices = catalog.data?.notices ?? [];
+  const demoNotices = notices.filter((n) => n.code in DEMO_SHORT);
+  const otherNotices = notices.filter((n) => !(n.code in DEMO_SHORT));
   const stats = catalog.data?.stats;
   const statItems: StatItem[] = stats
     ? [
         { label: "En ligne", value: stats.online, tone: stats.online ? "success" : "default" },
         { label: "Hors ligne", value: stats.offline },
-        { label: "En création", value: stats.creating, tone: stats.creating ? "warning" : "default" },
-        { label: "En erreur", value: stats.errors, tone: stats.errors ? "danger" : "default" },
+        { label: "En création", shortLabel: "Création", value: stats.creating, tone: stats.creating ? "warning" : "default" },
+        { label: "En erreur", shortLabel: "Erreurs", value: stats.errors, tone: stats.errors ? "danger" : "default" },
         {
           label: "Projets Cloudflare utilisés",
-          shortLabel: "Projets Cloudflare",
+          shortLabel: "Projets",
           value: stats.projectsUsed == null ? "Inconnu" : `${stats.projectsUsed} / ${stats.projectsLimit}`,
           hint: stats.projectsUsed == null ? `Limite : ${stats.projectsLimit}` : undefined,
           tone: stats.projectsUsed != null && stats.projectsUsed >= stats.projectsLimit * 0.9 ? "warning" : "default",
@@ -114,7 +122,7 @@ export function CatalogPage() {
     <>
       <PageHeader
         title="Sites"
-        subtitle="Versions de travail des sites, sur leur adresse en .kouzia.com."
+        subtitle={<span className="max-sm:sr-only">Versions de travail des sites, sur leur adresse en .kouzia.com.</span>}
         actions={createButton}
       />
 
@@ -131,12 +139,20 @@ export function CatalogPage() {
           Chargement des sites…
         </p>
       ) : (
-        <div className="space-y-6">
-          {statItems.length ? <StatStrip items={statItems} /> : null}
+        <div className="space-y-4 sm:space-y-6">
+          {statItems.length ? <StatStrip items={statItems} dense /> : null}
 
-          {catalog.data?.notices.length ? (
+          {demoNotices.length ? (
+            // Mode démonstration (Cloudflare simulé, clients d'essai) : un seul bandeau bas, court au téléphone.
+            <Banner level="info" className="max-sm:py-2">
+              <span className="font-medium">Mode démonstration</span>
+              <span className="sm:hidden"> : {demoNotices.map((n) => DEMO_SHORT[n.code]).join(", ")}.</span>
+              <span className="hidden sm:inline"> : {demoNotices.map((n) => n.message).join(" ")}</span>
+            </Banner>
+          ) : null}
+          {otherNotices.length ? (
             <div className="space-y-2">
-              {catalog.data.notices.map((n) => (
+              {otherNotices.map((n) => (
                 <Banner
                   key={n.code}
                   level={n.level}
@@ -191,8 +207,8 @@ export function CatalogPage() {
                   Tous les sites
                 </h2>
                 <div className="flex flex-col gap-3">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-                    <div className="min-w-0 flex-1 space-y-1.5 sm:max-w-md">
+                  <div className="flex flex-wrap items-end justify-between gap-3">
+                    <div className="min-w-0 flex-[1_1_9rem] space-y-1.5 sm:max-w-md">
                       <label htmlFor={searchId} className="block text-sm font-medium text-[var(--text)]">
                         Rechercher
                       </label>
@@ -215,11 +231,14 @@ export function CatalogPage() {
                     </div>
                     <Segmented options={[{ id: "cards", label: "Cartes" }, { id: "list", label: "Liste" }]} value={view} onChange={setView} label="Affichage" />
                   </div>
-                  <FilterChips options={kindOptions} value={kind} onChange={(v) => setParam("type", v, "all")} label="Type de site" />
-                  <FilterChips options={stateOptions} value={stateFilter} onChange={(v) => setParam("etat", v, "all")} label="État" />
+                  {/* Téléphone : les deux groupes de filtres sur une seule rangée qui défile ; dès 640 px, une rangée chacun. */}
+                  <div className="no-scrollbar -mx-[var(--gutter)] flex gap-3 overflow-x-auto px-[var(--gutter)] sm:mx-0 sm:flex-col sm:overflow-visible sm:px-0 [&>*]:shrink-0">
+                    <FilterChips wrap options={kindOptions} value={kind} onChange={(v) => setParam("type", v, "all")} label="Type de site" />
+                    <FilterChips wrap options={stateOptions} value={stateFilter} onChange={(v) => setParam("etat", v, "all")} label="État" />
+                  </div>
                 </div>
 
-                <p role="status" className="text-sm text-[var(--muted)]">
+                <p role="status" className="text-sm text-[var(--muted)] max-sm:sr-only">
                   {shown.length === sites.length
                     ? `${sites.length} site${sites.length > 1 ? "s" : ""}`
                     : `${shown.length} site${shown.length > 1 ? "s" : ""} sur ${sites.length}`}
