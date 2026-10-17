@@ -21,6 +21,16 @@ Elles remplacent les points correspondants ci-dessus et du cadrage (`docs/cadrag
 - **Bouton off = l'adresse ne répond plus** : retrait du CNAME puis du domaine du projet. Le rallumage remet le domaine et le CNAME (quelques minutes de certificat), l'interface le dit.
 - **Sites perso** : un site peut n'être lié à aucun client de l'ERP, avec l'étiquette « Perso » et un filtre Clients / Perso.
 - **Fichiers « comme un FTP »** : explorateur de fichiers dans la fiche du site (parcourir, ajouter, remplacer, supprimer, puis « Publier »), plus l'envoi du site entier en zip. Chaque publication est une version gardée, republiable.
+## Décisions d'Alexandre (18/10/2026, troisième série : surveillance, verrouillées)
+
+- Contrôles depuis deux points : le hub sur le Proxmox et un Worker Cloudflare planifié (offre gratuite).
+- Alertes uniquement par notification sur le téléphone, en Web Push comme l'ERP. Ni ntfy ni e-mail pour l'instant.
+- Client : rapport mensuel en PDF, téléchargé dans le hub et envoyé par Alexandre depuis l'ERP. Aucune page publique.
+- Détection des domaines : Cloudflare seulement, par un jeton séparé en lecture seule. Pas de jeton Hostinger ; ses domaines s'ajoutent à la main.
+- Détail technique : `docs/cadrage.md`, section 10.
+
+## Défauts de la deuxième série
+
 - **Défauts retenus par le superviseur** : tunnel propre au hub ; `hubctl` copié de `kouziactl` ; zip et explorateur d'abord, GitHub plus tard ; vignette capturée automatiquement avec repli sur une image envoyée ; sous-domaine proposé depuis le nom du client, modifiable, liste de noms interdits.
 
 ## Garde-fous
