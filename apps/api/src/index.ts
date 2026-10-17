@@ -51,7 +51,7 @@ async function main() {
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(signal, () => shutdown(signal));
 
   // Production : derrière cloudflared sur le même CT, écoute locale seulement.
-  await app.listen({ port, host: process.env.API_HOST ?? (isProduction() ? "127.0.0.1" : "0.0.0.0") });
+  await app.listen({ port, host: process.env.API_HOST?.trim() || (isProduction() ? "127.0.0.1" : "0.0.0.0") });
   app.log.info(`Hub Kouzia sur :${port}`);
 }
 
