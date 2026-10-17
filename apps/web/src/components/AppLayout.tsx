@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type { IconDefinition } from "@fortawesome/fontawesome-svg-core";
-import { faGear, faRightFromBracket, faTableCellsLarge } from "@fortawesome/free-solid-svg-icons";
+import { faGear, faHeartPulse, faRightFromBracket, faTableCellsLarge } from "@fortawesome/free-solid-svg-icons";
 import { toast } from "sonner";
 import { useAuth } from "@/lib/auth";
 import { errorMessage } from "@/lib/api";
@@ -12,6 +12,7 @@ type NavItem = { to: string; label: string; icon: IconDefinition; match: (path: 
 
 const NAV: NavItem[] = [
   { to: "/", label: "Sites", icon: faTableCellsLarge, match: (p) => p === "/" || p.startsWith("/sites") },
+  { to: "/surveillance", label: "Surveillance", icon: faHeartPulse, match: (p) => p.startsWith("/surveillance") },
   { to: "/reglages", label: "Réglages", icon: faGear, match: (p) => p.startsWith("/reglages") },
 ];
 
@@ -114,7 +115,7 @@ export function AppLayout() {
 
       <nav
         aria-label="Accès rapide"
-        className="grid shrink-0 grid-cols-2 border-t border-[var(--border)] bg-[var(--bg-subtle)] pb-[env(safe-area-inset-bottom)] md:hidden"
+        className="grid shrink-0 grid-cols-3 border-t border-[var(--border)] bg-[var(--bg-subtle)] pb-[env(safe-area-inset-bottom)] md:hidden"
       >
         {NAV.map((item) => {
           const active = item.match(pathname);

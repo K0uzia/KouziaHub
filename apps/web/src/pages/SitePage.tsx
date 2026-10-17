@@ -19,8 +19,9 @@ import { VersionsTab } from "@/components/sites/VersionsTab";
 import { ThumbnailTab } from "@/components/sites/ThumbnailTab";
 import { SiteSettingsTab } from "@/components/sites/SiteSettingsTab";
 import { ServerTab } from "@/components/sites/ServerTab";
+import { SiteMonitorTab } from "@/components/monitor/SiteMonitorTab";
 
-const TAB_IDS = ["fichiers", "versions", "vignette", "serveur", "reglages"] as const;
+const TAB_IDS = ["fichiers", "versions", "surveillance", "vignette", "serveur", "reglages"] as const;
 type TabId = (typeof TAB_IDS)[number];
 /** Relecture de la fiche pendant une opération ou un certificat en attente (2 à 3 s), arrêtée sinon. */
 const POLL_MS = 2500;
@@ -137,6 +138,7 @@ export function SitePage() {
             tabs={[
               { id: "fichiers", label: "Fichiers", count: data.fileCount },
               { id: "versions", label: "Versions", count: versions.data?.length ?? null },
+              { id: "surveillance", label: "Surveillance" },
               { id: "vignette", label: "Vignette" },
               { id: "serveur", label: "Serveur" },
               { id: "reglages", label: "Réglages" },
@@ -161,6 +163,8 @@ export function SitePage() {
                   setTab("fichiers");
                 }}
               />
+            ) : tab === "surveillance" ? (
+              <SiteMonitorTab site={data} />
             ) : tab === "serveur" ? (
               <ServerTab site={data} onSite={onSite} />
             ) : tab === "vignette" ? (

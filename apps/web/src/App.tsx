@@ -10,6 +10,8 @@ import { Button } from "@/components/ui/Button";
 
 // Fiche et réglages chargés à la demande : le catalogue s'affiche sans eux.
 const SitePage = lazy(() => import("@/pages/SitePage").then((m) => ({ default: m.SitePage })));
+const MonitorPage = lazy(() => import("@/pages/MonitorPage").then((m) => ({ default: m.MonitorPage })));
+const MonitorTargetPage = lazy(() => import("@/pages/MonitorTargetPage").then((m) => ({ default: m.MonitorTargetPage })));
 const SettingsPage = lazy(() => import("@/pages/SettingsPage").then((m) => ({ default: m.SettingsPage })));
 
 function Loading() {
@@ -62,6 +64,22 @@ export default function App() {
           element={
             <Suspense fallback={<Loading />}>
               <SitePage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/surveillance"
+          element={
+            <Suspense fallback={<Loading />}>
+              <MonitorPage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/surveillance/:id"
+          element={
+            <Suspense fallback={<Loading />}>
+              <MonitorTargetPage />
             </Suspense>
           }
         />
