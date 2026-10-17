@@ -82,75 +82,52 @@ export function VersionsTab({
   return (
     <>
       <h2 className="sr-only">Historique des versions</h2>
-      <div className="ui-card ui-table-wrap max-md:border-0 max-md:bg-transparent max-md:shadow-none">
-        <table className="ui-table ui-table-stack">
-          <caption className="sr-only">Versions de {site.hostname}, de la plus récente à la plus ancienne</caption>
-          <thead>
-            <tr>
-              <th scope="col">Version</th>
-              <th scope="col">Note</th>
-              <th scope="col">Date</th>
-              <th scope="col">Source</th>
-              <th scope="col">Taille</th>
-              <th scope="col">État</th>
-              <th scope="col" className="col-actions">
-                <span className="sr-only">Actions</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {list.map((v) => {
-              const status = versionStatusLabel(v);
-              const hasFiles = v.status === "PUBLISHED";
-              return (
-                <tr key={v.id}>
-                  <td data-label="Version" className="nowrap">
-                    <span className="inline-flex flex-wrap items-center gap-2">
-                      <span className="font-semibold text-[var(--text)]">Version {v.number}</span>
-                      {v.current ? <Badge tone="primary">Servie</Badge> : null}
-                    </span>
-                  </td>
-                  <td data-label="Note" className="wrap">
-                    {v.note ? <span className="text-[var(--text)]">{v.note}</span> : <span className="text-[var(--muted)]">Sans note</span>}
-                  </td>
-                  <td data-label="Date" className="nowrap">
-                    {formatDateTime(v.publishedAt ?? v.createdAt)}
-                  </td>
-                  <td data-label="Source" className="wrap">
-                    {versionSourceLabel(v)}
-                  </td>
-                  <td data-label="Taille" className="nowrap">
-                    {plural(v.fileCount, "fichier", "fichiers")}, {formatBytes(v.totalBytes)}
-                  </td>
-                  <td data-label="État" className="wrap">
-                    <Badge tone={status.tone}>{status.label}</Badge>
-                    {v.error ? <span className="mt-1 block text-xs text-[var(--danger)]">{v.error}</span> : null}
-                  </td>
-                  <td className="col-actions">
-                    <MoreMenu
-                      variant="ghost"
-                      ariaLabel={`Actions pour la version ${v.number}`}
-                      label={<span className="md:sr-only">Actions</span>}
-                      items={[
-                        {
-                          label: "Republier cette version",
-                          onSelect: () => setPending({ kind: "publish", version: v }),
-                          disabled: v.current || !hasFiles || running,
-                        },
-                        {
-                          label: "Restaurer dans les fichiers de travail",
-                          onSelect: () => setPending({ kind: "restore", version: v }),
-                          disabled: !hasFiles || running,
-                        },
-                      ]}
-                    />
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      {/* Liste et non tableau : la note garde toute la largeur (un tableau la réduisait à une lettre par ligne). */}
+      <ol aria-label={`Versions de ${site.hostname}, de la plus récente à la plus ancienne`} className="ui-card divide-y divide-[var(--border)] p-0">
+        {list.map((v) => {
+          const status = versionStatusLabel(v);
+          const hasFiles = v.status === "PUBLISHED";
+          return (
+            <li key={v.id} className="version-row">
+              <div className="version-head">
+                <h3 className="text-sm font-semibold text-[var(--text)]">Version {v.number}</h3>
+                {v.current ? <Badge tone="primary">Servie</Badge> : null}
+                <Badge tone={status.tone}>{status.label}</Badge>
+              </div>
+              <div className="version-body min-w-0">
+                <p className={`break-words text-sm ${v.note ? "text-[var(--text)]" : "text-[var(--muted)]"}`}>{v.note ?? "Sans note"}</p>
+                {v.error ? <p className="mt-1 text-xs text-[var(--danger)]">{v.error}</p> : null}
+              </div>
+              <p className="version-meta text-xs text-[var(--muted)]">
+                <time dateTime={v.publishedAt ?? v.createdAt}>{formatDateTime(v.publishedAt ?? v.createdAt)}</time>
+                <span className="block">{versionSourceLabel(v)}</span>
+                <span className="block">
+                  {plural(v.fileCount, "fichier", "fichiers")}, {formatBytes(v.totalBytes)}
+                </span>
+              </p>
+              <div className="version-menu">
+                <MoreMenu
+                  variant="ghost"
+                  ariaLabel={`Actions pour la version ${v.number}`}
+                  label={null}
+                  items={[
+                    {
+                      label: "Republier cette version",
+                      onSelect: () => setPending({ kind: "publish", version: v }),
+                      disabled: v.current || !hasFiles || running,
+                    },
+                    {
+                      label: "Restaurer dans les fichiers de travail",
+                      onSelect: () => setPending({ kind: "restore", version: v }),
+                      disabled: !hasFiles || running,
+                    },
+                  ]}
+                />
+              </div>
+            </li>
+          );
+        })}
+      </ol>
       <p className="mt-3 text-xs text-[var(--muted)]">
         Une version archivée sans fichiers ne peut plus être republiée. Une opération en cours bloque la republication.
       </p>

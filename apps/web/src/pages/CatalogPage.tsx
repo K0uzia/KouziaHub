@@ -9,7 +9,6 @@ import { isSettling, matchesState, type StateFilter } from "@/lib/sites";
 import { Card, EmptyState, PageHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { StatStrip, type StatItem } from "@/components/ui/StatStrip";
-import { FilterChips } from "@/components/ui/FilterChips";
 import { Segmented } from "@/components/ui/Segmented";
 import { Banner } from "@/components/ui/Banner";
 import { inputClass } from "@/components/ui/Field";
@@ -79,17 +78,25 @@ export function CatalogPage() {
 
   const count = (f: (s: SiteSummary) => boolean, list: SiteSummary[]) => list.filter(f).length;
   const kindOptions = [
-    { id: "all" as const, label: "Tous", count: sites.length },
-    { id: "client" as const, label: "Clients", count: count((s) => s.kind === "CLIENT", sites) },
-    { id: "perso" as const, label: "Perso", count: count((s) => s.kind === "PERSO", sites) },
+    { id: "all" as const, label: "Tous" },
+    { id: "client" as const, label: "Clients" },
+    { id: "perso" as const, label: "Perso" },
   ];
   const stateOptions = [
-    { id: "all" as const, label: "Tous les états" },
+    { id: "all" as const, label: "Tous les états", count: byQuery.length },
     { id: "online" as const, label: "En ligne", count: count((s) => matchesState(s, "online"), byQuery) },
     { id: "offline" as const, label: "Hors ligne", count: count((s) => matchesState(s, "offline"), byQuery) },
     { id: "creating" as const, label: "En création", count: count((s) => matchesState(s, "creating"), byQuery) },
     { id: "error" as const, label: "Erreur", count: count((s) => matchesState(s, "error"), byQuery) },
   ];
+
+  function errorParams() {
+    const next = new URLSearchParams(params);
+    next.set("etat", "error");
+    next.delete("type");
+    next.delete("q");
+    return next.toString();
+  }
 
   const notices = catalog.data?.notices ?? [];
   const demoNotices = notices.filter((n) => n.code in DEMO_SHORT);
@@ -142,6 +149,21 @@ export function CatalogPage() {
         <div className="space-y-4 sm:space-y-6">
           {statItems.length ? <StatStrip items={statItems} dense /> : null}
 
+          {stats?.errors ? (
+            // Sites en erreur remontés en tête, avec un lien qui filtre la liste (au lieu d'un filtre à deviner).
+            <Banner
+              level="error"
+              action={
+                stateFilter === "error" ? undefined : (
+                  <Link to={`?${errorParams()}`} replace className="link inline-flex min-h-11 items-center text-sm font-medium">
+                    Afficher {stats.errors > 1 ? "ces sites" : "ce site"}
+                  </Link>
+                )
+              }
+            >
+              {stats.errors > 1 ? `${stats.errors} sites en erreur` : "1 site en erreur"} : une opération a échoué, elle peut être reprise depuis la fiche.
+            </Banner>
+          ) : null}
           {demoNotices.length ? (
             // Mode démonstration (Cloudflare simulé, clients d'essai) : un seul bandeau bas, court au téléphone.
             <Banner level="info" className="max-sm:py-2">
@@ -203,38 +225,58 @@ export function CatalogPage() {
               ) : null}
 
               <section aria-labelledby={`${searchId}-all`} className="min-w-0 space-y-4">
-                <h2 id={`${searchId}-all`} className="text-lg font-semibold">
-                  Tous les sites
-                </h2>
-                <div className="flex flex-col gap-3">
-                  <div className="flex flex-wrap items-end justify-between gap-3">
-                    <div className="min-w-0 flex-[1_1_9rem] space-y-1.5 sm:max-w-md">
-                      <label htmlFor={searchId} className="block text-sm font-medium text-[var(--text)]">
-                        Rechercher
-                      </label>
-                      <div className="relative">
-                        <FontAwesomeIcon
-                          icon={faMagnifyingGlass}
-                          className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--muted)]"
-                          aria-hidden
-                        />
-                        <input
-                          id={searchId}
-                          type="search"
-                          value={query}
-                          autoComplete="off"
-                          placeholder="Nom, client ou sous-domaine"
-                          onChange={(e) => setParam("q", e.target.value, "")}
-                          className={`${inputClass} pl-9`}
-                        />
-                      </div>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <h2 id={`${searchId}-all`} className="text-lg font-semibold">
+                    Tous les sites
+                  </h2>
+                  <Segmented options={[{ id: "cards", label: "Cartes" }, { id: "list", label: "Liste" }]} value={view} onChange={setView} label="Affichage" />
+                </div>
+                {/* Deux axes séparés : Type (contrôle segmenté, 3 choix) et État (liste native avec le nombre de
+                    sites par état) ; recherche à part. Tout est dans l'URL (?type=, ?etat=, ?q=). */}
+                <div className="catalog-tools">
+                  <div className="min-w-0 space-y-1.5 [grid-area:search]">
+                    <label htmlFor={searchId} className="block text-sm font-medium text-[var(--text)]">
+                      Rechercher
+                    </label>
+                    <div className="relative">
+                      <FontAwesomeIcon
+                        icon={faMagnifyingGlass}
+                        className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--muted)]"
+                        aria-hidden
+                      />
+                      <input
+                        id={searchId}
+                        type="search"
+                        value={query}
+                        autoComplete="off"
+                        placeholder="Nom, client ou sous-domaine"
+                        onChange={(e) => setParam("q", e.target.value, "")}
+                        className={`${inputClass} pl-9`}
+                      />
                     </div>
-                    <Segmented options={[{ id: "cards", label: "Cartes" }, { id: "list", label: "Liste" }]} value={view} onChange={setView} label="Affichage" />
                   </div>
-                  {/* Téléphone : les deux groupes de filtres sur une seule rangée qui défile ; dès 640 px, une rangée chacun. */}
-                  <div className="no-scrollbar -mx-[var(--gutter)] flex gap-3 overflow-x-auto px-[var(--gutter)] sm:mx-0 sm:flex-col sm:overflow-visible sm:px-0 [&>*]:shrink-0">
-                    <FilterChips wrap options={kindOptions} value={kind} onChange={(v) => setParam("type", v, "all")} label="Type de site" />
-                    <FilterChips wrap options={stateOptions} value={stateFilter} onChange={(v) => setParam("etat", v, "all")} label="État" />
+                  <div className="min-w-0 space-y-1.5 [grid-area:type]">
+                    <span className="block text-sm font-medium text-[var(--text)] max-sm:sr-only">
+                      Type
+                    </span>
+                    <Segmented options={kindOptions} value={kind} onChange={(v) => setParam("type", v, "all")} label="Type de site" className="w-full" fieldHeight />
+                  </div>
+                  <div className="min-w-0 space-y-1.5 [grid-area:state]">
+                    <label htmlFor={`${searchId}-state`} className="block text-sm font-medium text-[var(--text)]">
+                      État
+                    </label>
+                    <select
+                      id={`${searchId}-state`}
+                      value={stateFilter}
+                      onChange={(e) => setParam("etat", e.target.value, "all")}
+                      className={`${inputClass} cursor-pointer`}
+                    >
+                      {stateOptions.map((o) => (
+                        <option key={o.id} value={o.id}>
+                          {o.label} ({o.count})
+                        </option>
+                      ))}
+                    </select>
                   </div>
                 </div>
 

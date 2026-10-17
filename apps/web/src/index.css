@@ -81,6 +81,8 @@
   /* Catalogue : largeur de page, largeur minimale d'une carte (1 colonne à 360 px, 2 sur tablette),
      carte de la rangée « Modifiés récemment », format des vignettes (capture 1280 × 800). */
   --page-max: 90rem;
+  /* Pages de réglages et de formulaires : colonne de lecture plus étroite, centrée comme les autres. */
+  --page-narrow: 56rem;
   --card-min: 17rem;
   --recent-w: min(82%, 19rem);
   --thumb-ratio: 16 / 10;
@@ -446,6 +448,36 @@ option:hover {
 @layer components {
 /* ---- Composants du hub (N1) ---- */
 
+/* Gabarit : colonne centrée commune à la barre du haut et aux pages (une seule source du centrage). */
+.page-frame {
+  width: 100%;
+  min-width: 0;
+  max-width: calc(var(--page-max) + 2 * var(--gutter));
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+}
+
+/* Page étroite (réglages) : en-tête et contenu dans la même colonne centrée. */
+.page-narrow {
+  width: 100%;
+  max-width: var(--page-narrow);
+  margin-inline: auto;
+}
+
+/* Région qui défile : la barre de défilement réserve sa place des deux côtés, et la barre du haut
+   réserve la même (overflow caché) : contenu et en-tête restent centrés et alignés au pixel, avec ou
+   sans barre visible (sinon le contenu glissait à gauche de la moitié de la barre). */
+@media (min-width: 40rem) {
+  .main-scroll,
+  .topbar {
+    scrollbar-gutter: stable both-edges;
+  }
+
+  .topbar {
+    overflow-y: hidden;
+  }
+}
+
 /* Vignette 16:10 : réserve sa place avant le chargement (pas de décalage), repli sobre sans image. */
 .thumb {
   position: relative;
@@ -584,6 +616,90 @@ option:hover {
   width: 1.125rem;
   height: 1.125rem;
   accent-color: var(--primary);
+}
+
+/* Menu « … » : panneau flottant dans un portail (position fixe posée par MoreMenu), au-dessus de tout. */
+.menu-panel {
+  position: fixed;
+  min-width: 14rem;
+  max-width: calc(100vw - 1rem);
+  margin: 0;
+  padding: 0.25rem 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+  list-style: none;
+  overflow-y: auto;
+  z-index: 60;
+}
+
+/* Ligne de l'historique des versions : en-tête et menu, puis note pleine largeur, puis détails ;
+   dès 768 px, quatre colonnes (version, note, détails, menu). */
+.version-row {
+  display: grid;
+  padding: 0.75rem 0.5rem 0.875rem 1rem;
+  gap: 0.375rem 0.75rem;
+  grid-template-areas:
+    "head menu"
+    "body body"
+    "meta meta";
+  grid-template-columns: minmax(0, 1fr) var(--tap);
+  align-items: start;
+}
+
+.version-head {
+  display: flex;
+  min-height: var(--tap);
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  grid-area: head;
+}
+
+.version-body {
+  grid-area: body;
+  padding-right: 0.5rem;
+}
+
+.version-meta {
+  grid-area: meta;
+  padding-right: 0.5rem;
+}
+
+.version-menu {
+  grid-area: menu;
+}
+
+@media (min-width: 48rem) {
+  .version-row {
+    grid-template-areas: "head body meta menu";
+    grid-template-columns: 11rem minmax(0, 1fr) 13rem var(--tap);
+    align-items: center;
+  }
+
+  .version-meta {
+    text-align: right;
+  }
+}
+
+/* Outils du catalogue : recherche et État, puis Type et Affichage au téléphone ; une rangée dès 768 px. */
+.catalog-tools {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-areas:
+    "search state"
+    "type type";
+  grid-template-columns: minmax(0, 1fr) minmax(7.5rem, 10rem);
+  align-items: end;
+}
+
+@media (min-width: 48rem) {
+  .catalog-tools {
+    grid-template-areas: "search type state";
+    grid-template-columns: minmax(12rem, 26rem) auto minmax(11rem, 14rem);
+    justify-content: start;
+  }
 }
 
 /* Zone de dépôt fondue dans sa carte : invisible au repos, signalée pendant le survol (règle ci-dessus, plus spécifique). */
