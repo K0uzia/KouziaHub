@@ -5,6 +5,7 @@ import { findWaitingCertificateOp, parseSteps } from "@/lib/operations.js";
 import { hostnameOf } from "@/lib/publish.js";
 import type { Services } from "@/lib/services.js";
 import { HttpError } from "@/lib/http.js";
+import { serverConfigState } from "@/lib/server-config-store.js";
 
 export function toOperation(op: OperationRow): Operation {
   return {
@@ -91,6 +92,10 @@ export async function siteDetail(siteId: string, services: Services): Promise<Si
     thumbnailSource: site.thumbnailSource === "capture" || site.thumbnailSource === "upload" ? site.thumbnailSource : null,
     fileCount: files._count._all,
     totalBytes: files._sum.size ?? 0,
+    finalDomain: site.finalDomain,
+    canonicalHost: site.canonicalHost === "apex" ? "apex" : "www",
+    notFoundPage: site.notFoundPage,
+    serverConfig: await serverConfigState(site),
   };
 }
 
