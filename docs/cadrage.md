@@ -384,6 +384,146 @@ Chaque lot est livré vérifié (tests, build, contrôle mobile, accessibilité,
 
 ---
 
+## 10. Surveillance des sites (offre maintenance, cadrage du 18/10/2026, en attente d'accord)
+
+Décisions d'Alexandre du 18/10/2026 (troisième série, transmises par le superviseur) : contrôles depuis deux points (le hub et un Worker Cloudflare planifié), alertes uniquement par notification Web Push sur le téléphone, rapport mensuel en PDF envoyé par Alexandre depuis l'ERP, détection des domaines Cloudflare par un jeton séparé en lecture seule, domaines Hostinger ajoutés à la main, interrupteur « Surveillé » par site. Aucun code n'est écrit avant l'accord du superviseur sur cette section.
+
+### 10.1 Architecture
+
+```
+            hub (CT Proxmox)                              Worker « kouzia-veille » (Cloudflare, gratuit)
+  contrôles HTTP toutes les 5 min ──── rapport signé ───►  POST /report  (résultats + battement de cœur)
+  contrôles quotidiens et hebdo   ◄─── état signé ──────   GET  /state   (observations du Worker)
+  historique 13 mois (SQLite)     ──── config signée ───►  POST /sync    (cibles, abonnements push)
+  notifications non urgentes                              tâche planifiée chaque minute : 1/5 des cibles
+                                                          D1 : dernier état, incidents ouverts, abonnements
+                                                          notifications urgentes (panne, retour, hub muet)
+```
+
+- **Le hub n'ouvre aucune porte entrante** : il appelle le Worker en sortie (comme il appelle déjà l'API Cloudflare). Le Worker ne peut pas joindre le hub, protégé par Access ; c'est donc l'absence de battement de cœur qui signale « hub ou box hors ligne ».
+- **Points d'entrée du Worker** : `POST /sync`, `POST /report`, `GET /state`, sur son adresse `*.workers.dev`. Chaque requête porte une signature HMAC-SHA256 horodatée (même schéma que le lien ERP, section 3.4), secret partagé `MONITOR_SHARED_SECRET` ; tout le reste répond 404.
+- **Qui décide d'une panne** : la règle de comparaison est un module pur, partagé par les deux côtés. Elle est appliquée par le **Worker** pour les alertes urgentes, parce qu'il est le seul point toujours joignable quand la box tombe. Le hub applique la même règle pour l'affichage et l'historique. Écart assumé à « le hub compare » : sinon, une box coupée empêcherait toute alerte. Un seul émetteur par type d'alerte, pour éviter les doublons.
+
+| Hub | Worker | Décision |
+|---|---|---|
+| 2 échecs consécutifs | 2 échecs consécutifs | **Panne** : notification, incident ouvert |
+| échec | succès | Problème local (box, DNS du FAI) : visible dans le hub, pas de notification |
+| succès | échec | Vu par Cloudflare seulement : visible dans le hub, pas de notification |
+| muet depuis 15 min | (seul) | Notification « hub ou box hors ligne » ; le Worker décide seul sur 2 échecs, en le précisant |
+| (seul) | muet depuis 15 min | Notification non urgente du hub « surveillance Cloudflare interrompue » ; le hub décide seul |
+
+- **Anti-rafale** : une notification à l'ouverture d'un incident, une au retour (avec la durée), un rappel à 24 h si l'incident dure. Plus de 3 cibles en panne dans le même cycle : une seule notification groupée. Les alertes d'échéance (certificat, domaine) ne partent qu'aux seuils de 30, 14 et 7 jours, une fois chacun.
+
+### 10.2 Stockage partagé : D1 plutôt que KV
+
+| Critère (offre gratuite) | KV | D1 |
+|---|---|---|
+| Écritures | 1 000 par jour [CF-KV-LIMITS] | 100 000 lignes par jour [CF-D1-PRICING] |
+| Lectures | 100 000 par jour | 5 millions de lignes par jour |
+| Requêtes par invocation | | 50 [CF-D1-LIMITS] |
+| Modèle | clé-valeur, cohérence à terme | SQL, transactions, index |
+
+Une cible contrôlée toutes les 5 minutes, c'est 288 cycles par jour : avec KV, 4 cibles suffiraient à épuiser les 1 000 écritures. **D1 est retenu.** Il ne reçoit que les changements d'état et une ligne par cycle (environ 1 700 écritures par jour pour 100 cibles), donc loin des plafonds. L'historique long (13 mois) reste dans le SQLite du hub, jamais dans D1.
+
+### 10.3 Limites du Worker gratuit et découpage
+
+D'après [CF-WK-LIMITS] : 100 000 requêtes par jour, 10 ms de CPU par invocation (l'attente réseau ne compte pas), 50 sous-requêtes par invocation, 6 connexions sortantes simultanées, 5 tâches planifiées par compte.
+
+- **Tâche planifiée chaque minute** (`* * * * *`, réglée par `PUT .../workers/scripts/{nom}/schedules` [CF-WK-SCHEDULES]) : à chaque passage, elle contrôle le cinquième des cibles qui correspond à la minute. Chaque cible est ainsi vue toutes les 5 minutes, avec 40 sous-requêtes au plus par passage, soit jusqu'à 200 cibles.
+- **Notifications** : chiffrement Web Push (ECDH P-256, HKDF, AES-GCM) et signature VAPID (ECDSA P-256) faits par WebCrypto, disponible dans les Workers [CF-WEBCRYPTO]. C'est la même bibliothèque que l'ERP (`@block65/webcrypto-web-push`, faite pour WebCrypto), regroupée dans le script.
+- **À valider en réel** :
+  - le coût CPU d'un envoi Web Push au regard des 10 ms ;
+  - une requête du Worker vers un site servi par une zone du même compte ;
+  - le délai réel des tâches planifiées (pas de garantie d'horaire dans la doc).
+
+### 10.4 Contrôles (proposition à valider)
+
+| Contrôle | Fréquence | Par | Méthode | Alerte |
+|---|---|---|---|---|
+| Disponibilité HTTP | 5 min | hub et Worker | GET sur l'URL, redirections suivies (5 au plus), délai 10 s ; statut 2xx ou 3xx final, temps de réponse, mot-clé facultatif dans le HTML | panne sur 2 échecs consécutifs des deux points (10.1) |
+| Certificat | 1 par jour | hub | poignée de main TLS (`node:tls`) : échéance, émetteur, nom couvert | 30, 14 et 7 jours ; certificat invalide : immédiat |
+| Échéance du domaine | 1 par jour | hub | RDAP public sans jeton, serveur trouvé par l'amorce IANA [IANA-RDAP] (ex. `.fr` : rdap.nic.fr ; `.com` : rdap.verisign.com) ; événement `expiration` | 30, 14 et 7 jours ; échéance absente : « inconnue », sans alerte |
+| DNS | 1 par jour | hub | A, AAAA, CNAME, NS, MX comparés à une référence validée par Alexandre (« accepter comme référence ») | écart : notification non urgente |
+| Contenu de l'accueil | 1 par jour | hub | empreinte du HTML normalisé (sans nonces, jetons ni dates) ; recalée à chaque publication par le hub | changement inattendu : notification non urgente |
+| Vitesse | 1 par semaine | hub | Chromium du CT en profil mobile : TTFB, LCP, CLS, poids et nombre de requêtes de l'accueil ; aucun service tiers | aucune (affichée et reprise dans le rapport) |
+
+- Historique : contrôles bruts gardés 7 jours, agrégats par heure (disponibilité, temps moyen et p95) et contrôles quotidiens et hebdomadaires gardés 13 mois.
+- Sans Chromium sur le CT, la vitesse est indisponible et le rapport le dit.
+
+### 10.5 Cibles surveillées
+
+- **Site du hub** : sa version de travail `<slug>.kouzia.com` et, une fois connu, son domaine final (profil serveur, section 5). Interrupteur « Surveillé » par cible.
+- **Domaines Cloudflare** : jeton **séparé**, en lecture seule (Zone > Zone > Read, sur toutes les zones, rien d'autre), posé par `hubctl secrets veille`. Il sert uniquement à lister les zones pour proposer des cibles ; rien n'est ajouté sans accord.
+- **Domaines Hostinger** : ajoutés à la main (URL, libellé, client ERP facultatif). Pas de jeton Hostinger.
+- **Contrat de maintenance (plus tard)** : l'annuaire ERP du hub prévoit un champ facultatif `maintenance` (contrat actif, dates), ignoré tant que la route ERP ne le fournit pas. Ce champ ajouté à la route ERP sera soumis à Alexandre ; rien n'est écrit dans KouziaCRM.
+
+### 10.6 Notifications Web Push
+
+Implémentation reprise de l'ERP (lecture seule : `lib/push/*`, `routes/push.ts`, `web/src/lib/push.ts`, `scripts/push-keys.ts`, migration `20261017090000_web_push`) :
+
+- clés VAPID générées par `hubctl push-keys` ; la clé privée va dans le `.env` du hub et en secret du Worker ;
+- abonnement par appareil dans Réglages ; un petit service worker limité aux notifications, sans mode hors ligne ;
+- les abonnements sont recopiés vers D1 par `/sync`, pour que le Worker puisse envoyer seul ;
+- notification de test depuis Réglages ;
+- un abonnement expiré (410) est retiré.
+
+Android et Chrome reçoivent les notifications sans installer l'application ; sur iPhone, il faudrait l'ajouter à l'écran d'accueil.
+
+### 10.7 Rapport mensuel (PDF)
+
+- Par cible et par mois, généré le 1er du mois et à la demande :
+  - disponibilité en % (les deux points de vue, panne au sens de 10.1) ;
+  - incidents avec début, fin et durée ;
+  - certificat (émetteur, échéance) ;
+  - échéance du domaine ;
+  - vitesse (dernière mesure et tendance) ;
+  - contrôles DNS et contenu sans écart, ou les écarts.
+- Fabriqué par `@react-pdf/renderer`, comme les PDF de l'ERP (pas de dépendance à Chromium, police Exo 2 locale). Dépendance nouvelle, justifiée par la cohérence avec l'ERP.
+- Téléchargé depuis le hub ; Alexandre l'envoie lui-même depuis l'ERP. Le hub n'envoie rien et ne publie aucune page.
+
+### 10.8 Modèle de données (migration à valider, rien n'est écrit)
+
+Nouvelle migration additive, sans toucher aux tables existantes :
+
+- `PushSubscription` : comme dans l'ERP (endpoint unique, p256dh, auth, libellé, derniers succès et échec), liée à `User`.
+- `MonitorTarget` : siteId facultatif, libellé, url, hostname, source (site, cloudflare, manuel), erpClientId facultatif, enabled, mot-clé facultatif, référence DNS (JSON), empreinte de contenu et date, createdAt.
+- `MonitorCheck` : targetId, kind (http, tls, domain, dns, content, speed), observer (hub, edge), at, ok, statut, durée en ms, detail (JSON sans secret). HTTP brut gardé 7 jours, le reste 13 mois.
+- `MonitorHourly` : targetId, heure, contrôles, échecs, temps moyen et p95, par observateur (13 mois).
+- `MonitorIncident` : targetId, startedAt, endedAt, cause, observateurs, notifiedAt, recoveredNotifiedAt, reminderAt.
+- `MonitorAlert` : targetId, kind (seuil d'échéance, écart DNS, contenu), clé de déduplication, sentAt.
+- `MonitorReport` : targetId, mois, chemin du PDF, createdAt.
+
+Côté Worker, un schéma D1 de 4 tables, versionné dans le dépôt et appliqué au déploiement : `targets`, `state`, `incidents`, `subscriptions`.
+
+### 10.9 Sécurité
+
+- **Jeton de déploiement du Worker** : Account > Workers Scripts > Edit et Account > D1 > Edit [CF-PERMS]. Il est saisi au moment de `hubctl veille deploy` et n'est **jamais enregistré**.
+- **Le jeton API du hub reste inchangé** (Pages et DNS). Le jeton de lecture des zones est le troisième, séparé.
+- **Secrets du Worker**, posés par l'API au déploiement : clé privée VAPID et `MONITOR_SHARED_SECRET`. Ils ne sont jamais renvoyés au navigateur ni journalisés.
+- **Requêtes signées** : signature horodatée (5 min), comparaison en temps constant, 404 identique pour tout refus. Seuls `/sync`, `/report` et `/state` existent, avec une limite de taille de corps.
+- **Données envoyées à D1** : URL des cibles, états et abonnements push (adresse de service du navigateur et clés publiques). Aucune donnée de client de l'ERP.
+- **Contrôles sortants du hub** : délais courts, taille de réponse plafonnée (2 Mio), aucune exécution de script, sauf la mesure de vitesse hebdomadaire par Chromium, déjà isolée comme la capture des vignettes.
+- **Mentions légales** : la surveillance ne porte que sur des pages publiques. Les rapports ne contiennent aucune donnée personnelle ; ajouter la mention « surveillance technique par Cloudflare (sous-traitant) » au contrat de maintenance (section 7).
+
+### 10.10 Ce qu'Alexandre fera lui-même
+
+1. `hubctl push-keys`, puis, dans le hub, Réglages > Notifications > « Activer sur ce téléphone » et la notification de test.
+2. Créer le jeton de déploiement (Workers Scripts Edit et D1 Edit), lancer `hubctl veille deploy` et le coller (il n'est pas gardé).
+3. Facultatif : créer le jeton de lecture des zones (Zone Read, toutes les zones) et le poser avec `hubctl secrets veille`.
+4. Ajouter à la main les domaines Hostinger à surveiller.
+5. Chaque mois : télécharger le rapport PDF et l'envoyer au client depuis l'ERP.
+
+### 10.11 Points à valider par le superviseur
+
+1. Les contrôles et fréquences du tableau 10.4.
+2. La décision des pannes urgentes par le Worker, le hub n'ayant que la vue (10.1).
+3. D1 plutôt que KV (10.2).
+4. La migration 10.8.
+5. `@react-pdf/renderer` pour le rapport (10.7).
+6. Le jeton de déploiement non enregistré, avec les nouvelles commandes `hubctl veille deploy`, `hubctl secrets veille` et `hubctl push-keys`.
+
+---
+
 ## Sources (consultées le 17/10/2026)
 
 Cloudflare (documentation officielle) :
@@ -420,6 +560,13 @@ Cloudflare (documentation officielle) :
 - [CF-BR] Browser Rendering, Limits : https://developers.cloudflare.com/browser-rendering/platform/limits/
 - [CF-BLOG-PLANS] Blog Cloudflare, Zero Trust for everyone (offre gratuite jusqu'à 50 utilisateurs) : https://blog.cloudflare.com/teams-plans/
 - [CF-COMMUNITY-PRICING] Communauté Cloudflare, What happens when you go over the free plan : https://community.cloudflare.com/t/what-happens-when-you-go-over-the-free-plan/806187
+- [CF-WK-LIMITS] Workers, Limits (offre gratuite) : https://developers.cloudflare.com/workers/platform/limits/
+- [CF-D1-PRICING] D1, Pricing (usage inclus de l'offre gratuite) : https://developers.cloudflare.com/d1/platform/pricing/
+- [CF-D1-LIMITS] D1, Limits : https://developers.cloudflare.com/d1/platform/limits/
+- [CF-KV-LIMITS] Workers KV, Limits : https://developers.cloudflare.com/kv/platform/limits/
+- [CF-WK-SCHEDULES] API, Update Worker schedules : https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/schedules/methods/update/
+- [CF-WEBCRYPTO] Workers, Web Crypto : https://developers.cloudflare.com/workers/runtime-apis/web-crypto/
+- [IANA-RDAP] IANA, amorce RDAP des domaines (consultée le 18/10/2026) : https://data.iana.org/rdap/dns.json
 
 Autres :
 
