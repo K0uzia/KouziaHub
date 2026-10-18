@@ -20,14 +20,24 @@ export function isTwoFactorEnabled(user: Pick<User, "totpSecretEncrypted" | "tot
   return Boolean(user.totpSecretEncrypted && user.totpEnabledAt);
 }
 
-// --- Verrouillage (requêtes du tunnel seulement : la console du CT reste un recours) ---
+/**
+ * Connexion « stricte » : double authentification exigée et échecs comptés. Toute requête en production,
+ * quelle que soit sa provenance (un TRUST_PROXY mal réglé ne doit pas laisser passer le tunnel sans 2FA) ;
+ * en dev, seulement les requêtes reconnues comme venant du tunnel. La console du CT (hubctl, sans HTTP)
+ * reste le recours en cas de verrouillage.
+ */
+export function strictLogin(request: FastifyRequest): boolean {
+  return request.viaTunnel || process.env.NODE_ENV === "production";
+}
+
+// --- Verrouillage (connexions strictes : la console du CT reste un recours) ---
 
 export function isLocked(user: Pick<User, "lockedUntil">, request: FastifyRequest): boolean {
-  return request.viaTunnel && !!user.lockedUntil && user.lockedUntil.getTime() > Date.now();
+  return strictLogin(request) && !!user.lockedUntil && user.lockedUntil.getTime() > Date.now();
 }
 
 export async function registerFailure(userId: string, request: FastifyRequest): Promise<void> {
-  if (!request.viaTunnel) return;
+  if (!strictLogin(request)) return;
   const user = await prisma.user.update({ where: { id: userId }, data: { failedLogins: { increment: 1 } } });
   if (user.failedLogins >= LOCK_AFTER_FAILURES) {
     await prisma.user.update({

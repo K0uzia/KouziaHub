@@ -50,6 +50,26 @@ describe("connexion", () => {
     expect(res.json().error).toMatch(/hubctl admin/);
   });
 
+  it("en production, exige la 2FA quelle que soit la provenance (TRUST_PROXY mal réglé) et compte les échecs", async () => {
+    const previous = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    try {
+      // Requête locale, sans en-tête du tunnel : refusée quand même.
+      const res = await app.inject({ method: "POST", url: "/api/auth/login", headers: ORIGIN, payload: { email: TEST_EMAIL, password: TEST_PASSWORD } });
+      expect(res.statusCode).toBe(403);
+      expect(res.json().error).toMatch(/double authentification.*hubctl admin/);
+      expect(res.cookies.find((c) => c.name === "kz_hub_session")).toBeUndefined();
+      // Mauvais mot de passe : échec compté même hors tunnel.
+      await app.inject({ method: "POST", url: "/api/auth/login", headers: ORIGIN, payload: { email: TEST_EMAIL, password: "faux-mot-de-passe" } });
+      const user = await prisma.user.findUniqueOrThrow({ where: { email: TEST_EMAIL } });
+      expect(user.failedLogins).toBe(1);
+    } finally {
+      process.env.NODE_ENV = previous;
+    }
+    // En dev, rien ne change : la connexion locale sans 2FA reste possible.
+    expect((await app.inject({ method: "POST", url: "/api/auth/login", headers: ORIGIN, payload: { email: TEST_EMAIL, password: TEST_PASSWORD } })).statusCode).toBe(200);
+  });
+
   it("demande le code TOTP quand la 2FA est active et refuse un code rejoué", async () => {
     const cookie = await loginCookie(app);
     const setup = await app.inject({ method: "POST", url: "/api/auth/2fa/setup", headers: authed(cookie) });

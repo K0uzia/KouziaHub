@@ -28,6 +28,7 @@ import {
   registerFailure,
   remainingRecoveryCodes,
   startEnrollment,
+  strictLogin,
 } from "@/lib/admin/two-factor.js";
 import { audit } from "@/lib/audit.js";
 
@@ -52,9 +53,9 @@ const floor = async (startedAt: number) => {
 };
 const BAD_CODE = { error: "Code incorrect." };
 const CHALLENGE_EXPIRED = { error: "Connexion expirée : saisissez à nouveau votre mot de passe." };
-const TUNNEL_NEEDS_2FA = {
+const NEEDS_2FA = {
   error:
-    "Connexion par Internet impossible tant que la double authentification n'est pas activée. " +
+    "Connexion impossible tant que la double authentification n'est pas activée. " +
     "Sur le serveur du hub, lancez « hubctl admin » pour l'activer.",
 };
 
@@ -102,7 +103,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       await openLoginChallenge(user.id, request, reply);
       return { mfaRequired: true };
     }
-    if (request.viaTunnel) return reply.code(403).send(TUNNEL_NEEDS_2FA);
+    if (strictLogin(request)) return reply.code(403).send(NEEDS_2FA);
     return openSession(user, request, reply);
   });
 
