@@ -180,3 +180,31 @@ describe("vitesse", () => {
     expect(await measureSpeed("https://client.fr/", { chromiumPath: null })).toEqual({ available: false, reason: expect.stringMatching(/Chromium absent/) });
   });
 });
+
+const chromiumForSpeed = await (await import("@/lib/thumbnails.js")).resolveChromium();
+describe.skipIf(!chromiumForSpeed)("vitesse avec le Chromium local", () => {
+  it("mesure TTFB, LCP, CLS, octets et requêtes (serveur local, autorisé pour le test seulement)", { timeout: 90_000 }, async () => {
+    const { createServer } = await import("node:http");
+    const server = createServer((req, res) => {
+      if (req.url === "/s.css") return res.writeHead(200, { "Content-Type": "text/css" }).end("h1{font-size:40px}");
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" }).end('<!doctype html><link rel="stylesheet" href="/s.css"><h1>Accueil mesuré</h1><p>Texte</p>');
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+    const port = (server.address() as { port: number }).port;
+    try {
+      const blocked = await measureSpeed(`http://127.0.0.1:${port}/`, { chromiumPath: chromiumForSpeed });
+      expect(blocked).toMatchObject({ available: true, ok: false });
+      const r = await measureSpeed(`http://127.0.0.1:${port}/`, { chromiumPath: chromiumForSpeed, allowPrivate: true });
+      expect(r).toMatchObject({ available: true, ok: true, error: null });
+      if (!r.available) throw new Error("indisponible");
+      expect(r.requests).toBeGreaterThanOrEqual(2);
+      expect(r.bytes).toBeGreaterThan(0);
+      expect(r.ttfbMs).not.toBeNull();
+      expect(r.lcpMs).not.toBeNull();
+      expect(r.cls).toBe(0);
+    } finally {
+      server.closeAllConnections();
+      server.close();
+    }
+  });
+});
