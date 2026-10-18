@@ -12,4 +12,7 @@ process.env.CF_ACCESS_DISABLED = "true";
 // Aucun appel réseau en test : adaptateurs factices, données dans un dossier temporaire.
 delete process.env.CLOUDFLARE_API_TOKEN;
 delete process.env.ERP_BASE_URL;
+for (const key of ["MONITOR_WORKER_URL", "MONITOR_SHARED_SECRET", "CLOUDFLARE_ZONES_READ_TOKEN", "VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_SUBJECT"]) {
+  delete process.env[key];
+}
 process.env.HUB_DATA_DIR = mkdtempSync(join(tmpdir(), "kouzia-hub-test-"));

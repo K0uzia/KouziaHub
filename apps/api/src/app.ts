@@ -6,6 +6,7 @@ import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import multipart from "@fastify/multipart";
+import { MAX_FILE_BYTES, MAX_FILES_PER_UPLOAD, MAX_PARTS_PER_UPLOAD } from "@/lib/limits.js";
 import { accessConfig, getCookieSecure, getTrustedProxies } from "@/lib/env.js";
 import { registerClientIpHook, trustProxyFn } from "@/lib/client-ip.js";
 import { AccessVerifier, registerAccessGuard } from "@/lib/access.js";
@@ -18,7 +19,10 @@ import { registerInputGuards } from "@/lib/http-input.js";
 import { createServices, type Services } from "@/lib/services.js";
 import { sitesRoutes } from "@/routes/sites.js";
 import { filesRoutes } from "@/routes/files.js";
+import { uploadsRoutes } from "@/routes/uploads.js";
 import { systemRoutes } from "@/routes/system.js";
+import { monitorRoutes } from "@/routes/monitor.js";
+import { pushRoutes } from "@/routes/push.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -93,7 +97,8 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   });
 
   // Plafonds par fichier : 25 Mio (limite Cloudflare Pages) ; le zip a son propre plafond, posé par sa route.
-  await app.register(multipart, { limits: { fileSize: 25 * 1024 * 1024, files: 200, fields: 50 } });
+  // Défauts globaux ; chaque route d'envoi précise les siens (parties, fichiers, taille).
+  await app.register(multipart, { limits: { fileSize: MAX_FILE_BYTES, files: MAX_FILES_PER_UPLOAD, parts: MAX_PARTS_PER_UPLOAD, fields: 50 } });
 
   await app.register(originGuardPlugin);
   registerInputGuards(app);
@@ -111,9 +116,24 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   app.addHook("onClose", async () => services.close());
   await app.register(sitesRoutes(services));
   await app.register(filesRoutes(services));
+  await app.register(uploadsRoutes(services));
   await app.register(systemRoutes(services));
+  await app.register(monitorRoutes(services));
+  await app.register(pushRoutes(services));
 
-  app.get("/api/health", async () => ({ ok: true, pendingMigrations: pendingMigrationCount() }));
+  // État minimal de la veille pour hubctl status : seulement hors tunnel (appel local du CT).
+  app.get("/api/health", async (request) => ({
+    ok: true,
+    pendingMigrations: pendingMigrationCount(),
+    ...(request.viaTunnel
+      ? {}
+      : {
+          veille: {
+            configured: services.monitor.veille.configured,
+            lastSeenAt: services.monitor.health.edgeSeenAt ? new Date(services.monitor.health.edgeSeenAt).toISOString() : null,
+          },
+        }),
+  }));
   app.get("/robots.txt", async (_request, reply) => reply.type("text/plain; charset=utf-8").send(ROBOTS_TXT));
 
   let spaServed = false;

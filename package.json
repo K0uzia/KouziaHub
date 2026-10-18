@@ -4,7 +4,8 @@
   "private": true,
   "description": "Hub Kouzia : versions de travail des sites clients sur <client>.kouzia.com (Cloudflare Pages)",
   "workspaces": [
-    "apps/*"
+    "apps/*",
+    "workers/*"
   ],
   "scripts": {
     "dev": "node scripts/dev.mjs",
@@ -12,13 +13,16 @@
     "prebuild": "npm run check:lockfile",
     "build": "npm run build -w @kouzia-hub/web",
     "start": "tsx --env-file=.env --tsconfig apps/api/tsconfig.json apps/api/src/index.ts",
-    "typecheck": "tsc -p apps/api/tsconfig.json && tsc -b apps/web",
+    "typecheck": "tsc -p apps/api/tsconfig.json && tsc -b apps/web && tsc -p workers/veille/tsconfig.json",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "admin:create": "tsx --env-file=.env --tsconfig apps/api/tsconfig.json scripts/admin-create.ts",
+    "push:keys": "tsx --tsconfig apps/api/tsconfig.json scripts/push-keys.ts",
     "admin:2fa-reset": "tsx --env-file=.env --tsconfig apps/api/tsconfig.json scripts/admin-2fa-reset.ts",
-    "test": "npm run test -w @kouzia-hub/api"
+    "test": "npm run test -w @kouzia-hub/api && npm run test -w @kouzia-hub/veille",
+    "veille:build": "tsx --tsconfig workers/veille/tsconfig.json workers/veille/tools/build.ts",
+    "veille:deploy": "tsx --tsconfig workers/veille/tsconfig.json scripts/veille-deploy.ts"
   },
   "license": "UNLICENSED",
   "engines": {
@@ -32,6 +36,7 @@
   "devDependencies": {
     "@axe-core/playwright": "^4.14.0",
     "@types/node": "^26.6.5",
+    "esbuild": "^0.28.2",
     "playwright": "^1.64.1",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",

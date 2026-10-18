@@ -88,6 +88,21 @@ else
 fi
 echo "  Lien avec l'ERP        : $(yes_no ERP_BASE_URL)"
 
+title "Surveillance"
+if env_has VAPID_PUBLIC_KEY && env_has VAPID_PRIVATE_KEY; then
+  echo "  Clés des notifications : renseignées"
+else
+  echo "  Clés des notifications : absentes (hubctl push-keys)"
+fi
+if env_has MONITOR_WORKER_URL && env_has MONITOR_SHARED_SECRET; then
+  echo "  Veille Cloudflare      : configurée ($(env_get MONITOR_WORKER_URL))"
+elif env_has MONITOR_WORKER_URL; then
+  warn "Veille Cloudflare : adresse posée mais secret partagé absent (hubctl veille deploy)"
+else
+  echo "  Veille Cloudflare      : non configurée (hubctl veille deploy)"
+fi
+echo "  Lecture des zones      : jeton $(yes_no CLOUDFLARE_ZONES_READ_TOKEN) (hubctl secrets veille, facultatif)"
+
 title "Disque"
 df -hP "$KH_APP_DIR" "$KH_BACKUP_DIR" 2>/dev/null | awk 'NR==1 || !seen[$1]++' | sed 's/^/  /'
 if [ -f "$DB" ]; then

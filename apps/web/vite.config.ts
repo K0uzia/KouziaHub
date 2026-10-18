@@ -13,6 +13,8 @@ export default defineConfig({
     alias: {
       "@": path.resolve(__dirname, "./src"),
       "@hub/contract": path.resolve(__dirname, "../api/src/contract.ts"),
+      // Règles des chemins partagées avec le serveur (fichiers écartés avant l'envoi) : module sans code serveur.
+      "@hub/site-paths": path.resolve(__dirname, "../api/src/lib/site-paths.ts"),
     },
   },
   build: {

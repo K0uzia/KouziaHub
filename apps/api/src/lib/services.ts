@@ -10,6 +10,12 @@ import type { ErpDirectory } from "@/lib/erp/types.js";
 import { DomainWatcher, OperationEngine, type DomainWatcherOptions } from "@/lib/operations.js";
 import { OrphanService, ProjectCounter } from "@/lib/orphans.js";
 import { ThumbnailService } from "@/lib/thumbnails.js";
+import { zonesFromEnv, type ZonesDirectory } from "@/lib/cloudflare/zones.js";
+import { MonitorService, type MonitorDeps } from "@/lib/monitor/service.js";
+import { veilleFromEnv } from "@/lib/monitor/worker-client.js";
+import { PushService } from "@/lib/push/service.js";
+import { generateReport } from "@/lib/monitor/report.js";
+import { prisma } from "@/lib/prisma.js";
 
 export type Services = {
   cloudflare: CloudflareGateway;
@@ -22,6 +28,11 @@ export type Services = {
   thumbnails: ThumbnailService;
   projects: ProjectCounter;
   orphans: OrphanService;
+  /** Surveillance des sites (cadrage section 10) et notifications Web Push. */
+  monitor: MonitorService;
+  push: PushService;
+  /** Zones Cloudflare (jeton séparé en lecture seule) pour proposer des cibles. */
+  zones: ZonesDirectory;
   /** Minuteries des tâches de fond (startBackground). */
   timers: NodeJS.Timeout[];
   /** Arrête les minuteries et sondages, attend les opérations en cours (borné). */
@@ -36,6 +47,10 @@ export type ServicesOverrides = {
   domainWatcher?: DomainWatcherOptions;
   /** null : capture coupée ; undefined : HUB_CHROMIUM_PATH ou Chromium de playwright-core. */
   chromiumPath?: string | null;
+  /** Surveillance : Worker, fetch, TLS, DNS, RDAP, vitesse et horloge injectables (tests). */
+  monitor?: Partial<MonitorDeps>;
+  push?: PushService;
+  zones?: ZonesDirectory;
 };
 
 /** Cloudflare réel si un jeton est posé, sinon simulé (persisté dans HUB_DATA_DIR/fake-cloudflare.json). */
@@ -76,11 +91,27 @@ export function createServices(overrides: ServicesOverrides = {}): Services {
     projects: new ProjectCounter(cloudflare),
     orphans: new OrphanService(cloudflare, sitesDomain),
   } as Services;
+  services.push = overrides.push ?? new PushService();
+  services.zones = overrides.zones ?? zonesFromEnv();
+  services.monitor = new MonitorService({
+    push: services.push,
+    veille: overrides.monitor?.veille ?? veilleFromEnv(),
+    chromiumPath: overrides.chromiumPath,
+    ...overrides.monitor,
+  });
+  services.monitor.monthlyReports = async (month) => {
+    for (const target of await prisma.monitorTarget.findMany({ where: { enabled: true } })) {
+      await generateReport(dataDir, target, month, services.monitor.now()).catch((err) =>
+        console.error("[surveillance] rapport impossible", err instanceof Error ? err.message : err),
+      );
+    }
+  };
   services.engine = new OperationEngine(services);
   services.domains = new DomainWatcher(services, overrides.domainWatcher);
   services.timers = [];
   services.close = async () => {
     for (const t of services.timers) clearTimeout(t);
+    await services.monitor.stop();
     services.domains.close();
     await Promise.race([services.engine.idle(), new Promise((r) => setTimeout(r, 2000).unref())]);
   };
@@ -103,4 +134,5 @@ export async function startBackground(services: Services): Promise<void> {
   const gc = setInterval(() => void services.blobs.gc().catch(() => undefined), DAY_MS);
   for (const t of [first, daily, gc]) t.unref();
   services.timers.push(first, daily, gc);
+  services.monitor.start();
 }

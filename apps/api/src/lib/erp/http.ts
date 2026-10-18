@@ -18,6 +18,11 @@ const clientSchema = z.object({
   clientNumber: z.string().max(64).nullable(),
   displayName: z.string().min(1).max(300),
   type: z.enum(["B2B", "B2C", "ASSOCIATION"]),
+  // Facultatif : absent de la route de l'ERP pour l'instant. Mal formé : ignoré, le client reste valide.
+  maintenance: z
+    .object({ active: z.boolean(), startsAt: z.string().max(40).nullable(), endsAt: z.string().max(40).nullable() })
+    .optional()
+    .catch(undefined),
 });
 // Enveloppe validée en bloc (sinon « ERP indisponible ») ; chaque client l'est à part : un client
 // invalide est écarté seul, sans priver le hub des autres.
