@@ -10,6 +10,7 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "check:lockfile": "node scripts/check-lockfile.mjs",
+    "check:layout": "node scripts/check-layout.mjs",
     "prebuild": "npm run check:lockfile",
     "build": "npm run build -w @kouzia-hub/web",
     "start": "tsx --env-file=.env --tsconfig apps/api/tsconfig.json apps/api/src/index.ts",

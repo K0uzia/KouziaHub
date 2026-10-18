@@ -5,7 +5,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faArrowUpRightFromSquare, faFilePdf, faRotateRight } from "@fortawesome/free-solid-svg-icons";
 import type { MonitorTargetDetail, MonitorTargetEntry } from "@hub/contract";
 import { api, errorMessage } from "@/lib/api";
-import { formatAgo, formatDate, formatDateTime, formatDecimal } from "@/lib/format";
+import { formatAgo, formatBytes, formatDate, formatDateTime, formatDecimal } from "@/lib/format";
 import {
   basisLabel,
   EXPIRY_WARN_DAYS,
@@ -15,12 +15,15 @@ import {
   formatUptime,
   VERDICT,
 } from "@/lib/monitor";
+import type { GlossaryKey } from "@/lib/glossary";
 import { useResource } from "@/lib/useResource";
-import { Badge, Card } from "@/components/ui/Card";
+import { Badge } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Switch } from "@/components/ui/Switch";
 import { Banner } from "@/components/ui/Banner";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { Explain } from "@/components/ui/InfoTip";
+import { Tile } from "@/components/ui/Tile";
 import { UptimeBars } from "@/components/monitor/UptimeBars";
 
 const SOURCE: Record<MonitorTargetEntry["source"], string> = {
@@ -28,6 +31,15 @@ const SOURCE: Record<MonitorTargetEntry["source"], string> = {
   cloudflare: "Domaine Cloudflare",
   manual: "Ajouté à la main",
 };
+
+const VERDICT_TIP: Partial<Record<MonitorTargetEntry["verdict"], GlossaryKey>> = {
+  down: "down",
+  local_only: "localOnly",
+  edge_only: "edgeOnly",
+};
+
+/** Incidents montrés dans la tuile ; les autres sont comptés et repris dans le rapport mensuel. */
+const INCIDENTS_SHOWN = 5;
 
 type LastCheck = MonitorTargetEntry["lastHub"];
 
@@ -38,38 +50,66 @@ function checkText(c: LastCheck): string {
   return `Échec ${when}${c.reason ? ` : ${c.reason}` : c.status ? ` : réponse ${c.status}` : ""}.`;
 }
 
-function Fact({ label, children, tone }: { label: string; children: ReactNode; tone?: "warn" | "bad" }) {
+function basisTip(basis: Array<"hub" | "edge">): GlossaryKey | null {
+  const hub = basis.includes("hub");
+  const edge = basis.includes("edge");
+  return hub && edge ? "basisBoth" : hub ? "basisHub" : edge ? "basisEdge" : null;
+}
+
+/** Morceaux joints par des virgules, majuscule initiale et point final ; undefined si tout est vide. */
+function sentence(parts: Array<string | null | undefined>): string | undefined {
+  const text = parts.filter(Boolean).join(", ");
+  return text ? `${text.charAt(0).toUpperCase()}${text.slice(1)}.` : undefined;
+}
+
+const toneInk = { bad: "text-[var(--danger)]", warn: "text-[var(--warning)]" } as const;
+
+/** Valeur principale d'une tuile et sa ligne de détail. */
+function Value({ main, detail, tone }: { main: ReactNode; detail?: ReactNode; tone?: "warn" | "bad" }) {
   return (
     <div className="min-w-0">
-      <dt className="text-xs text-[var(--muted)]">{label}</dt>
-      <dd
-        className={`mt-0.5 break-words text-sm ${tone === "bad" ? "text-[var(--danger)]" : tone === "warn" ? "text-[var(--warning)]" : "text-[var(--text)]"}`}
-      >
-        {children}
-      </dd>
+      <p className={`tile-value break-words ${tone ? toneInk[tone] : ""}`}>{main}</p>
+      {detail ? <p className="mt-0.5 break-words text-xs text-[var(--muted)]">{detail}</p> : null}
+    </div>
+  );
+}
+
+/** Mesure de vitesse : sigle, explication et valeur. */
+function Metric({ label, tip, value }: { label: string; tip: GlossaryKey; value: string }) {
+  return (
+    <div className="min-w-0">
+      <dt className="flex items-center gap-0.5 text-xs text-[var(--muted)]">
+        {label}
+        <Explain k={tip} />
+      </dt>
+      <dd className="tile-value">{value}</dd>
     </div>
   );
 }
 
 /**
- * Une cible surveillée : interrupteur, verdict et point de vue, derniers contrôles, disponibilité, échéances,
- * DNS et contenu (avec « Accepter comme nouvelle référence »), vitesse, historique, incidents, rapports.
+ * Une cible surveillée en grille bento : grande tuile d'état (interrupteur, verdict, point de vue, derniers
+ * contrôles, « Contrôler maintenant »), puis disponibilité et barre des 30 jours, certificat, domaine, DNS et
+ * contenu (avec « Accepter comme référence »), vitesse, incidents et rapports mensuels.
  */
 export function TargetPanel({
   target,
   onChange,
   headingLevel = 2,
   showSiteLink = false,
+  hideOrigin = false,
 }: {
   target: MonitorTargetEntry;
   onChange: (t: MonitorTargetEntry) => void;
   headingLevel?: 2 | 3;
   /** Page Surveillance : lien vers la fiche du site lié. */
   showSiteLink?: boolean;
+  /** Fiche du site : origine et client sont déjà sur la page. */
+  hideOrigin?: boolean;
 }) {
   const ids = useId();
   const Heading = headingLevel === 2 ? "h2" : "h3";
-  const Sub = headingLevel === 2 ? "h3" : "h4";
+  const sub = headingLevel === 2 ? 3 : 4;
   const detail = useResource<MonitorTargetDetail>(`/api/monitor/targets/${target.id}?days=30`, null, { keepData: true });
   const reloadDetail = detail.reload;
   const [busy, setBusy] = useState<"switch" | "check" | "accept" | null>(null);
@@ -97,175 +137,241 @@ export function TargetPanel({
     }
   }
 
-  const certTone = t.certificate && (!t.certificate.ok ? "bad" : t.certificate.daysLeft <= EXPIRY_WARN_DAYS ? "warn" : undefined);
+  const certTone = t.certificate ? (!t.certificate.ok ? "bad" : t.certificate.daysLeft <= EXPIRY_WARN_DAYS ? "warn" : undefined) : undefined;
   const domainTone = t.domainExpiry?.daysLeft != null && t.domainExpiry.daysLeft <= EXPIRY_WARN_DAYS ? "warn" : undefined;
+  const dnsTone = t.dns?.status === "drift" || t.dns?.status === "error" ? "warn" : undefined;
+  const contentTone = t.content?.status === "changed" || t.content?.status === "error" ? "warn" : undefined;
+  const statusTone = !t.enabled ? undefined : t.verdict === "down" ? "bad" : t.verdict === "local_only" || t.verdict === "edge_only" ? "warn" : undefined;
   // Mois en cours : rapport fabriqué à la demande par le hub (le rapport complet est créé le 1er du mois suivant).
   const thisMonth = new Date().toISOString().slice(0, 7);
   const listed = detail.data?.reports ?? [];
   const reports = listed.some((r) => r.month === thisMonth) ? listed : [{ id: "current", month: thisMonth, createdAt: "" }, ...listed];
   const incidents = detail.data?.incidents ?? [];
+  const verdictTip = VERDICT_TIP[t.verdict];
+  const pointTip = basisTip(t.basis);
+
+  const acceptButton = (kind: "dns" | "content") => (
+    <Button variant="secondary" className="self-start" onClick={() => setAccept(kind)} disabled={busy !== null}>
+      Accepter comme référence
+    </Button>
+  );
+
+  // Historique (disponibilité, incidents, rapports) : lu à part, avec ses états.
+  const historyState = detail.error && !detail.data ? "error" : !detail.data ? "loading" : "ready";
+  const historyPending =
+    historyState === "loading" ? (
+      <p role="status" className="text-sm text-[var(--muted)]">
+        Lecture de l'historique…
+      </p>
+    ) : historyState === "error" ? (
+      <p className="text-sm text-[var(--muted)]">Historique indisponible.</p>
+    ) : null;
 
   return (
-    <Card className={`space-y-5 p-4 sm:p-5 ${t.enabled && t.verdict === "down" ? "border-[var(--danger)]" : ""}`}>
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <Heading className="break-words text-base font-semibold">{t.label}</Heading>
-          <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-sm text-[var(--muted)]">
-            <a href={t.url} target="_blank" rel="noopener noreferrer" className="link inline-flex min-h-6 items-center gap-1.5 break-all font-mono">
-              {t.hostname}
-              <FontAwesomeIcon icon={faArrowUpRightFromSquare} className="h-3 w-3 shrink-0" aria-hidden />
-              <span className="sr-only">(nouvel onglet)</span>
-            </a>
-            <span>{SOURCE[t.source]}</span>
-            {t.clientName ? <span>{t.clientName}</span> : null}
-            {showSiteLink && t.siteId ? (
-              <Link to={`/sites/${t.siteId}?tab=surveillance`} className="link">
-                Fiche du site
-              </Link>
-            ) : null}
-          </p>
-        </div>
-        <div className="w-full sm:w-56">
-          <Switch
-            checked={t.enabled}
-            onChange={(next) =>
-              void run(
-                "switch",
-                () => api<MonitorTargetEntry>(`/api/monitor/targets/${t.id}`, { method: "PATCH", json: { enabled: next } }),
-                next ? "Surveillance activée" : "Surveillance coupée",
-              )
-            }
-            label="Surveillé"
-            stateLabels={{ on: "Oui", off: "Non" }}
-            disabled={busy !== null}
-          />
-        </div>
-      </div>
-
-      {t.enabled ? (
-        <>
-          <div className="space-y-1">
-            <p className="flex flex-wrap items-center gap-2">
-              <Badge tone={look.tone}>
-                <FontAwesomeIcon icon={look.icon} className="h-3 w-3" aria-hidden />
-                {t.verdict === "down" && t.openIncident ? `Panne depuis ${formatSince(t.openIncident.startedAt)}` : look.label}
-              </Badge>
-              <span className="text-sm text-[var(--muted)]">{basisLabel(t.basis)}</span>
-            </p>
-            {t.verdict === "local_only" ? (
-              <p className="text-sm text-[var(--muted)]">Le hub n'arrive pas à joindre le site, Cloudflare oui : problème de la box ou du DNS local, pas d'alerte.</p>
-            ) : t.verdict === "edge_only" ? (
-              <p className="text-sm text-[var(--muted)]">Le hub joint le site, Cloudflare non : à surveiller, pas d'alerte.</p>
-            ) : null}
+    <>
+      <div className="bento">
+        <section className="tile tile-full" data-tone={statusTone} aria-labelledby={`${ids}-title`}>
+          <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1">
+            <div className="min-w-0 flex-[1_1_16rem]">
+              <Heading id={`${ids}-title`} className="break-words text-base font-semibold">
+                {t.label}
+              </Heading>
+              <p className="flex flex-wrap items-center gap-x-2 text-sm text-[var(--muted)]">
+                <a href={t.url} target="_blank" rel="noopener noreferrer" className="link inline-flex min-h-6 items-center gap-1.5 break-all font-mono">
+                  {t.hostname}
+                  <FontAwesomeIcon icon={faArrowUpRightFromSquare} className="h-3 w-3 shrink-0" aria-hidden />
+                  <span className="sr-only">(nouvel onglet)</span>
+                </a>
+                {hideOrigin ? null : <span>{SOURCE[t.source]}</span>}
+                {t.clientName && !hideOrigin ? <span>{t.clientName}</span> : null}
+                {showSiteLink && t.siteId ? (
+                  <Link to={`/sites/${t.siteId}?tab=surveillance`} className="link">
+                    Fiche du site
+                  </Link>
+                ) : null}
+              </p>
+            </div>
+            <div className="w-full sm:w-40">
+              <Switch
+                checked={t.enabled}
+                onChange={(next) =>
+                  void run(
+                    "switch",
+                    () => api<MonitorTargetEntry>(`/api/monitor/targets/${t.id}`, { method: "PATCH", json: { enabled: next } }),
+                    next ? "Surveillance activée" : "Surveillance coupée",
+                  )
+                }
+                label="Surveillé"
+                stateLabels={{ on: "Oui", off: "Non" }}
+                disabled={busy !== null}
+              />
+            </div>
           </div>
 
-          <dl className="grid gap-4 sm:grid-cols-2">
-            <Fact label="Dernier contrôle du hub" tone={t.lastHub && !t.lastHub.ok ? "bad" : undefined}>
-              {checkText(t.lastHub)}
-            </Fact>
-            <Fact label="Dernier contrôle de Cloudflare" tone={t.lastEdge && !t.lastEdge.ok ? "bad" : undefined}>
-              {checkText(t.lastEdge)}
-            </Fact>
-            <Fact label="Disponibilité">
-              24 h : {formatUptime(t.uptime24h) ?? "pas assez de données"} ; 30 jours : {formatUptime(t.uptime30d) ?? "pas assez de données"}
-            </Fact>
-            <Fact label="Certificat" tone={certTone || undefined}>
-              {!t.certificate
-                ? "Pas encore contrôlé."
-                : !t.certificate.ok
-                  ? `Invalide${t.certificate.error ? ` : ${t.certificate.error}` : ""}.`
-                  : `Expire le ${formatDate(t.certificate.validTo)}, dans ${t.certificate.daysLeft} jours${t.certificate.issuer ? ` (${t.certificate.issuer})` : ""}.`}
-            </Fact>
-            <Fact label="Domaine" tone={domainTone}>
-              {!t.domainExpiry
-                ? "Pas encore contrôlé."
-                : t.domainExpiry.expiresAt
-                  ? `Expire le ${formatDate(t.domainExpiry.expiresAt)}${t.domainExpiry.daysLeft != null ? `, dans ${t.domainExpiry.daysLeft} jours` : ""}${t.domainExpiry.registrar ? ` (${t.domainExpiry.registrar})` : ""}.`
-                  : "Échéance inconnue (le registre ne la publie pas)."}
-            </Fact>
-            <Fact label="Vitesse (téléphone)">
-              {t.speed && t.speed.ttfbMs == null && t.speed.lcpMs == null
-                ? `Mesure impossible (accueil injoignable), essai ${formatAgo(t.speed.measuredAt)}.`
-                : t.speed
-                ? `Premier octet ${formatMs(t.speed.ttfbMs)}, affichage principal ${formatMs(t.speed.lcpMs)}${t.speed.cls != null ? `, stabilité ${formatDecimal(t.speed.cls, 2)}` : ""}${t.speed.requests != null ? `, ${t.speed.requests} requêtes` : ""}. Mesurée ${formatAgo(t.speed.measuredAt)}.`
-                : "Pas encore mesurée (une mesure par semaine)."}
-            </Fact>
-            <Fact label="DNS" tone={t.dns?.status === "drift" || t.dns?.status === "error" ? "warn" : undefined}>
-              {!t.dns
-                ? "Pas encore contrôlé."
-                : t.dns.status === "ok"
-                  ? "Conforme à la référence."
-                  : t.dns.status === "drift"
-                    ? `Différent de la référence${t.dns.detail ? ` : ${t.dns.detail}` : ""}.`
-                    : t.dns.status === "no_reference"
-                      ? "Pas encore de référence."
-                      : `Contrôle impossible${t.dns.detail ? ` : ${t.dns.detail}` : ""}.`}
-              {!t.dns || t.dns.status === "drift" || t.dns.status === "no_reference" ? (
-                <span className="mt-2 block">
-                  <Button variant="secondary" onClick={() => setAccept("dns")} disabled={busy !== null}>
-                    Accepter comme nouvelle référence
-                  </Button>
-                </span>
-              ) : null}
-            </Fact>
-            <Fact label="Contenu de l'accueil" tone={t.content?.status === "changed" || t.content?.status === "error" ? "warn" : undefined}>
-              {!t.content
-                ? "Pas encore contrôlé."
-                : t.content.status === "ok"
-                  ? "Inchangé depuis la référence."
-                  : t.content.status === "changed"
-                    ? "Changé sans publication par le hub."
-                    : t.content.status === "no_reference"
-                      ? "Pas encore de référence."
-                      : "Contrôle impossible."}
-              {!t.content || t.content.status === "changed" || t.content.status === "no_reference" ? (
-                <span className="mt-2 block">
-                  <Button variant="secondary" onClick={() => setAccept("content")} disabled={busy !== null}>
-                    Accepter comme nouvelle référence
-                  </Button>
-                </span>
-              ) : null}
-            </Fact>
-          </dl>
+          {t.enabled ? (
+            <>
+              <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
+                <Badge tone={look.tone}>
+                  <FontAwesomeIcon icon={look.icon} className="h-3 w-3" aria-hidden />
+                  {t.verdict === "down" && t.openIncident ? `Panne depuis ${formatSince(t.openIncident.startedAt)}` : look.label}
+                </Badge>
+                {verdictTip ? <Explain k={verdictTip} /> : null}
+                <span className="ml-1 text-sm text-[var(--muted)]">{basisLabel(t.basis)}</span>
+                {pointTip ? <Explain k={pointTip} /> : null}
+              </p>
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <dl className="min-w-0 flex-[1_1_20rem] space-y-0.5 text-sm">
+                  <div className="flex flex-wrap items-baseline gap-x-1.5">
+                    <dt className="inline-flex items-center gap-0.5 text-[var(--muted)]">
+                      Hub
+                      <Explain k="hub" />
+                    </dt>
+                    <dd className={`min-w-0 break-words ${t.lastHub && !t.lastHub.ok ? toneInk.bad : "text-[var(--text)]"}`}>{checkText(t.lastHub)}</dd>
+                  </div>
+                  <div className="flex flex-wrap items-baseline gap-x-1.5">
+                    <dt className="inline-flex items-center gap-0.5 text-[var(--muted)]">
+                      Cloudflare
+                      <Explain k="worker" />
+                    </dt>
+                    <dd className={`min-w-0 break-words ${t.lastEdge && !t.lastEdge.ok ? toneInk.bad : "text-[var(--text)]"}`}>{checkText(t.lastEdge)}</dd>
+                  </div>
+                </dl>
+                <Button
+                  variant="secondary"
+                  className="max-sm:w-full"
+                  onClick={() =>
+                    void run("check", () => api<MonitorTargetEntry>(`/api/monitor/targets/${t.id}/check`, { method: "POST" }), "Contrôle effectué")
+                  }
+                  disabled={busy !== null}
+                >
+                  <FontAwesomeIcon icon={faRotateRight} className="h-3.5 w-3.5" aria-hidden />
+                  {busy === "check" ? "Contrôle…" : "Contrôler maintenant"}
+                </Button>
+              </div>
+            </>
+          ) : (
+            <p className="text-sm text-[var(--muted)]">Surveillance coupée : aucun contrôle ni alerte pour cette adresse. L'historique est gardé.</p>
+          )}
+        </section>
 
-          <Button
-            variant="secondary"
-            onClick={() =>
-              void run("check", () => api<MonitorTargetEntry>(`/api/monitor/targets/${t.id}/check`, { method: "POST" }), "Contrôle effectué")
-            }
-            disabled={busy !== null}
-          >
-            <FontAwesomeIcon icon={faRotateRight} className="h-3.5 w-3.5" aria-hidden />
-            {busy === "check" ? "Contrôle…" : "Contrôler maintenant"}
-          </Button>
-        </>
-      ) : (
-        <p className="text-sm text-[var(--muted)]">Surveillance coupée : aucun contrôle ni alerte pour cette adresse. L'historique est gardé.</p>
-      )}
-
-      <section aria-labelledby={`${ids}-hist`} className="space-y-3 border-t border-[var(--border)] pt-4">
-        <Sub id={`${ids}-hist`} className="text-sm font-semibold">
-          Historique
-        </Sub>
-        {detail.error && !detail.data ? (
-          <Banner level="error" action={<Button variant="ghost" onClick={() => void detail.reload()}>Réessayer</Button>}>
-            {detail.error}
-          </Banner>
-        ) : !detail.data ? (
-          <p role="status" className="text-sm text-[var(--muted)]">
-            Lecture de l'historique…
-          </p>
-        ) : (
-          <>
+        <Tile title="Disponibilité" level={sub} tip="uptime" span={2}>
+          {t.enabled ? (
+            <dl className="flex flex-wrap gap-x-6 gap-y-1">
+              <div className="flex items-baseline gap-2">
+                <dt className="text-xs text-[var(--muted)]">24 h</dt>
+                <dd className="tile-value">{formatUptime(t.uptime24h) ?? "pas assez de données"}</dd>
+              </div>
+              <div className="flex items-baseline gap-2">
+                <dt className="text-xs text-[var(--muted)]">30 jours</dt>
+                <dd className="tile-value">{formatUptime(t.uptime30d) ?? "pas assez de données"}</dd>
+              </div>
+            </dl>
+          ) : null}
+          {historyState === "error" ? (
+            <Banner level="error" action={<Button variant="ghost" onClick={() => void detail.reload()}>Réessayer</Button>}>
+              {detail.error}
+            </Banner>
+          ) : detail.data ? (
             <UptimeBars history={detail.data.history} />
-            <div>
-              <p className="text-sm font-medium text-[var(--text)]">Incidents récents</p>
-              {incidents.length === 0 ? (
-                <p className="mt-1 text-sm text-[var(--muted)]">Aucun incident sur la période.</p>
+          ) : (
+            historyPending
+          )}
+        </Tile>
+
+        {t.enabled ? (
+          <>
+            <Tile title="Certificat" level={sub} tip="tls" tone={certTone}>
+              {!t.certificate ? (
+                <p className="text-sm text-[var(--muted)]">Pas encore contrôlé.</p>
+              ) : !t.certificate.ok ? (
+                <Value main="Invalide" detail={t.certificate.error ?? undefined} tone="bad" />
               ) : (
-                <ul className="mt-2 divide-y divide-[var(--border)] rounded-[var(--radius)] border border-[var(--border)]">
-                  {incidents.map((i) => (
-                    <li key={i.id} className="px-3 py-2 text-sm">
+                <Value
+                  main={`Expire le ${formatDate(t.certificate.validTo)}`}
+                  detail={sentence([`dans ${t.certificate.daysLeft} jours`, t.certificate.issuer])}
+                  tone={certTone}
+                />
+              )}
+            </Tile>
+
+            <Tile title="Domaine" level={sub} tip="rdap" tone={domainTone}>
+              {!t.domainExpiry ? (
+                <p className="text-sm text-[var(--muted)]">Pas encore contrôlé.</p>
+              ) : t.domainExpiry.expiresAt ? (
+                <Value
+                  main={`Expire le ${formatDate(t.domainExpiry.expiresAt)}`}
+                  detail={sentence([t.domainExpiry.daysLeft != null ? `dans ${t.domainExpiry.daysLeft} jours` : null, t.domainExpiry.registrar])}
+                  tone={domainTone}
+                />
+              ) : (
+                <Value main="Échéance inconnue" detail="Le registre ne la publie pas." />
+              )}
+            </Tile>
+
+            <Tile title="DNS" level={sub} tip="dns" tone={dnsTone}>
+              {!t.dns ? (
+                <p className="text-sm text-[var(--muted)]">Pas encore contrôlé.</p>
+              ) : t.dns.status === "ok" ? (
+                <Value main="Conforme" detail="Identique à la référence." />
+              ) : t.dns.status === "drift" ? (
+                <Value main="Différent de la référence" detail={t.dns.detail ?? undefined} tone="warn" />
+              ) : t.dns.status === "no_reference" ? (
+                <Value main="Pas encore de référence" />
+              ) : (
+                <Value main="Contrôle impossible" detail={t.dns.detail ?? undefined} tone="warn" />
+              )}
+              {!t.dns || t.dns.status === "drift" || t.dns.status === "no_reference" ? acceptButton("dns") : null}
+            </Tile>
+
+            <Tile title="Contenu de l'accueil" level={sub} tip="content" tone={contentTone}>
+              {!t.content ? (
+                <p className="text-sm text-[var(--muted)]">Pas encore contrôlé.</p>
+              ) : t.content.status === "ok" ? (
+                <Value main="Inchangé" detail="Identique à la référence." />
+              ) : t.content.status === "changed" ? (
+                <Value main="Changé" detail="Sans publication par le hub." tone="warn" />
+              ) : t.content.status === "no_reference" ? (
+                <Value main="Pas encore de référence" />
+              ) : (
+                <Value main="Contrôle impossible" tone="warn" />
+              )}
+              {!t.content || t.content.status === "changed" || t.content.status === "no_reference" ? acceptButton("content") : null}
+            </Tile>
+
+            <Tile title="Vitesse (téléphone)" level={sub} tip="speed" span="pair">
+              {!t.speed ? (
+                <p className="text-sm text-[var(--muted)]">Pas encore mesurée (une mesure par semaine).</p>
+              ) : t.speed.ttfbMs == null && t.speed.lcpMs == null ? (
+                <Value main="Mesure impossible" detail={`Accueil injoignable, essai ${formatAgo(t.speed.measuredAt)}.`} />
+              ) : (
+                <>
+                  <dl className="grid grid-cols-3 gap-2">
+                    <Metric label="TTFB" tip="ttfb" value={formatMs(t.speed.ttfbMs)} />
+                    <Metric label="LCP" tip="lcp" value={formatMs(t.speed.lcpMs)} />
+                    <Metric label="CLS" tip="cls" value={t.speed.cls != null ? formatDecimal(t.speed.cls, 2) : "inconnu"} />
+                  </dl>
+                  <p className="text-xs text-[var(--muted)]">
+                    {sentence([
+                      t.speed.requests != null ? `${t.speed.requests} requêtes` : null,
+                      t.speed.bytes != null ? formatBytes(t.speed.bytes) : null,
+                      `mesurée ${formatAgo(t.speed.measuredAt)}`,
+                    ])}
+                  </p>
+                </>
+              )}
+            </Tile>
+          </>
+        ) : null}
+
+        <Tile title="Incidents récents" level={sub} tip="incident">
+          {historyPending ??
+            (incidents.length === 0 ? (
+              <p className="text-sm text-[var(--muted)]">Aucun incident sur 30 jours.</p>
+            ) : (
+              <>
+                <ul className="divide-y divide-[var(--border)]">
+                  {incidents.slice(0, INCIDENTS_SHOWN).map((i) => (
+                    <li key={i.id} className="py-1.5 text-sm first:pt-0 last:pb-0">
                       <span className="text-[var(--text)]">
                         {formatDateTime(i.startedAt)}
                         {i.endedAt ? `, durée ${formatDuration(i.durationMs ?? 0)}` : ", en cours"}
@@ -276,32 +382,36 @@ export function TargetPanel({
                     </li>
                   ))}
                 </ul>
-              )}
-            </div>
-            <div>
-              <p className="text-sm font-medium text-[var(--text)]">Rapports mensuels</p>
-              {reports.length === 0 ? null : (
-                <ul className="mt-2 flex flex-wrap gap-2">
-                  {reports.map((r) => (
-                    <li key={r.id}>
-                      <a
-                        href={`/api/monitor/targets/${t.id}/reports/${r.month}.pdf`}
-                        download
-                        className="inline-flex min-h-11 items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--border-strong)] px-3 text-sm text-[var(--text)] hover:bg-[var(--surface-hover)]"
-                      >
-                        <FontAwesomeIcon icon={faFilePdf} className="h-3.5 w-3.5 text-[var(--danger)]" aria-hidden />
-                        {monthLabel(r.month)}
-                        {r.id === "current" ? " (en cours)" : ""}
-                        <span className="sr-only">(PDF)</span>
-                      </a>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </>
-        )}
-      </section>
+                {incidents.length > INCIDENTS_SHOWN ? (
+                  <p className="text-xs text-[var(--muted)]">
+                    Et {incidents.length - INCIDENTS_SHOWN} de plus sur 30 jours, détaillés dans le rapport mensuel.
+                  </p>
+                ) : null}
+              </>
+            ))}
+        </Tile>
+
+        <Tile title="Rapports mensuels" level={sub} tip="report">
+          {historyPending ?? (
+            <ul className="flex flex-wrap gap-2">
+              {reports.map((r) => (
+                <li key={r.id}>
+                  <a
+                    href={`/api/monitor/targets/${t.id}/reports/${r.month}.pdf`}
+                    download
+                    className="inline-flex min-h-11 items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--border-strong)] px-3 text-sm text-[var(--text)] hover:bg-[var(--surface-hover)]"
+                  >
+                    <FontAwesomeIcon icon={faFilePdf} className="h-3.5 w-3.5 text-[var(--danger)]" aria-hidden />
+                    {monthLabel(r.month)}
+                    {r.id === "current" ? " (en cours)" : ""}
+                    <span className="sr-only">(PDF)</span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Tile>
+      </div>
 
       <ConfirmDialog
         open={accept !== null}
@@ -325,7 +435,7 @@ export function TargetPanel({
         }}
         onClose={() => setAccept(null)}
       />
-    </Card>
+    </>
   );
 }
 

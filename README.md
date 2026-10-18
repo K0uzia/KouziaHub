@@ -411,6 +411,7 @@ make dev     # API http://127.0.0.1:3101 et interface http://localhost:5174
 - Veille : code dans `workers/veille/` ; `npm run veille:build` produit `workers/veille/dist/index.js` (non versionné), `npm run veille:deploy` déploie depuis le PC comme `hubctl veille deploy`.
 - Copier le code vers le CT sans GitHub (rsync et ssh sur le PC) : `make alpine-deploy HOST=root@<IP du CT>` ; état à distance : `make alpine-status HOST=root@<IP du CT>`.
 - Variables du `.env` : `.env.example` (sans valeurs). Scripts du CT : `scripts/alpine/`.
+- Centrage des écrans : avec `make dev` lancé, `BASE=http://localhost:5174 EMAIL=<compte local> PASSWORD=<son mot de passe> npm run check:layout`. Le script parcourt les écrans principaux à 360, 800, 1280, 1920 et 2560 px, affiche le tableau des marges de l'en-tête et du contenu, et échoue si les marges gauche et droite diffèrent de plus de 1 px ou si la page défile en largeur. Compte local sans double authentification ; `SHOTS=<dossier>` garde des captures. Il n'est pas lancé par `npm test` (il lui faut une pile qui tourne).
 
 ---
 

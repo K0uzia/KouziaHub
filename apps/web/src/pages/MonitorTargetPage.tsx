@@ -57,7 +57,7 @@ export function MonitorTargetPage() {
   }
 
   return (
-    <div className="page-narrow">
+    <div>
       <PageHeader
         back={{ to: "/surveillance", label: "Surveillance" }}
         title={t.label}

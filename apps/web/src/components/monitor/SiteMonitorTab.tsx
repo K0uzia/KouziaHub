@@ -41,6 +41,7 @@ export function SiteMonitorTab({ site }: { site: SiteDetail }) {
             key={t.id}
             target={t}
             headingLevel={3}
+            hideOrigin
             onChange={(next) => targets.setData((prev) => (prev ?? []).map((x) => (x.id === next.id ? next : x)))}
           />
         ))
