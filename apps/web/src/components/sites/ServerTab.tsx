@@ -14,6 +14,7 @@ import { Field, Input } from "@/components/ui/Field";
 import { Segmented } from "@/components/ui/Segmented";
 import { Banner } from "@/components/ui/Banner";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { CloudflareCacheCard } from "@/components/sites/CloudflareCacheCard";
 
 const HOSTS = [
   { id: "www", label: "Avec www" },
@@ -212,6 +213,8 @@ export function ServerTab({ site, onSite }: { site: SiteDetail; onSite: (s: Site
           </>
         )}
       </Card>
+
+      <CloudflareCacheCard site={site} />
 
       <ConfirmDialog
         open={confirm !== null}

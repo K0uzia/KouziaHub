@@ -10,6 +10,8 @@ type ConfirmDialogProps = {
   cancelLabel?: string;
   danger?: boolean;
   busy?: boolean;
+  /** Confirmation impossible pour l'instant (saisie de contrôle incomplète). */
+  confirmDisabled?: boolean;
   /** Détail sous le message (récapitulatif avant une action sensible). */
   children?: ReactNode;
   onConfirm: () => void;
@@ -25,6 +27,7 @@ export function ConfirmDialog({
   cancelLabel = "Annuler",
   danger = false,
   busy = false,
+  confirmDisabled = false,
   children,
   onConfirm,
   onClose,
@@ -40,7 +43,7 @@ export function ConfirmDialog({
         <Button
           type="button"
           variant={danger ? "danger" : "primary"}
-          disabled={busy}
+          disabled={busy || confirmDisabled}
           onClick={onConfirm}
         >
           {busy ? "Patientez…" : confirmLabel}

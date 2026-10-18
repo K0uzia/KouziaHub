@@ -160,13 +160,22 @@ export function SitePage() {
                   void reloadSite();
                   setTab("fichiers");
                 }}
+                onGoServer={() => setTab("serveur")}
               />
             ) : tab === "serveur" ? (
               <ServerTab site={data} onSite={onSite} />
             ) : tab === "vignette" ? (
               <ThumbnailTab site={data} onSite={onSite} reloadSite={reloadSite} />
             ) : (
-              <SiteSettingsTab site={data} onSite={onSite} />
+              <SiteSettingsTab
+                site={data}
+                onSite={onSite}
+                onPurged={() => {
+                  setRefreshKey((k) => k + 1);
+                  void reloadSite();
+                  void reloadVersions();
+                }}
+              />
             )}
           </Tabs>
         </div>

@@ -9,8 +9,9 @@ import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Field, Input } from "@/components/ui/Field";
 import { ClientPicker } from "@/components/sites/ClientPicker";
+import { PurgeFilesCard } from "@/components/sites/PurgeFilesCard";
 
-export function SiteSettingsTab({ site, onSite }: { site: SiteDetail; onSite: (s: SiteDetail) => void }) {
+export function SiteSettingsTab({ site, onSite, onPurged }: { site: SiteDetail; onSite: (s: SiteDetail) => void; onPurged: () => void }) {
   const navigate = useNavigate();
   const ids = useId();
   const [label, setLabel] = useState(site.label ?? "");
@@ -135,6 +136,8 @@ export function SiteSettingsTab({ site, onSite }: { site: SiteDetail; onSite: (s
           </div>
         )}
       </Card>
+
+      <PurgeFilesCard site={site} onPurged={onPurged} />
 
       <Card className="border-[var(--danger)]/40 p-4 sm:p-5">
         <form onSubmit={onDelete} noValidate className="space-y-4" aria-labelledby={`${ids}-del`}>

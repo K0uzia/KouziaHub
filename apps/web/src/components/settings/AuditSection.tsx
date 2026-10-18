@@ -33,6 +33,11 @@ const ACTION_LABEL: Record<string, string> = {
   "thumbnail.upload": "Vignette envoyée",
   "thumbnail.capture": "Capture de la vignette",
   "orphan.delete": "Suppression d'un enregistrement DNS orphelin",
+  "files.purge": "Fichiers de travail vidés",
+  "versions.purge": "Anciennes versions supprimées",
+  "cache.purge": "Place libérée sur le hub",
+  "cache.cloudflare.purge": "Cache Cloudflare vidé",
+  "version.export": "Version de production téléchargée",
 };
 
 export function AuditSection() {
