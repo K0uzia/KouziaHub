@@ -1,9 +1,10 @@
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { toast } from "sonner";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faFileZipper } from "@fortawesome/free-solid-svg-icons";
-import type { UploadResult } from "@hub/contract";
-import { errorMessage, isAbort, upload } from "@/lib/api";
+import type { UploadResult, UploadSession } from "@hub/contract";
+import { errorMessage, isAbort } from "@/lib/api";
+import { cancelSession, openSessions, sendZip } from "@/lib/uploadSession";
 import { formatBytes, plural } from "@/lib/format";
 import { finePointer } from "@/lib/files";
 import { useDropTarget } from "@/lib/useDropTarget";
@@ -51,6 +52,8 @@ export function ZipUpload({
   const [progress, setProgress] = useState<Progress | null>(null);
   const [result, setResult] = useState<UploadResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [interrupted, setInterrupted] = useState<UploadSession[]>([]);
+  const [resume, setResume] = useState<UploadSession | null>(null);
   const [desktop] = useState(finePointer);
 
   function choose(file: File | undefined) {
@@ -68,41 +71,73 @@ export function ZipUpload({
       setError(`« ${file.name} » pèse ${formatBytes(file.size)} : le maximum est ${formatBytes(maxZipBytes)}.`);
       return;
     }
-    // Remplacer tout efface les fichiers de travail actuels : confirmation s'il y en a.
-    if (mode === "replace" && fileCount > 0) setPending(file);
+    // Remplacer tout efface les fichiers de travail actuels : confirmation s'il y en a (sauf reprise, déjà confirmée).
+    if (!resume && mode === "replace" && fileCount > 0) setPending(file);
     else void send(file);
   }
 
   async function send(file: File) {
     setPending(null);
     setResult(null);
-    const form = new FormData();
-    form.append("mode", mode);
-    form.append("file", file, file.name);
     const ctrl = new AbortController();
-    setProgress({ fraction: 0, label: `« ${file.name} »`, cancel: () => ctrl.abort() });
+    let opened: UploadSession | null = null;
+    let cancelled = false;
+    const resuming = resume;
+    setProgress({
+      label: `« ${file.name} »`,
+      state: { phase: "hash", bytesDone: 0, bytesTotal: file.size, filesDone: 0, filesTotal: 1 },
+      cancel: () => {
+        cancelled = true;
+        ctrl.abort();
+      },
+    });
     try {
-      const res = await upload<UploadResult>(`/api/sites/${siteId}/zip`, form, {
+      // Envoi par morceaux de 8 Mio : pas de plafond de 100 Mo par requête, reprise possible après une coupure.
+      const res = await sendZip({
+        siteId,
+        file,
+        mode: resuming?.mode ?? mode,
+        resume: resuming,
         signal: ctrl.signal,
-        onProgress: (fraction) => setProgress((p) => (p ? { ...p, fraction } : p)),
+        onSession: (sess) => (opened = sess),
+        onProgress: (state) => setProgress((p) => (p ? { ...p, state } : p)),
       });
+      setResume(null);
+      setInterrupted([]);
       onDone(res);
       toast.success(`${plural(res.accepted.length, "fichier reçu", "fichiers reçus")} depuis le zip`);
       if (res.rejected.length || res.strippedRoot) setResult(res);
-      if (res.rejected.length) {
-        toast.warning(plural(res.rejected.length, "fichier écarté", "fichiers écartés"));
-      }
+      if (res.rejected.length) toast.warning(plural(res.rejected.length, "fichier écarté", "fichiers écartés"));
     } catch (err) {
-      if (isAbort(err)) toast.info("Envoi annulé");
-      else {
+      const session = opened as UploadSession | null;
+      if (isAbort(err) && cancelled) {
+        if (session) await cancelSession(siteId, session.id).catch(() => undefined);
+        setResume(null);
+        toast.info("Envoi annulé");
+      } else {
         const message = errorMessage(err, "Envoi du zip impossible.");
         setError(message);
         toast.error(message);
+        if (session) setInterrupted([session]);
       }
+      void refreshInterrupted();
     } finally {
       setProgress(null);
     }
   }
+
+  async function refreshInterrupted() {
+    try {
+      setInterrupted((await openSessions(siteId)).filter((x) => x.kind === "zip"));
+    } catch {
+      /* facultatif */
+    }
+  }
+
+  useEffect(() => {
+    void refreshInterrupted();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [siteId]);
 
   const drop = useDropTarget((dt) => {
     const files = Array.from(dt.files);
@@ -161,6 +196,41 @@ export function ZipUpload({
             </p>
           ) : null}
           {progress ? <UploadProgress progress={progress} /> : null}
+          {!progress && interrupted.length ? (
+            <Banner
+              level="warning"
+              action={
+                <Button
+                  variant="ghost"
+                  onClick={() =>
+                    void cancelSession(siteId, interrupted[0]!.id)
+                      .catch(() => undefined)
+                      .then(() => {
+                        setResume(null);
+                        toast.info("Envoi interrompu annulé");
+                        return refreshInterrupted();
+                      })
+                  }
+                >
+                  Annuler cet envoi
+                </Button>
+              }
+            >
+              <p className="font-medium">
+                L'envoi de « {interrupted[0]!.files[0]?.path} » n'a pas abouti : {interrupted[0]!.received.length} morceau(x) reçu(s) sur{" "}
+                {interrupted[0]!.chunkCount}.
+              </p>
+              {resume?.id === interrupted[0]!.id ? (
+                <p className="mt-1">Choisissez maintenant le même zip : seuls les morceaux manquants partiront.</p>
+              ) : (
+                <div className="mt-2">
+                  <Button variant="secondary" onClick={() => setResume(interrupted[0]!)}>
+                    Reprendre cet envoi
+                  </Button>
+                </div>
+              )}
+            </Banner>
+          ) : null}
           {result?.strippedRoot ? (
             <Banner level="info" role="status">
               Le zip contenait un seul dossier, <span className="font-mono">{result.strippedRoot}</span> : son contenu a été placé à la racine du site.

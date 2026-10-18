@@ -53,9 +53,10 @@ export function Modal({
     if (!open) return;
     const previous = document.activeElement as HTMLElement | null;
     const panel = panelRef.current;
-    const first = panel?.querySelector<HTMLElement>(
-      `[autofocus], .modal-body ${FOCUSABLE.split(", ").join(", .modal-body ")}`,
-    );
+    // Élément désigné d'abord (data-autofocus : React ne rend pas l'attribut autofocus), sinon le premier du corps.
+    const first =
+      panel?.querySelector<HTMLElement>("[autofocus], [data-autofocus]") ??
+      panel?.querySelector<HTMLElement>(`.modal-body ${FOCUSABLE.split(", ").join(", .modal-body ")}`);
     (first ?? panel)?.focus();
 
     const onKey = (e: KeyboardEvent) => {

@@ -11,8 +11,9 @@ import {
   faHouse,
   faTrashCan,
 } from "@fortawesome/free-solid-svg-icons";
-import type { FilesResponse, SiteDetail, UploadResult } from "@hub/contract";
-import { api, errorMessage, isAbort, upload } from "@/lib/api";
+import type { FilesResponse, SiteDetail, UploadSession } from "@hub/contract";
+import { api, errorMessage, isAbort } from "@/lib/api";
+import { cancelSession, openSessions, sendFiles } from "@/lib/uploadSession";
 import { formatBytes, formatDate, formatDateTime, plural } from "@/lib/format";
 import {
   canPickFolder,
@@ -23,8 +24,8 @@ import {
   finePointer,
   listDir,
   nameProblem,
-  batchSize,
-  planBatches,
+  prepareSelection,
+  type PreparedSelection,
   type DirEntry,
   type PickedFile,
 } from "@/lib/files";
@@ -39,9 +40,9 @@ import { Field, Input } from "@/components/ui/Field";
 import { Banner } from "@/components/ui/Banner";
 import { PublishBar } from "@/components/sites/PublishBar";
 import { ZipUpload } from "@/components/sites/ZipUpload";
-import { RejectedSummary, UploadProgress, type Progress } from "@/components/sites/UploadFeedback";
+import { RejectedSummary, SkippedList, UploadProgress, type Progress, type SkippedItem } from "@/components/sites/UploadFeedback";
 
-type Rejected = { accepted: number; rejected: UploadResult["rejected"] };
+type Rejected = { accepted: number; rejected: SkippedItem[] };
 
 function rawUrl(siteId: string, path: string) {
   return `/api/sites/${siteId}/files/raw?path=${encodeURIComponent(path)}`;
@@ -69,6 +70,10 @@ export function FilesTab({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [progress, setProgress] = useState<Progress | null>(null);
   const [rejected, setRejected] = useState<Rejected | null>(null);
+  const [preparing, setPreparing] = useState<{ prepared: PreparedSelection; skipped: SkippedItem[] } | null>(null);
+  /** Envois interrompus (sessions ouvertes du serveur) et celui que l'utilisateur reprend. */
+  const [interrupted, setInterrupted] = useState<UploadSession[]>([]);
+  const [resume, setResume] = useState<UploadSession | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string[] | null>(null);
   const [renaming, setRenaming] = useState<DirEntry | null>(null);
   const [busy, setBusy] = useState(false);
@@ -114,55 +119,107 @@ export function FilesTab({
     onFilesChanged();
   }
 
-  async function send(picked: PickedFile[]) {
+  /** Choix d'abord : écartés avant l'envoi, dossier de projet reconnu (proposition « seulement dist/ »). */
+  function send(picked: PickedFile[]) {
     if (!picked.length || progress) return;
-    const existing = new Set(all.map((f) => f.path));
-    const prefix = dir ? `${dir}/` : "";
-    // Envoi découpé (nombre de fichiers et poids par requête) ; un fichier trop lourd est écarté avant l'envoi.
-    const plan = planBatches(picked, files.data?.limits.maxFileBytes ?? null);
-    const totalBytes = plan.batches.reduce((n, batch) => n + batchSize(batch), 0) || 1;
-    const ctrl = new AbortController();
-    const label = plural(picked.length, "fichier", "fichiers");
-    const accepted: string[] = [];
-    const rejectedAll = plan.rejected.map((p) => ({ path: prefix + p.path, reason: p.reason }));
-    let sent = 0;
+    const prepared = prepareSelection(picked, files.data?.limits.maxFileBytes ?? null);
+    const skipped = prepared.excluded.map((e) => ({ path: (dir ? `${dir}/` : "") + e.path, reason: e.reason, size: e.size }));
+    // Reprise d'un envoi « seulement dist/ » : même choix, sans redemander.
+    if (resume && prepared.project && prepared.project.files.length === resume.included.length) {
+      void transfer(prepared.project.files, []);
+      return;
+    }
+    if (prepared.project && resume === null) {
+      setPreparing({ prepared, skipped });
+      return;
+    }
+    void transfer(prepared.send, skipped);
+  }
+
+  async function transfer(toSend: PickedFile[], skipped: SkippedItem[], label?: string) {
+    setPreparing(null);
     setRejected(null);
-    setProgress({ fraction: 0, label, cancel: () => ctrl.abort() });
+    if (toSend.length === 0) {
+      if (skipped.length) {
+        setRejected({ accepted: 0, rejected: skipped });
+        toast.warning(`Rien à envoyer : ${plural(skipped.length, "fichier écarté", "fichiers écartés")}`);
+      }
+      return;
+    }
+    const existing = new Set(all.map((f) => f.path));
+    const ctrl = new AbortController();
+    const text = label ?? plural(toSend.length, "fichier", "fichiers");
+    let opened: UploadSession | null = null;
+    const resuming = resume;
+    let cancelled = false;
+    setProgress({
+      label: text,
+      state: { phase: "hash", bytesDone: 0, bytesTotal: 0, filesDone: 0, filesTotal: toSend.length },
+      cancel: () => {
+        cancelled = true;
+        ctrl.abort();
+      },
+    });
     try {
-      for (const batch of plan.batches) {
-        const form = new FormData();
-        form.append("dir", dir);
-        for (const p of batch) form.append("files", p.file, p.path);
-        const bytes = batchSize(batch);
-        const res = await upload<UploadResult>(`/api/sites/${site.id}/files`, form, {
-          signal: ctrl.signal,
-          onProgress: (fraction) =>
-            setProgress((p) => (p ? { ...p, fraction: Math.min(1, (sent + fraction * bytes) / totalBytes) } : p)),
-        });
-        sent += bytes;
-        accepted.push(...res.accepted);
-        rejectedAll.push(...res.rejected);
-        applyFiles(res.files);
+      const res = await sendFiles({
+        siteId: site.id,
+        dir,
+        files: toSend,
+        resume: resuming,
+        signal: ctrl.signal,
+        onSession: (s) => (opened = s),
+        onProgress: (state) => setProgress((p) => (p ? { ...p, state } : p)),
+      });
+      setResume(null);
+      setInterrupted([]);
+      applyFiles(res.files);
+      const replaced = res.accepted.filter((p) => existing.has(p)).length;
+      const added = res.accepted.length - replaced;
+      const parts = [
+        added ? plural(added, "fichier ajouté", "fichiers ajoutés") : null,
+        replaced ? plural(replaced, "fichier remplacé", "fichiers remplacés") : null,
+      ].filter(Boolean);
+      if (parts.length) toast.success(parts.join(", "));
+      const allSkipped = [...skipped, ...res.rejected];
+      if (allSkipped.length) {
+        setRejected({ accepted: res.accepted.length, rejected: allSkipped });
+        toast.warning(plural(allSkipped.length, "fichier écarté", "fichiers écartés"));
       }
     } catch (err) {
-      if (isAbort(err))
-        toast.info(accepted.length ? `Envoi arrêté après ${plural(accepted.length, "fichier reçu", "fichiers reçus")}` : "Envoi annulé");
-      else toast.error(errorMessage(err, "Envoi impossible."));
+      const session = opened as UploadSession | null;
+      if (isAbort(err) && cancelled) {
+        // « Annuler l'envoi » : la session et ses morceaux sont supprimés.
+        if (session) await cancelSession(site.id, session.id).catch(() => undefined);
+        setResume(null);
+        toast.info("Envoi annulé");
+      } else {
+        toast.error(errorMessage(err, "Envoi impossible."));
+        if (skipped.length) setRejected({ accepted: 0, rejected: skipped });
+        // Coupure : la session reste sur le serveur ; montrée tout de suite, état exact relu dès que possible.
+        if (session) setInterrupted([session]);
+      }
+      void refreshInterrupted();
     } finally {
       setProgress(null);
     }
-    const replaced = accepted.filter((p) => existing.has(p)).length;
-    const added = accepted.length - replaced;
-    const parts = [
-      added ? plural(added, "fichier ajouté", "fichiers ajoutés") : null,
-      replaced ? plural(replaced, "fichier remplacé", "fichiers remplacés") : null,
-    ].filter(Boolean);
-    if (parts.length) toast.success(parts.join(", "));
-    if (rejectedAll.length) {
-      setRejected({ accepted: accepted.length, rejected: rejectedAll });
-      toast.warning(plural(rejectedAll.length, "fichier écarté", "fichiers écartés"));
+  }
+
+  async function refreshInterrupted() {
+    try {
+      setInterrupted((await openSessions(site.id)).filter((x) => x.kind === "files"));
+    } catch {
+      /* état facultatif : l'envoi reste possible */
     }
   }
+
+  useEffect(() => {
+    void refreshInterrupted();
+    // Retour du réseau : l'état des morceaux reçus est relu.
+    const onOnline = () => void refreshInterrupted();
+    window.addEventListener("online", onOnline);
+    return () => window.removeEventListener("online", onOnline);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [site.id]);
 
   const drop = useDropTarget((dt) => {
     void filesFromDrop(dt)
@@ -300,6 +357,45 @@ export function FilesTab({
 
           <div className="mt-4 space-y-3">
             {progress ? <UploadProgress progress={progress} /> : null}
+            {!progress && interrupted.length ? (
+              <Banner
+                level="warning"
+                action={
+                  <Button
+                    variant="ghost"
+                    onClick={() => {
+                      const s = interrupted[0]!;
+                      void cancelSession(site.id, s.id)
+                        .catch(() => undefined)
+                        .then(() => {
+                          if (resume?.id === s.id) setResume(null);
+                          toast.info("Envoi interrompu annulé");
+                          return refreshInterrupted();
+                        });
+                    }}
+                  >
+                    Annuler cet envoi
+                  </Button>
+                }
+              >
+                <p className="font-medium">
+                  Un envoi n'a pas abouti : {plural(interrupted[0]!.files.length, "fichier", "fichiers")}, {formatBytes(interrupted[0]!.totalBytes)},{" "}
+                  {interrupted[0]!.received.length} morceau(x) reçu(s) sur {interrupted[0]!.chunkCount}.
+                </p>
+                <p className="mt-1">
+                  {resume?.id === interrupted[0]!.id
+                    ? "Choisissez maintenant la même sélection : seuls les morceaux manquants partiront."
+                    : "Pour reprendre, choisissez à nouveau exactement les mêmes fichiers ou le même dossier."}
+                </p>
+                {resume?.id !== interrupted[0]!.id ? (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <Button variant="secondary" onClick={() => setResume(interrupted[0]!)}>
+                      Reprendre cet envoi
+                    </Button>
+                  </div>
+                ) : null}
+              </Banner>
+            ) : null}
             {rejected ? <RejectedSummary accepted={rejected.accepted} rejected={rejected.rejected} onClose={() => setRejected(null)} /> : null}
             {files.error && files.data ? (
               <Banner level="warning" action={<Button variant="ghost" onClick={() => void files.reload()}>Réessayer</Button>}>
@@ -466,6 +562,43 @@ export function FilesTab({
         onConfirm={() => confirmDelete && void remove(confirmDelete)}
         onClose={() => setConfirmDelete(null)}
       />
+
+      <Modal
+        open={preparing !== null}
+        onClose={() => setPreparing(null)}
+        title="Dossier de projet reconnu"
+        wide
+        description="Ce dossier contient les sources d'un site et son résultat construit."
+      >
+        {preparing?.prepared.project ? (
+          <div className="space-y-4 text-sm">
+            <p>
+              Le site à publier est dans <span className="font-mono">{preparing.prepared.project.root ? `${preparing.prepared.project.root}/` : ""}{preparing.prepared.project.output}/</span>{" "}
+              : {plural(preparing.prepared.project.files.length, "fichier", "fichiers")}, {formatBytes(preparing.prepared.project.bytes)}. Son contenu sera placé{" "}
+              {dir ? `dans « ${dir} »` : "à la racine du site"}.
+            </p>
+            <p className="text-[var(--muted)]">
+              Le reste ({plural(preparing.prepared.send.length - preparing.prepared.project.files.length, "fichier", "fichiers")} de sources) ne sert pas au site
+              en ligne.
+            </p>
+            {preparing.skipped.length ? (
+              <div>
+                <p className="font-medium">Jamais envoyés :</p>
+                <SkippedList items={preparing.skipped} />
+              </div>
+            ) : null}
+            <ModalActions>
+              <Button variant="secondary" onClick={() => void transfer(preparing.prepared.send, preparing.skipped)}>
+                Tout envoyer ({plural(preparing.prepared.send.length, "fichier", "fichiers")})
+              </Button>
+              <Button data-autofocus onClick={() => void transfer(preparing.prepared.project!.files, [], `${preparing.prepared.project!.output}/`)}>
+                Envoyer seulement {preparing.prepared.project.output}/ ({plural(preparing.prepared.project.files.length, "fichier", "fichiers")},{" "}
+                {formatBytes(preparing.prepared.project.bytes)})
+              </Button>
+            </ModalActions>
+          </div>
+        ) : null}
+      </Modal>
 
       <RenameDialog
         key={renaming?.path ?? "none"}

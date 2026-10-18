@@ -1,4 +1,16 @@
-import { MAX_DEPTH, MAX_PATH_LENGTH, MAX_SEGMENT_BYTES } from "@/lib/limits.js";
+// Import relatif : ce module est aussi utilisé par l'interface (alias @hub/site-paths), qui écarte les mêmes fichiers
+// avant l'envoi. Il ne dépend que de limits.ts, sans code serveur.
+import { MAX_DEPTH, MAX_FILE_BYTES, MAX_PATH_LENGTH, MAX_SEGMENT_BYTES } from "./limits.js";
+
+const MIB = 1024 * 1024;
+// TextEncoder plutôt que Buffer : le module tourne aussi dans le navigateur.
+const utf8 = new TextEncoder();
+
+/** Raison d'un fichier trop lourd pour Cloudflare Pages : taille, limite et conduite à tenir. */
+export function fileTooBigReason(size: number): string {
+  const mib = (size / MIB).toFixed(1).replace(".", ",");
+  return `Fichier de ${mib} Mio : au-delà de ${MAX_FILE_BYTES / MIB} Mio, la limite de Cloudflare Pages par fichier. Réduisez-le ou retirez-le.`;
+}
 
 export type PathResult = { ok: true; path: string } | { ok: false; reason: string };
 
@@ -19,7 +31,7 @@ export function normalizeSitePath(raw: string): PathResult {
   for (const segment of segments) {
     if (segment === "..") return { ok: false, reason: "« .. » interdit dans un chemin." };
     if (segment === "" || segment === ".") return { ok: false, reason: "Chemin invalide (segment vide ou « . »)." };
-    if (Buffer.byteLength(segment, "utf8") > MAX_SEGMENT_BYTES) return { ok: false, reason: "Nom de fichier trop long." };
+    if (utf8.encode(segment).length > MAX_SEGMENT_BYTES) return { ok: false, reason: "Nom de fichier trop long." };
   }
   return { ok: true, path: value };
 }
@@ -34,6 +46,36 @@ export function normalizeDir(raw: string | undefined | null): PathResult {
 export type Classification = { action: "accept" } | { action: "reject"; reason: string } | { action: "ignore"; reason: string };
 
 const IGNORED_NAMES = new Set([".ds_store", "thumbs.db", "desktop.ini"]);
+
+/**
+ * Dossiers de développement jamais envoyés (dépendances, dépôt Git, caches des générateurs et des hébergeurs) :
+ * refusés par le serveur, écartés par l'interface avant l'envoi. En minuscules.
+ */
+export const DEV_DIRECTORIES: readonly string[] = [
+  "node_modules",
+  ".git",
+  ".astro",
+  ".cache",
+  ".vercel",
+  ".netlify",
+  ".next",
+  ".nuxt",
+  ".svelte-kit",
+  ".turbo",
+  ".parcel-cache",
+  ".idea",
+  ".vscode",
+];
+const DEV_DIRECTORY_SET = new Set(DEV_DIRECTORIES);
+
+/** Premier dossier de développement d'un chemin (« node_modules »…), null s'il n'y en a pas. */
+export function devDirectoryOf(sitePath: string): string | null {
+  const segments = sitePath.split("/");
+  for (const segment of segments) {
+    if (DEV_DIRECTORY_SET.has(segment.toLowerCase())) return segment;
+  }
+  return null;
+}
 
 /** Tri d'un chemin déjà normalisé : accepté, refusé (montré avec sa raison) ou écarté sans bruit. */
 export function classifySitePath(sitePath: string): Classification {
@@ -54,8 +96,8 @@ export function classifySitePath(sitePath: string): Classification {
   if (segments.length > 1 && lowerSegments[0] === "functions") {
     return { action: "reject", reason: "Dossier functions/ refusé : seul le hub injecte du code exécuté par Cloudflare." };
   }
-  if (lowerSegments.includes(".git")) return { action: "reject", reason: "Dossier .git refusé (fichiers de développement)." };
-  if (lowerSegments.includes("node_modules")) return { action: "reject", reason: "Dossier node_modules refusé (fichiers de développement)." };
+  const devDir = devDirectoryOf(sitePath);
+  if (devDir) return { action: "reject", reason: `Dossier ${devDir} refusé (fichiers de développement).` };
   if (lowerSegments.some((s) => s === ".env" || s.startsWith(".env."))) {
     return { action: "reject", reason: "Fichier .env refusé (secrets possibles)." };
   }

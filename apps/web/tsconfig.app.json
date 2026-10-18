@@ -19,7 +19,8 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
-      "@hub/contract": ["../api/src/contract.ts"]
+      "@hub/contract": ["../api/src/contract.ts"],
+      "@hub/site-paths": ["../api/src/lib/site-paths.ts"]
     }
   },
   "include": ["src"]

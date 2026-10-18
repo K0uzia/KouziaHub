@@ -175,6 +175,38 @@ export type UploadResult = {
   files: FilesResponse;
 };
 
+/** Fichier annoncé à l'ouverture d'une session d'envoi : chemin relatif au dossier cible, taille, empreinte SHA-256 (hex). */
+export type UploadFileDecl = { path: string; size: number; sha256: string };
+
+/**
+ * Session d'envoi par morceaux (gros dossiers et zips, au-delà des 100 Mo par requête du tunnel) : les fichiers
+ * retenus, mis bout à bout dans l'ordre de `included`, ou le zip, forment un flux découpé en morceaux de `chunkSize`.
+ */
+export type CreateUploadInput =
+  | { kind: "files"; dir?: string; files: UploadFileDecl[] }
+  | { kind: "zip"; mode: "replace" | "merge"; name: string; size: number; sha256: string };
+
+export type UploadSession = {
+  id: string;
+  kind: "files" | "zip";
+  /** Envoi de fichiers : dossier cible ; zip : mode. */
+  dir: string | null;
+  mode: "replace" | "merge" | null;
+  /** Fichiers retenus (chemins complets dans le site) ; zip : son nom. Sert à vérifier une sélection refaite avant de reprendre. */
+  files: UploadFileDecl[];
+  /** Index, dans la liste envoyée à la création, des fichiers retenus, dans l'ordre du flux. */
+  included: number[];
+  /** Écartés dès l'ouverture (chemin interdit, dossier de développement, fichier de plus de 25 Mio), avec la raison. */
+  rejected: RejectedFile[];
+  chunkSize: number;
+  totalBytes: number;
+  chunkCount: number;
+  /** Morceaux déjà reçus et vérifiés (numéros à partir de 0). */
+  received: number[];
+  createdAt: string;
+  expiresAt: string;
+};
+
 export type VersionEntry = {
   id: string;
   number: number;
@@ -243,6 +275,17 @@ export type SystemStatus = {
 // POST   /api/sites/:id/files/delete   { paths: string[] } (un dossier se termine par « / ») : FilesResponse
 // POST   /api/sites/:id/files/move     { from: string, to: string } (renommer) : FilesResponse
 // POST   /api/sites/:id/zip     multipart : un fichier zip, champ « mode » = "replace" | "merge" : UploadResult
+//
+// Envoi par morceaux (l'interface passe tous ses envois par ces sessions ; les deux routes ci-dessus restent pour
+// les petits envois directs et les scripts) :
+// GET    /api/sites/:id/uploads                  : UploadSession[] (sessions ouvertes du site, pour reprendre)
+// POST   /api/sites/:id/uploads   CreateUploadInput : UploadSession (400 sans rien d'envoyable)
+// GET    /api/sites/:id/uploads/:uid             : UploadSession (404 code "upload_expired" après 24 h)
+// PUT    /api/sites/:id/uploads/:uid/chunks/:n   octets (application/octet-stream), en-tête X-Chunk-Sha256 : UploadSession
+//                                ; morceau déjà reçu avec la même empreinte : accepté sans effet ; empreinte fausse : 400 "chunk_hash_mismatch"
+// POST   /api/sites/:id/uploads/:uid/complete    : UploadResult (vérifie chaque empreinte puis les contrôles habituels, tout ou rien ;
+//                                409 "upload_incomplete" s'il manque des morceaux ; la session est supprimée après succès)
+// DELETE /api/sites/:id/uploads/:uid             : { ok: true } (annulation)
 //
 // POST   /api/sites/:id/publish        { note?: string } : SiteDetail (opération PUBLISH)
 // GET    /api/sites/:id/versions                 : VersionEntry[]
