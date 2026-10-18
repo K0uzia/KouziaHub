@@ -13,6 +13,8 @@ const SitePage = lazy(() => import("@/pages/SitePage").then((m) => ({ default: m
 const MonitorPage = lazy(() => import("@/pages/MonitorPage").then((m) => ({ default: m.MonitorPage })));
 const MonitorTargetPage = lazy(() => import("@/pages/MonitorTargetPage").then((m) => ({ default: m.MonitorTargetPage })));
 const SettingsPage = lazy(() => import("@/pages/SettingsPage").then((m) => ({ default: m.SettingsPage })));
+const AuditPage = lazy(() => import("@/pages/AuditPage").then((m) => ({ default: m.AuditPage })));
+const IncidentsPage = lazy(() => import("@/pages/IncidentsPage").then((m) => ({ default: m.IncidentsPage })));
 
 function Loading() {
   return (
@@ -76,6 +78,14 @@ export default function App() {
           }
         />
         <Route
+          path="/surveillance/incidents"
+          element={
+            <Suspense fallback={<Loading />}>
+              <IncidentsPage />
+            </Suspense>
+          }
+        />
+        <Route
           path="/surveillance/:id"
           element={
             <Suspense fallback={<Loading />}>
@@ -88,6 +98,14 @@ export default function App() {
           element={
             <Suspense fallback={<Loading />}>
               <SettingsPage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/reglages/journal"
+          element={
+            <Suspense fallback={<Loading />}>
+              <AuditPage />
             </Suspense>
           }
         />

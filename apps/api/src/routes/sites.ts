@@ -3,7 +3,8 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import type { ServerConfigPreview, VersionEntry } from "@/contract.js";
+import type { Page, ServerConfigPreview, VersionEntry } from "@/contract.js";
+import { badListQuery, pageOf, pageQuery, skipTake } from "@/lib/pagination.js";
 import { buildHtaccess, normalizeFinalDomain, notFoundPageError, pagesDeployConfig } from "@/lib/server-config.js";
 import { profileOf, writeServerConfig } from "@/lib/server-config-store.js";
 import { syncSiteTargets } from "@/lib/monitor/targets.js";
@@ -214,12 +215,21 @@ export function sitesRoutes(services: Services): FastifyPluginAsync {
       return siteDetail(id, services);
     });
 
-    app.get("/api/sites/:id/versions", async (request): Promise<VersionEntry[]> => {
+    app.get("/api/sites/:id/versions", async (request): Promise<Page<VersionEntry>> => {
       const { id } = idParams.parse(request.params);
+      const parsed = pageQuery.safeParse(request.query);
+      if (!parsed.success) throw badListQuery();
+      const q = parsed.data;
       const site = await loadSite(id);
-      const versions = await prisma.version.findMany({ where: { siteId: id }, orderBy: { number: "desc" } });
-      const numbers = new Map(versions.map((v) => [v.id, v.number]));
-      return versions.map((v) => ({
+      const [total, versions] = await Promise.all([
+        prisma.version.count({ where: { siteId: id } }),
+        prisma.version.findMany({ where: { siteId: id }, orderBy: [{ number: "desc" }, { id: "desc" }], ...skipTake(q) }),
+      ]);
+      // Numéro des versions d'origine (republication), même hors de la page affichée.
+      const sourceIds = [...new Set(versions.map((v) => v.sourceVersionId).filter((v): v is string => !!v))];
+      const sources = sourceIds.length ? await prisma.version.findMany({ where: { id: { in: sourceIds } }, select: { id: true, number: true } }) : [];
+      const numbers = new Map(sources.map((v) => [v.id, v.number]));
+      const items: VersionEntry[] = versions.map((v) => ({
         id: v.id,
         number: v.number,
         note: v.note,
@@ -233,6 +243,7 @@ export function sitesRoutes(services: Services): FastifyPluginAsync {
         publishedAt: v.publishedAt?.toISOString() ?? null,
         current: v.id === site.currentVersionId,
       }));
+      return pageOf(items, total, q);
     });
 
     app.post("/api/sites/:id/versions/:vid/publish", async (request) => {

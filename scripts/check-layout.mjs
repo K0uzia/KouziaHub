@@ -93,6 +93,8 @@ const screens = [
   { name: "surveillance", path: "/surveillance", content: "#contenu > .page-frame" },
   ...(target ? [{ name: "surveillance : adresse", path: `/surveillance/${target.id}`, content: "#contenu > .page-frame" }] : []),
   { name: "réglages", path: "/reglages", content: "#contenu > .page-frame" },
+  { name: "journal", path: "/reglages/journal?page=2", content: "#contenu > .page-frame" },
+  { name: "incidents", path: "/surveillance/incidents", content: "#contenu > .page-frame" },
 ];
 if (!site) console.warn("Aucun site : fiche et export non contrôlés.");
 

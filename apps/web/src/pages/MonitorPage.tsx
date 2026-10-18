@@ -12,7 +12,7 @@ import {
   faPlus,
   faTriangleExclamation,
 } from "@fortawesome/free-solid-svg-icons";
-import type { CloudflareZoneSuggestion, MonitorOverview, MonitorTargetEntry } from "@hub/contract";
+import type { CloudflareZoneSuggestion, MonitorIncidentEntry, MonitorOverview, MonitorTargetEntry, Page } from "@hub/contract";
 import { api, errorMessage } from "@/lib/api";
 import { formatAgo, formatDateTime, plural } from "@/lib/format";
 import { byGravity, EXPIRY_WARN_DAYS, formatDuration, formatSince, formatUptime, soonestExpiry, VERDICT } from "@/lib/monitor";
@@ -31,7 +31,7 @@ const OK = { icon: faCircleCheck, ink: "text-[var(--success)]" };
 const WARN = { icon: faTriangleExclamation, ink: "text-[var(--warning)]" };
 const INFO = { icon: faCircleInfo, ink: "text-[var(--info)]" };
 
-/** Incidents montrés dans la tuile ; les autres restent sur la fiche de chaque adresse. */
+/** Incidents montrés dans la tuile ; la liste complète est sur /surveillance/incidents. */
 const INCIDENTS_SHOWN = 5;
 
 function HealthRow({ label, icon, ink, tip, children }: { label: string; icon: IconDefinition; ink: string; tip?: GlossaryKey; children: ReactNode }) {
@@ -50,6 +50,8 @@ function HealthRow({ label, icon, ink, tip, children }: { label: string; icon: I
 export function MonitorPage() {
   useTitle("Surveillance");
   const overview = useResource<MonitorOverview>("/api/monitor");
+  // Derniers incidents seulement : la liste complète est paginée sur sa page.
+  const recent = useResource<Page<MonitorIncidentEntry>>(`/api/monitor/incidents?pageSize=${INCIDENTS_SHOWN}`, null, { keepData: true });
   const zones = useResource<{ available: boolean; zones: CloudflareZoneSuggestion[] }>("/api/monitor/zones");
   const [addOpen, setAddOpen] = useState(false);
   const [watching, setWatching] = useState<string | null>(null);
@@ -193,12 +195,20 @@ export function MonitorPage() {
             </Tile>
 
             <Tile title="Incidents récents" level={2} tip="incident">
-              {o.recentIncidents.length === 0 ? (
-                <p className="text-sm text-[var(--muted)]">Aucun incident récent.</p>
+              {recent.error && !recent.data ? (
+                <Banner level="error" action={<Button variant="ghost" onClick={() => void recent.reload()}>Réessayer</Button>}>
+                  {recent.error}
+                </Banner>
+              ) : !recent.data ? (
+                <p role="status" className="text-sm text-[var(--muted)]">
+                  Lecture des incidents…
+                </p>
+              ) : recent.data.total === 0 ? (
+                <p className="text-sm text-[var(--muted)]">Aucun incident enregistré.</p>
               ) : (
                 <>
                   <ul className="divide-y divide-[var(--border)]">
-                    {o.recentIncidents.slice(0, INCIDENTS_SHOWN).map((i) => (
+                    {recent.data.items.map((i) => (
                       <li key={i.id} className="py-1.5 text-sm first:pt-0 last:pb-0">
                         <Link to={`/surveillance/${i.targetId}`} className="link inline-flex min-h-6 items-center font-medium break-words">
                           {i.targetLabel}
@@ -210,11 +220,9 @@ export function MonitorPage() {
                       </li>
                     ))}
                   </ul>
-                  {o.recentIncidents.length > INCIDENTS_SHOWN ? (
-                    <p className="text-xs text-[var(--muted)]">
-                      Et {o.recentIncidents.length - INCIDENTS_SHOWN} de plus, sur la fiche de chaque adresse.
-                    </p>
-                  ) : null}
+                  <Link to="/surveillance/incidents" className="link inline-flex min-h-11 items-center self-start text-sm font-medium">
+                    {recent.data.total > INCIDENTS_SHOWN ? `Tous les incidents (${recent.data.total})` : "Tous les incidents"}
+                  </Link>
                 </>
               )}
             </Tile>
