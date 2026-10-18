@@ -3,7 +3,8 @@ import type { SiteSummary } from "@hub/contract";
 import { formatAgo, formatDateTime } from "@/lib/format";
 import { OwnerLabel, StateBadge } from "@/components/sites/StateBadge";
 import { SiteThumb } from "@/components/sites/SiteThumb";
-import { MonitorBadge } from "@/components/monitor/MonitorBadge";
+import { ExpiryBadge } from "@/components/monitor/MonitorBadge";
+import { isDown } from "@/lib/sites";
 
 /**
  * Carte du catalogue : la carte entière mène à la fiche (lien étiré depuis le titre, nom accessible court),
@@ -13,7 +14,7 @@ export function SiteCard({ site, headingLevel = 3 }: { site: SiteSummary; headin
   const Heading = headingLevel === 2 ? "h2" : "h3";
   const version = site.currentVersion;
   return (
-    <article className="site-card group" data-down={site.monitor?.verdict === "down" || undefined}>
+    <article className="site-card group" data-down={isDown(site) || undefined}>
       <SiteThumb src={site.thumbnailUrl} className="rounded-t-[calc(var(--radius-lg)-1px)]" />
       <div className="flex min-w-0 flex-1 flex-col gap-2 p-4">
         <div className="flex min-w-0 items-start justify-between gap-3">
@@ -29,10 +30,11 @@ export function SiteCard({ site, headingLevel = 3 }: { site: SiteSummary; headin
             <OwnerLabel site={site} />
           </div>
         )}
+        {/* Un seul état (panne, erreur, création, hors ligne, en ligne) ; l'échéance proche reste à côté, en petit. */}
         <div className="flex flex-wrap items-center gap-2">
           <StateBadge site={site} />
+          <ExpiryBadge monitor={site.monitor} />
         </div>
-        <MonitorBadge monitor={site.monitor} />
         <p className="truncate font-mono text-sm text-[var(--muted)]" title={site.hostname}>
           {site.hostname}
         </p>

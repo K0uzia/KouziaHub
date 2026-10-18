@@ -6,7 +6,7 @@ import {
   faHouseSignal,
   faTriangleExclamation,
 } from "@fortawesome/free-solid-svg-icons";
-import type { MonitorHistoryPoint, MonitorTargetEntry, MonitorVerdict, SiteMonitorBadge } from "@hub/contract";
+import type { MonitorHistoryPoint, MonitorTargetEntry, MonitorVerdict } from "@hub/contract";
 import type { BadgeTone } from "@/components/ui/Card";
 import { formatDecimal, frenchSpaces } from "@/lib/format";
 
@@ -63,15 +63,6 @@ export function basisLabel(basis: Array<"hub" | "edge">): string {
   if (edge) return "vu par Cloudflare seul";
   if (hub) return "vu par le hub seul";
   return "aucun point de contrôle n'a encore répondu";
-}
-
-/** Libellé court du badge d'un site (catalogue). */
-export function badgeLook(badge: SiteMonitorBadge | null): { label: string; icon: IconDefinition; tone: BadgeTone } {
-  if (!badge || badge.watched === 0) return { label: "Non surveillé", icon: faCircleQuestion, tone: "neutral" };
-  if (badge.verdict === "down" && badge.openIncidentSince)
-    return { label: `Panne depuis ${formatSince(badge.openIncidentSince)}`, icon: VERDICT.down.icon, tone: "red" };
-  const v = VERDICT[badge.verdict];
-  return { label: v.short, icon: v.icon, tone: v.tone };
 }
 
 /** Plus petit nombre de jours restants (certificat ou domaine), pour l'avertissement d'échéance. */

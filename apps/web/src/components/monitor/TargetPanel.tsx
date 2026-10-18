@@ -5,7 +5,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faArrowUpRightFromSquare, faFilePdf, faRotateRight } from "@fortawesome/free-solid-svg-icons";
 import type { MonitorTargetDetail, MonitorTargetEntry } from "@hub/contract";
 import { api, errorMessage } from "@/lib/api";
-import { formatAgo, formatBytes, formatDate, formatDateTime, formatDecimal } from "@/lib/format";
+import { formatAgo, formatBytes, formatDate, formatDateTime, formatDecimal, plural } from "@/lib/format";
 import {
   basisLabel,
   EXPIRY_WARN_DAYS,
@@ -77,12 +77,12 @@ function Value({ main, detail, tone }: { main: ReactNode; detail?: ReactNode; to
 /** Mesure de vitesse : sigle, explication et valeur. */
 function Metric({ label, tip, value }: { label: string; tip: GlossaryKey; value: string }) {
   return (
-    <div className="min-w-0">
+    <div className="flex min-h-6 min-w-0 flex-wrap items-center justify-between gap-x-2">
       <dt className="flex items-center gap-0.5 text-xs text-[var(--muted)]">
         {label}
         <Explain k={tip} />
       </dt>
-      <dd className="tile-value">{value}</dd>
+      <dd className="text-sm font-semibold text-[var(--text)]">{value}</dd>
     </div>
   );
 }
@@ -254,19 +254,76 @@ export function TargetPanel({
           )}
         </section>
 
-        <Tile title="Disponibilité" level={sub} tip="uptime" span={2}>
-          {t.enabled ? (
-            <dl className="flex flex-wrap gap-x-6 gap-y-1">
-              <div className="flex items-baseline gap-2">
-                <dt className="text-xs text-[var(--muted)]">24 h</dt>
-                <dd className="tile-value">{formatUptime(t.uptime24h) ?? "pas assez de données"}</dd>
-              </div>
-              <div className="flex items-baseline gap-2">
-                <dt className="text-xs text-[var(--muted)]">30 jours</dt>
-                <dd className="tile-value">{formatUptime(t.uptime30d) ?? "pas assez de données"}</dd>
-              </div>
-            </dl>
-          ) : null}
+        {t.enabled ? (
+          // Tuiles chiffrées courtes : deux par ligne au téléphone (150 px au moins chacune), quatre au bureau.
+          <div className="bento-compact">
+            <Tile title="Disponibilité" level={sub} tip="uptime">
+              <dl className="space-y-0.5">
+                <div className="flex flex-wrap items-baseline justify-between gap-x-2">
+                  <dt className="text-xs text-[var(--muted)]">30 jours</dt>
+                  <dd className="tile-value">{formatUptime(t.uptime30d) ?? "trop tôt"}</dd>
+                </div>
+                <div className="flex flex-wrap items-baseline justify-between gap-x-2">
+                  <dt className="text-xs text-[var(--muted)]">24 h</dt>
+                  <dd className="tile-value">{formatUptime(t.uptime24h) ?? "trop tôt"}</dd>
+                </div>
+              </dl>
+            </Tile>
+
+            <Tile title="Certificat" level={sub} tip="tls" tone={certTone}>
+              {!t.certificate ? (
+                <p className="text-sm text-[var(--muted)]">Pas encore contrôlé.</p>
+              ) : !t.certificate.ok ? (
+                <Value main="Invalide" detail={t.certificate.error ?? undefined} tone="bad" />
+              ) : (
+                <Value
+                  main={plural(t.certificate.daysLeft, "jour", "jours")}
+                  detail={sentence([`fin le ${formatDate(t.certificate.validTo)}`, t.certificate.issuer])}
+                  tone={certTone}
+                />
+              )}
+            </Tile>
+
+            <Tile title="Domaine" level={sub} tip="rdap" tone={domainTone}>
+              {!t.domainExpiry ? (
+                <p className="text-sm text-[var(--muted)]">Pas encore contrôlé.</p>
+              ) : t.domainExpiry.expiresAt ? (
+                <Value
+                  main={t.domainExpiry.daysLeft != null ? plural(t.domainExpiry.daysLeft, "jour", "jours") : formatDate(t.domainExpiry.expiresAt)}
+                  detail={sentence([`fin le ${formatDate(t.domainExpiry.expiresAt)}`, t.domainExpiry.registrar])}
+                  tone={domainTone}
+                />
+              ) : (
+                <Value main="Inconnue" detail="Le registre ne publie pas l'échéance." />
+              )}
+            </Tile>
+
+            <Tile title="Vitesse (téléphone)" level={sub} tip="speed">
+              {!t.speed ? (
+                <p className="text-sm text-[var(--muted)]">Pas encore mesurée (une mesure par semaine).</p>
+              ) : t.speed.ttfbMs == null && t.speed.lcpMs == null ? (
+                <Value main="Impossible" detail={`Accueil injoignable, essai ${formatAgo(t.speed.measuredAt)}.`} />
+              ) : (
+                <>
+                  <dl className="space-y-0.5">
+                    <Metric label="TTFB" tip="ttfb" value={formatMs(t.speed.ttfbMs)} />
+                    <Metric label="LCP" tip="lcp" value={formatMs(t.speed.lcpMs)} />
+                    <Metric label="CLS" tip="cls" value={t.speed.cls != null ? formatDecimal(t.speed.cls, 2) : "inconnu"} />
+                  </dl>
+                  <p className="text-xs text-[var(--muted)]">
+                    {sentence([
+                      t.speed.requests != null ? `${t.speed.requests} requêtes` : null,
+                      t.speed.bytes != null ? formatBytes(t.speed.bytes) : null,
+                      `mesurée ${formatAgo(t.speed.measuredAt)}`,
+                    ])}
+                  </p>
+                </>
+              )}
+            </Tile>
+          </div>
+        ) : null}
+
+        <Tile title="Historique sur 30 jours" level={sub} tip="bars" span={2}>
           {historyState === "error" ? (
             <Banner level="error" action={<Button variant="ghost" onClick={() => void detail.reload()}>Réessayer</Button>}>
               {detail.error}
@@ -280,34 +337,6 @@ export function TargetPanel({
 
         {t.enabled ? (
           <>
-            <Tile title="Certificat" level={sub} tip="tls" tone={certTone}>
-              {!t.certificate ? (
-                <p className="text-sm text-[var(--muted)]">Pas encore contrôlé.</p>
-              ) : !t.certificate.ok ? (
-                <Value main="Invalide" detail={t.certificate.error ?? undefined} tone="bad" />
-              ) : (
-                <Value
-                  main={`Expire le ${formatDate(t.certificate.validTo)}`}
-                  detail={sentence([`dans ${t.certificate.daysLeft} jours`, t.certificate.issuer])}
-                  tone={certTone}
-                />
-              )}
-            </Tile>
-
-            <Tile title="Domaine" level={sub} tip="rdap" tone={domainTone}>
-              {!t.domainExpiry ? (
-                <p className="text-sm text-[var(--muted)]">Pas encore contrôlé.</p>
-              ) : t.domainExpiry.expiresAt ? (
-                <Value
-                  main={`Expire le ${formatDate(t.domainExpiry.expiresAt)}`}
-                  detail={sentence([t.domainExpiry.daysLeft != null ? `dans ${t.domainExpiry.daysLeft} jours` : null, t.domainExpiry.registrar])}
-                  tone={domainTone}
-                />
-              ) : (
-                <Value main="Échéance inconnue" detail="Le registre ne la publie pas." />
-              )}
-            </Tile>
-
             <Tile title="DNS" level={sub} tip="dns" tone={dnsTone}>
               {!t.dns ? (
                 <p className="text-sm text-[var(--muted)]">Pas encore contrôlé.</p>
@@ -336,29 +365,6 @@ export function TargetPanel({
                 <Value main="Contrôle impossible" tone="warn" />
               )}
               {!t.content || t.content.status === "changed" || t.content.status === "no_reference" ? acceptButton("content") : null}
-            </Tile>
-
-            <Tile title="Vitesse (téléphone)" level={sub} tip="speed" span="pair">
-              {!t.speed ? (
-                <p className="text-sm text-[var(--muted)]">Pas encore mesurée (une mesure par semaine).</p>
-              ) : t.speed.ttfbMs == null && t.speed.lcpMs == null ? (
-                <Value main="Mesure impossible" detail={`Accueil injoignable, essai ${formatAgo(t.speed.measuredAt)}.`} />
-              ) : (
-                <>
-                  <dl className="grid grid-cols-3 gap-2">
-                    <Metric label="TTFB" tip="ttfb" value={formatMs(t.speed.ttfbMs)} />
-                    <Metric label="LCP" tip="lcp" value={formatMs(t.speed.lcpMs)} />
-                    <Metric label="CLS" tip="cls" value={t.speed.cls != null ? formatDecimal(t.speed.cls, 2) : "inconnu"} />
-                  </dl>
-                  <p className="text-xs text-[var(--muted)]">
-                    {sentence([
-                      t.speed.requests != null ? `${t.speed.requests} requêtes` : null,
-                      t.speed.bytes != null ? formatBytes(t.speed.bytes) : null,
-                      `mesurée ${formatAgo(t.speed.measuredAt)}`,
-                    ])}
-                  </p>
-                </>
-              )}
             </Tile>
           </>
         ) : null}

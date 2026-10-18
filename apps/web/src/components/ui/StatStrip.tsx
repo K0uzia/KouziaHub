@@ -35,6 +35,7 @@ const denseCols: Record<number, string> = {
   3: "max-sm:grid-cols-3",
   4: "max-sm:grid-cols-4",
   5: "max-lg:grid-cols-5",
+  6: "max-sm:grid-cols-3",
 };
 
 /** Dernière case d'un nombre impair : elle comble la ligne (2, 3 puis 4 colonnes), sans case vide. */

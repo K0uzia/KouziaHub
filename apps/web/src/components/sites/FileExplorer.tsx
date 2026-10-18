@@ -474,13 +474,14 @@ export function FilesTab({
                           <FontAwesomeIcon icon={faFile} className="h-4 w-4 shrink-0 text-[var(--muted)]" aria-hidden />
                           <span className="min-w-0 break-all">{entry.name}</span>
                           <span className="sr-only">, télécharger</span>
-                          {entry.path === site.serverConfig.path && site.serverConfig.status !== "missing" ? (
-                            <Badge tone={site.serverConfig.status === "generated" ? "green" : "amber"}>
-                              {site.serverConfig.status === "generated" ? "généré" : "modifié"}
-                            </Badge>
-                          ) : null}
                         </a>
                       )}
+                      {/* Hors du lien : il ne rétrécit plus le nom et ne s'ajoute plus au nom du lien ; passe à la ligne si la place manque. */}
+                      {entry.type !== "folder" && entry.path === site.serverConfig.path && site.serverConfig.status !== "missing" ? (
+                        <Badge tone={site.serverConfig.status === "generated" ? "green" : "amber"} className="ml-2 align-middle">
+                          {site.serverConfig.status === "generated" ? "généré" : "modifié"}
+                        </Badge>
+                      ) : null}
                       <p className="text-xs text-[var(--muted)] sm:hidden">
                         {entry.type === "folder" ? `${plural(entry.count, "fichier", "fichiers")}, ` : ""}
                         {formatBytes(entry.size)}, {formatDate(entry.updatedAt)}

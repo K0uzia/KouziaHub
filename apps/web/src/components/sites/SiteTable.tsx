@@ -2,7 +2,7 @@ import { Link } from "react-router-dom";
 import type { SiteSummary } from "@hub/contract";
 import { formatAgo, formatDateTime } from "@/lib/format";
 import { OwnerLabel, StateBadge } from "@/components/sites/StateBadge";
-import { MonitorBadge } from "@/components/monitor/MonitorBadge";
+import { MonitorDetails } from "@/components/monitor/MonitorBadge";
 
 /** Vue liste du catalogue : tableau natif (cartes empilées sous 768 px), pour chercher et comparer. */
 export function SiteTable({ sites }: { sites: SiteSummary[] }) {
@@ -38,7 +38,7 @@ export function SiteTable({ sites }: { sites: SiteSummary[] }) {
                 <StateBadge site={site} />
               </td>
               <td data-label="Surveillance" className="wrap">
-                <MonitorBadge monitor={site.monitor} withUptime />
+                <MonitorDetails monitor={site.monitor} />
               </td>
               <td data-label="Version servie" className="nowrap">
                 {site.currentVersion ? (
