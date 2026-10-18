@@ -39,7 +39,10 @@ export function registerErrorHandler(app: {
       return;
     }
     if (error instanceof HttpError) {
-      void reply.code(error.statusCode).send({ error: error.message, ...(error.code ? { code: error.code } : {}) });
+      const field = (error as { field?: unknown }).field;
+      void reply
+        .code(error.statusCode)
+        .send({ error: error.message, ...(error.code ? { code: error.code } : {}), ...(typeof field === "string" ? { field } : {}) });
       return;
     }
     const code = (error as { code?: string }).code;
