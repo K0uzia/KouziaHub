@@ -67,12 +67,27 @@ export function errorMessage(error: unknown, fallback = "L'action a échoué. R�
 export function upload<T>(
   path: string,
   form: FormData,
-  { onProgress, signal }: { onProgress?: (fraction: number) => void; signal?: AbortSignal } = {},
+  options: { onProgress?: (fraction: number) => void; signal?: AbortSignal } = {},
+): Promise<T> {
+  return xhrSend<T>("POST", path, form, options);
+}
+
+/** Envoi avec progression (POST multipart, PUT d'un morceau brut). */
+export function xhrSend<T>(
+  method: "POST" | "PUT",
+  path: string,
+  body: XMLHttpRequestBodyInit,
+  { onProgress, signal, headers }: { onProgress?: (fraction: number) => void; signal?: AbortSignal; headers?: Record<string, string> } = {},
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(Object.assign(new Error("Envoi annulé."), { name: "AbortError" }));
+      return;
+    }
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", path);
+    xhr.open(method, path);
     xhr.withCredentials = true;
+    for (const [k, v] of Object.entries(headers ?? {})) xhr.setRequestHeader(k, v);
     xhr.responseType = "text";
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total);
@@ -95,7 +110,7 @@ export function upload<T>(
     xhr.onerror = () => reject(makeError("L'envoi a été interrompu. Vérifiez la connexion puis réessayez.", 0));
     xhr.onabort = () => reject(Object.assign(new Error("Envoi annulé."), { name: "AbortError" }));
     signal?.addEventListener("abort", () => xhr.abort(), { once: true });
-    xhr.send(form);
+    xhr.send(body);
   });
 }
 
@@ -105,7 +120,7 @@ export function statusMessage(status: number): string {
   if (status === 403) return "Action non autorisée.";
   if (status === 404) return "Élément introuvable.";
   if (status === 409) return "Action impossible dans l'état actuel. Rechargez la page.";
-  if (status === 413) return "Fichier trop volumineux.";
+  if (status === 413) return "Envoi trop lourd pour une seule requête (100 Mo au plus par le tunnel). Rechargez la page : l'interface envoie les gros envois par morceaux.";
   if (status === 429) return "Trop de requêtes. Patientez un instant puis réessayez.";
   if (status === 502 || status === 503 || status === 504) return "Le hub ne répond pas. Réessayez dans un instant.";
   if (status >= 500) return "Erreur du serveur. Réessayez ; si le problème revient, notez l'action concernée.";

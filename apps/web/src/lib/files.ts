@@ -1,4 +1,5 @@
 import type { WorkingFileEntry } from "@hub/contract";
+import { checkSitePath, fileTooBigReason } from "@hub/site-paths";
 
 export type DirEntry =
   | { type: "folder"; name: string; path: string; size: number; count: number; updatedAt: string }
@@ -81,43 +82,66 @@ async function walk(entry: FileSystemEntry, base: string, out: PickedFile[]): Pr
   }
 }
 
-/** Fichiers par requête d'envoi (plafond du serveur : 1 000). */
-export const FILES_PER_REQUEST = 1000;
-/** Poids cumulé par requête : sous les 100 Mo du tunnel Cloudflare gratuit, marge pour l'enveloppe multipart. */
-export const BYTES_PER_REQUEST = 90 * 1024 * 1024;
+export type ExcludedFile = { path: string; size: number; reason: string };
 
-export function batchSize(batch: PickedFile[]): number {
-  return batch.reduce((n, p) => n + p.file.size, 0);
-}
+/** Groupe d'écartés de même raison (ex. « Dossier node_modules refusé… », 17 107 fichiers). */
+export type ExcludedGroup = { reason: string; count: number; bytes: number; examples: string[] };
+
+/** Dossier de projet reconnu : package.json à la racine et un dossier de sortie avec index.html. */
+export type ProjectHint = { root: string; output: string; files: PickedFile[]; bytes: number };
+
+export type PreparedSelection = {
+  /** À envoyer : ni dossier de développement, ni chemin interdit, ni fichier au-delà de la limite. */
+  send: PickedFile[];
+  excluded: ExcludedFile[];
+  groups: ExcludedGroup[];
+  project: ProjectHint | null;
+};
+
+const OUTPUT_DIRS = ["dist", "build", "out"];
 
 /**
- * Découpe un envoi en requêtes (nombre de fichiers et poids cumulé) ; un fichier au-dessus du plafond
- * par fichier est écarté d'emblée, avec sa raison (il serait refusé après un envoi inutile).
+ * Tri avant l'envoi, avec les règles du serveur (@hub/site-paths, une seule source) : les dossiers de
+ * développement et les fichiers interdits ne partent jamais ; les fichiers trop lourds sont nommés.
  */
-export function planBatches(
-  picked: PickedFile[],
-  maxFileBytes: number | null,
-): { batches: PickedFile[][]; rejected: { path: string; reason: string }[] } {
-  const batches: PickedFile[][] = [];
-  const rejected: { path: string; reason: string }[] = [];
-  let current: PickedFile[] = [];
-  let bytes = 0;
-  const cap = Math.min(maxFileBytes ?? BYTES_PER_REQUEST, BYTES_PER_REQUEST);
+export function prepareSelection(picked: PickedFile[], maxFileBytes: number | null): PreparedSelection {
+  const send: PickedFile[] = [];
+  const excluded: ExcludedFile[] = [];
   for (const p of picked) {
-    if (p.file.size > cap) {
-      rejected.push({ path: p.path, reason: `Fichier de plus de ${Math.round(cap / (1024 * 1024))} Mo.` });
-      continue;
-    }
-    if (current.length >= FILES_PER_REQUEST || (current.length > 0 && bytes + p.file.size > BYTES_PER_REQUEST)) {
-      batches.push(current);
-      current = [];
-      bytes = 0;
-    }
-    current.push(p);
-    bytes += p.file.size;
+    const { verdict } = checkSitePath(p.path);
+    if (verdict.action !== "accept") excluded.push({ path: p.path, size: p.file.size, reason: verdict.reason });
+    else if (maxFileBytes != null && p.file.size > maxFileBytes) excluded.push({ path: p.path, size: p.file.size, reason: fileTooBigReason(p.file.size) });
+    else send.push(p);
   }
-  if (current.length) batches.push(current);
-  return { batches, rejected };
+  const byReason = new Map<string, ExcludedGroup>();
+  for (const e of excluded) {
+    // Fichiers trop lourds : un groupe par fichier (nom et taille toujours visibles).
+    const key = e.reason.startsWith("Fichier de ") ? `${e.reason}|${e.path}` : e.reason;
+    const g = byReason.get(key) ?? { reason: e.reason, count: 0, bytes: 0, examples: [] };
+    g.count++;
+    g.bytes += e.size;
+    if (g.examples.length < 3) g.examples.push(e.path);
+    byReason.set(key, g);
+  }
+  const groups = [...byReason.values()].sort((a, b) => b.count - a.count);
+  return { send, excluded, groups, project: detectProject(send) };
+}
+
+function detectProject(files: PickedFile[]): ProjectHint | null {
+  const paths = new Set(files.map((f) => f.path));
+  const tops = new Set(files.map((f) => (f.path.includes("/") ? f.path.split("/")[0]! : "")));
+  // Un seul dossier racine (dossier choisi ou glissé) ou les fichiers du projet à plat.
+  const root = tops.size === 1 && !tops.has("") ? [...tops][0]! : paths.has("package.json") ? "" : null;
+  if (root === null) return null;
+  const prefix = root ? `${root}/` : "";
+  if (!paths.has(`${prefix}package.json`)) return null;
+  for (const out of OUTPUT_DIRS) {
+    if (!paths.has(`${prefix}${out}/index.html`)) continue;
+    const base = `${prefix}${out}/`;
+    const inside = files.filter((f) => f.path.startsWith(base)).map((f) => ({ file: f.file, path: f.path.slice(base.length) }));
+    return { root, output: out, files: inside, bytes: inside.reduce((n, f) => n + f.file.size, 0) };
+  }
+  return null;
 }
 
 /** Fichiers d'un champ « fichier » : chemin relatif gardé pour un envoi de dossier (webkitdirectory). */

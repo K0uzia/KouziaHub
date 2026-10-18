@@ -9,20 +9,21 @@ import { z } from "zod";
 import type { RejectedFile, UploadResult } from "@/contract.js";
 import { audit } from "@/lib/audit.js";
 import { requireAuth } from "@/lib/auth.js";
-import { applyWorkingChanges, CASE_CONFLICT, listFiles, splitCaseConflicts, workingPaths, type FileRef } from "@/lib/files.js";
+import { applyWorkingChanges, CASE_CONFLICT, listFiles, type FileRef } from "@/lib/files.js";
 import { HttpError } from "@/lib/http.js";
 import { idParams } from "@/lib/http-input.js";
-import { MAX_FILE_BYTES, MAX_FILES_PER_UPLOAD, MAX_ZIP_BYTES } from "@/lib/limits.js";
+import { MAX_FILE_BYTES, MAX_FILES_PER_UPLOAD, MAX_PARTS_PER_UPLOAD, MAX_ZIP_BYTES } from "@/lib/limits.js";
+import { importFiles, importZip } from "@/lib/imports.js";
 import { prisma } from "@/lib/prisma.js";
 import type { Services } from "@/lib/services.js";
 import { checkSitePath, normalizeDir, normalizeSitePath } from "@/lib/site-paths.js";
-import { extractZip } from "@/lib/zip.js";
 
 const rawQuery = z.object({ path: z.string().min(1).max(2000) });
 const deleteSchema = z.object({ paths: z.array(z.string().min(1).max(2000)).min(1).max(MAX_FILES_PER_UPLOAD) });
 const moveSchema = z.object({ from: z.string().min(1).max(2000), to: z.string().min(1).max(2000) });
 
 const MIB = 1024 * 1024;
+const TOO_BIG_FILE = `Fichier de plus de ${MAX_FILE_BYTES / MIB} Mio, la limite de Cloudflare Pages par fichier : réduisez-le ou retirez-le.`;
 
 async function loadSite(id: string) {
   const site = await prisma.site.findUnique({ where: { id } });
@@ -85,7 +86,7 @@ export function filesRoutes(services: Services): FastifyPluginAsync {
       // preservePath : busboy garde les sous-dossiers du nom de fichier (envoi de dossier).
       const options = {
         preservePath: true,
-        limits: { fileSize: MAX_FILE_BYTES, files: MAX_FILES_PER_UPLOAD, fields: 10 },
+        limits: { fileSize: MAX_FILE_BYTES, files: MAX_FILES_PER_UPLOAD, parts: MAX_PARTS_PER_UPLOAD, fields: 10 },
         throwFileSizeLimit: false,
       };
       const parts = request.parts(options);
@@ -110,18 +111,12 @@ export function filesRoutes(services: Services): FastifyPluginAsync {
         }
         const blob = await services.blobs.putStream(part.file, MAX_FILE_BYTES);
         if (part.file.truncated) {
-          rejected.push({ path: target, reason: `Fichier de plus de ${MAX_FILE_BYTES / MIB} Mio.` });
+          rejected.push({ path: target, reason: TOO_BIG_FILE });
           continue;
         }
         stored.set(target, { path: target, ...blob });
       }
-      const { kept, rejected: conflicts } = splitCaseConflicts([...stored.values()], await workingPaths(id));
-      rejected.push(...conflicts);
-      if (kept.length > 0) {
-        await applyWorkingChanges(id, { upserts: kept });
-        await audit({ action: "files.upload", result: "ok", siteId: id, siteSlug: site.slug, detail: `${kept.length} fichier(s)` });
-      }
-      return { accepted: kept.map((f) => f.path), rejected, files: await listFiles(id) };
+      return importFiles(site, [...stored.values()], rejected);
     });
 
     app.post("/api/sites/:id/files/delete", async (request) => {
@@ -189,6 +184,7 @@ export function filesRoutes(services: Services): FastifyPluginAsync {
       const zipPath = path.join(tmpDir, `${randomBytes(12).toString("hex")}.zip`);
       let mode: string | null = null;
       let received = false;
+      let imported = false;
       try {
         const options = { limits: { fileSize: MAX_ZIP_BYTES, files: 1, fields: 5 }, throwFileSizeLimit: false };
         const parts = request.parts(options);
@@ -202,37 +198,18 @@ export function filesRoutes(services: Services): FastifyPluginAsync {
             continue;
           }
           await pipeline(part.file, createWriteStream(zipPath));
-          if (part.file.truncated) throw new HttpError(413, `Archive trop lourde : ${MAX_ZIP_BYTES / MIB} Mio au plus.`);
+          if (part.file.truncated)
+            throw new HttpError(413, `Archive trop lourde pour un envoi direct : ${MAX_ZIP_BYTES / MIB} Mio au plus. Rechargez la page : l'interface l'envoie par morceaux.`, "body_too_large");
           received = true;
         }
         if (!received) throw new HttpError(400, "Fichier zip attendu.");
         if (mode !== "replace" && mode !== "merge") throw new HttpError(400, "Champ « mode » attendu : replace ou merge.");
 
-        const extraction = await extractZip(zipPath, services.blobs);
-        if (mode === "merge") {
-          const { kept, rejected: conflicts } = splitCaseConflicts(extraction.accepted, await workingPaths(id));
-          extraction.accepted = kept;
-          extraction.rejected.push(...conflicts);
-        }
-        if (extraction.accepted.length > 0) {
-          await applyWorkingChanges(id, { upserts: extraction.accepted, replaceAll: mode === "replace" });
-          await audit({
-            action: "files.zip",
-            result: "ok",
-            siteId: id,
-            siteSlug: site.slug,
-            detail: `${extraction.accepted.length} fichier(s), mode ${mode}`,
-          });
-          if (mode === "replace") void services.blobs.gc().catch(() => undefined);
-        }
-        return {
-          accepted: extraction.accepted.map((f) => f.path),
-          rejected: extraction.rejected,
-          strippedRoot: extraction.strippedRoot,
-          files: await listFiles(id),
-        };
+        imported = true;
+        return await importZip(services, site, zipPath, mode);
       } catch (err) {
-        if (err instanceof HttpError) {
+        // Erreurs de l'extraction déjà journalisées par importZip.
+        if (err instanceof HttpError && !imported) {
           await audit({ action: "files.zip", result: "error", siteId: id, siteSlug: site.slug, detail: err.message });
         }
         throw err;
