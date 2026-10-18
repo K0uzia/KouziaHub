@@ -243,7 +243,7 @@ export async function buildReportView(target: MonitorTarget, month: string, now 
     } else if (certUntil) {
       certificate = [
         `Certificat de sécurité (le cadenas) valable jusqu'au ${frDayYear(certUntil)}.`,
-        certDays !== null && certDays <= 30 ? `Plus que ${plural(Math.max(0, certDays), "jour", "jours")} : Kouzia s'en occupe.` : "Kouzia est prévenu 30 jours avant cette date.",
+        certDays !== null && certDays <= 30 ? `Plus que ${plural(Math.max(0, certDays), "jour", "jours")} avant son renouvellement.` : "Kouzia est prévenu 30 jours avant cette date.",
       ];
     }
   }
@@ -527,6 +527,7 @@ function Lines({ lines }: { lines: string[] }) {
 
 function ReportDocument({ v }: { v: ReportView }) {
   const hasNoData = v.days.includes("nodata");
+  const hasIncidentDay = v.days.includes("incident");
   // Mois avec coupures : le tableau prend de la place, les marges se resserrent pour tenir sur une page.
   const dense = v.incidentRows.length > 0;
   return (
@@ -573,10 +574,12 @@ function ReportDocument({ v }: { v: ReportView }) {
                     <LegendSwatch status="ok" />
                     <Text>Accessible toute la journée</Text>
                   </View>
-                  <View style={s.legendItem}>
-                    <LegendSwatch status="incident" />
-                    <Text>Jour avec coupure (repère au-dessus)</Text>
-                  </View>
+                  {hasIncidentDay ? (
+                    <View style={s.legendItem}>
+                      <LegendSwatch status="incident" />
+                      <Text>Jour avec coupure (repère au-dessus)</Text>
+                    </View>
+                  ) : null}
                   {hasNoData ? (
                     <View style={s.legendItem}>
                       <LegendSwatch status="nodata" />

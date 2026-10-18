@@ -275,12 +275,14 @@ describe("rapport mensuel (PDF)", () => {
     await seedMonth(target, [], { certificateUntil: "2026-11-11T11:00:00.000Z" });
     const view = await buildReportView(target, "2026-10", NOW, CTX);
     expect(view.state).toBe("watch");
-    expect(view.certificate).toEqual(["Certificat de sécurité (le cadenas) valable jusqu'au 11 novembre 2026.", "Plus que 10 jours : Kouzia s'en occupe."]);
+    expect(view.certificate).toEqual(["Certificat de sécurité (le cadenas) valable jusqu'au 11 novembre 2026.", "Plus que 10 jours avant son renouvellement."]);
     const pdf = await renderReportPdf(view);
     expect(pdfPageCount(pdf)).toBe(1);
     const { text } = readPdf(pdf);
     expect(text).toContain("À surveiller");
-    expect(text).toContain(`Plus que 10 jours${NNBSP}: Kouzia s'en occupe.`);
+    expect(text).toContain("Plus que 10 jours avant son renouvellement.");
+    // Aucun jour de coupure : la légende n'explique pas un repère absent.
+    expect(text).not.toContain("Jour avec coupure");
     expectClean(text);
   });
 
