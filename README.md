@@ -93,6 +93,49 @@ Tant que ce lien n'est pas posé, le hub montre des clients de démonstration (i
 3. Créer un secret partagé une seule fois (`openssl rand -hex 32`) et le poser à l'identique dans le `.env` de l'ERP (`HUB_READ_SECRET`).
 4. Dans le CT du hub : `hubctl secrets erp` : IP du CT de l'ERP (le hub en fait `http://<IP du CT ERP>:3100`), puis le secret (invisible), puis l'adresse `https://erp.kouzia.com` pour le lien vers les fiches.
 
+## Surveillance des sites
+
+Le hub contrôle vos sites toutes les 5 minutes. Une « veille » installée chez Cloudflare les contrôle aussi, même quand la box est coupée. Une panne n'est signalée que si les deux la voient ; si le hub se tait plus de 15 minutes, la veille vous prévient et continue seule. Les alertes arrivent en notification sur le téléphone, rien par e-mail.
+
+### a) Les notifications sur le téléphone
+
+1. Dans le CT : `hubctl push-keys`. Une seule fois : ne jamais le refaire, sinon chaque téléphone devrait se réabonner.
+2. Sur le téléphone Android, dans Chrome, ouvrir `https://hub.kouzia.com`, aller dans Réglages et toucher « Activer sur ce téléphone », puis accepter les notifications. Pas besoin d'installer l'application.
+3. Toujours dans Réglages, envoyer la notification de test : elle doit arriver sur le téléphone.
+
+Sur iPhone, il faudrait d'abord ajouter le hub à l'écran d'accueil.
+
+### b) La veille Cloudflare (jeton de déploiement)
+
+1. Cloudflare > My Profile > API Tokens > Create Token > Custom token.
+2. Nom : `Déploiement veille`. Permissions, ces deux lignes **et rien d'autre** :
+   - Account > Workers Scripts > Edit ;
+   - Account > D1 > Edit.
+3. Account Resources : Include > votre compte seulement. Aucune ligne « Zone ».
+4. Expiration : courte (une semaine par exemple) : ce jeton ne sert qu'au moment du déploiement.
+5. Dans le CT : `hubctl veille deploy`, puis coller le jeton (rien ne s'affiche). Il n'est gardé nulle part : ni dans le `.env`, ni dans les journaux.
+
+Si le message demande de choisir une adresse workers.dev : dans Cloudflare, ouvrir « Workers et Pages » une première fois et accepter le sous-domaine proposé, puis relancer `hubctl veille deploy`.
+
+À refaire avec un nouveau jeton après `hubctl push-keys`, ou quand `hubctl update` annonce que la veille a changé.
+
+### c) Le jeton de lecture des zones (facultatif)
+
+Il permet au hub de vous proposer vos domaines Cloudflare à surveiller ; rien n'est ajouté sans votre accord.
+
+1. Cloudflare > My Profile > API Tokens > Create Token > Custom token.
+2. Permissions, une seule ligne : Zone > Zone > Read. Zone Resources : Include > All zones. Rien d'autre.
+3. Expiration : dans un an.
+4. Dans le CT : `hubctl secrets veille`, puis coller le jeton (invisible).
+
+### d) Les domaines Hostinger
+
+Pas de jeton Hostinger : dans le hub, page Surveillance, ajouter chaque site à la main (son adresse `https://...`, un libellé, et le client de l'ERP si besoin), puis laisser l'interrupteur « Surveillé » allumé.
+
+### e) Chaque mois
+
+Le 1er du mois, le hub prépare le rapport PDF de chaque site surveillé. Le télécharger dans le hub (page Surveillance), puis l'envoyer au client depuis l'ERP avec votre message habituel. Le hub n'envoie rien lui-même.
+
 ## Tous les jours
 
 | Commande | Effet |
@@ -107,6 +150,9 @@ Tant que ce lien n'est pas posé, le hub montre des clients de démonstration (i
 | `hubctl logs erreurs` | Dernières erreurs du hub (aussi `app`, `tunnel`, `sauvegarde`) |
 | `hubctl restart` | Redémarrer le hub |
 | `hubctl 2fa-reset` | Téléphone perdu : coupe la double authentification, puis `hubctl admin` |
+| `hubctl push-keys` | Clés des notifications (une seule fois) |
+| `hubctl veille deploy` | Déployer ou mettre à jour la veille Cloudflare (jeton demandé, jamais gardé) |
+| `hubctl secrets veille` | Jeton de lecture des zones Cloudflare |
 
 Sauvegardes : chaque nuit dans `/var/backup/kouziahub`, les 14 plus récentes sont gardées. Chacune contient la base, les fichiers des sites et le fichier `.env` : elle contient donc des secrets, ne la copiez pas n'importe où. Pour une copie hors du CT, activer la sauvegarde Proxmox du CT (Datacenter > Backup).
 
@@ -122,6 +168,8 @@ make dev     # API http://127.0.0.1:3101 et interface http://localhost:5174
 ```
 
 `make dev-lan` ouvre l'interface au téléphone du réseau local. `make test`, `make typecheck`, `make build`.
+
+Veille Cloudflare : code dans `workers/veille/` (Worker, schéma D1 `schema.sql`, tests). `npm run veille:build` produit `workers/veille/dist/index.js` (non versionné) ; `npm run veille:deploy` déploie depuis le PC comme `hubctl veille deploy`.
 
 Copier le code vers le CT sans passer par GitHub (rsync et ssh nécessaires sur le PC) : `make alpine-deploy HOST=root@<ip-du-ct>` ; état à distance : `make alpine-status HOST=root@<ip-du-ct>`.
 

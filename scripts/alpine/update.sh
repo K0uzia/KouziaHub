@@ -173,5 +173,8 @@ else
 fi
 
 state_set last-update "$(date '+%Y-%m-%d %H:%M') $(current_commit)"
+if env_has MONITOR_WORKER_URL && [ "$(veille_src_hash)" != "$(state_get veille-src)" ]; then
+  warn "La veille Cloudflare a changé dans cette version : la redéployer avec « hubctl veille deploy » (nouveau jeton de déploiement)."
+fi
 ok "Mise à jour terminée : version $(current_commit)."
 echo "  En cas de souci plus tard : « hubctl rollback » remet la version d'avant."
