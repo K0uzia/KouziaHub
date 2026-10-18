@@ -8,8 +8,8 @@ import type { ErpDirectory } from "@/lib/erp/types.js";
 import { prisma } from "@/lib/prisma.js";
 import { availability } from "@/lib/monitor/view.js";
 import { getReportSettings } from "@/lib/report-settings.js";
+import { frNumber, parisMidnight } from "@/lib/fr-format.js";
 import {
-  PARIS,
   STATE_LABEL,
   frDay,
   frDayYear,
@@ -55,29 +55,6 @@ Font.register({
 Font.registerHyphenationCallback((word) => [word]);
 
 export const MONTH_RE = /^(\d{4})-(0[1-9]|1[0-2])$/;
-
-/** Décalage de Paris sur UTC (ms) à un instant donné. */
-function parisOffset(at: number): number {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: PARIS,
-    hourCycle: "h23",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).formatToParts(new Date(at));
-  const v = (t: string) => Number(parts.find((p) => p.type === t)!.value);
-  return Date.UTC(v("year"), v("month") - 1, v("day"), v("hour"), v("minute"), v("second")) - (at - (at % 1000));
-}
-
-/** Minuit à Paris pour une date (mois de 0 à 11 et jour, débordements acceptés). */
-function parisMidnight(year: number, monthIndex: number, day = 1): Date {
-  const guess = Date.UTC(year, monthIndex, day);
-  const first = guess - parisOffset(guess);
-  return new Date(guess - parisOffset(first));
-}
 
 /** Début et fin du mois, au fuseau de Paris. */
 export function monthBounds(month: string): { start: Date; end: Date } {
@@ -135,7 +112,7 @@ export type ReportContext = {
   settings?: ReportSettings | null;
 };
 
-const count = (n: number) => n.toLocaleString("fr-FR").replace(/[  ]/g, " ");
+const count = (n: number) => frNumber(n);
 const plural = (n: number, one: string, many: string) => `${count(n)} ${n > 1 ? many : one}`;
 
 /**

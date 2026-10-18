@@ -192,6 +192,7 @@ Avant de remplacer quoi que ce soit, la restauration fait une copie de l'état a
 ### 4.5 Au quotidien
 
 - `hubctl status` : état du service, santé, migrations, droits des fichiers, réglages (renseigné ou vide, jamais les valeurs), surveillance, disque, dernière sauvegarde, tunnel.
+- Dates et montants en français : `hubctl install` et `hubctl update` posent `icu-data-full` (avec `icu-data-en` seul, Node formate en anglais, « € » avant le montant). Au démarrage, le hub vérifie Intl fr-FR et le fuseau Europe/Paris ; un écart sort dans `hubctl logs erreurs`, dans `/api/health` (champ `intl`) et dans `hubctl status`. Les rapports PDF et les notifications n'en dépendent pas : leurs dates, heures de Paris et nombres sont calculés sans Intl (`apps/api/src/lib/fr-format.ts`).
 - `hubctl logs erreurs` : dernières erreurs du hub (aussi `app`, `tunnel`, `sauvegarde`).
 - Le hub redémarre seul s'il plante (10 fois par minute au plus). Au-delà, `hubctl status` l'indique : lire `hubctl logs erreurs`, puis `hubctl restart`.
 

@@ -100,6 +100,25 @@ require_node_min() {
   fi
 }
 
+# Données ICU complètes : avec icu-data-en seul, Intl fr-FR de Node retombe sur l'anglais (« € » avant
+# le montant, mois en anglais). Idempotent ; icu-data-full remplace icu-data-en.
+ensure_icu_full() {
+  apk info -e icu-data-full >/dev/null 2>&1 && return 0
+  log "Données ICU complètes (dates et montants en français)..."
+  if apk add --no-cache icu-data-full >/dev/null 2>&1; then
+    ok "icu-data-full installé."
+  else
+    warn "icu-data-full introuvable : Intl fr-FR reste en anglais (hubctl status)."
+    return 1
+  fi
+}
+
+# Vrai si le Node du système formate un montant en français et connaît l'heure d'été de Paris.
+intl_fr_ok() {
+  _intl="$(node -p 'new Intl.NumberFormat("fr-FR",{style:"currency",currency:"EUR"}).format(1234.5).replace(/[\u00a0\u202f]/g," ")+"|"+new Intl.DateTimeFormat("en-US",{timeZone:"Europe/Paris",hour:"2-digit",hourCycle:"h23"}).format(Date.UTC(2026,6,15,12))' 2>/dev/null || true)"
+  [ "$_intl" = "1 234,50 €|14" ]
+}
+
 disk_guard() {
   # disk_guard <chemin> <Mo minimum>
   _avail="$(df -Pm "$1" 2>/dev/null | awk 'NR==2 {print $4}')"

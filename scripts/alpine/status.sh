@@ -51,9 +51,18 @@ if BODY="$(curl -4 -fsS --connect-timeout 2 --max-time 5 "$URL" 2>/dev/null)"; t
     *) warn "Réponse inattendue de $URL" ;;
   esac
   PENDING="$(printf '%s' "$BODY" | sed -n 's/.*"pendingMigrations":\([0-9]*\).*/\1/p')"
+  # Auto-contrôle Intl du hub (lib/intl-check.ts) : une ligne par écart.
+  INTL="$(printf '%s' "$BODY" | node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>{try{const i=JSON.parse(s).intl;if(i&&!i.ok)console.log(i.problems.join("\n"))}catch{}})' 2>/dev/null || true)"
 else
   warn "Le hub ne répond pas ($URL). Journal : hubctl logs erreurs"
   PENDING=""
+  INTL=""
+  intl_fr_ok || INTL="Node ne formate pas en français ou ignore l'heure de Paris : hubctl update (icu-data-full)."
+fi
+if [ -n "$INTL" ]; then
+  printf '%s\n' "$INTL" | while IFS= read -r _line; do warn "$_line"; done
+else
+  echo "  Dates et montants en français : données ICU complètes"
 fi
 
 # Migrations : selon le hub s'il répond, sinon comparaison des dossiers et de la base.

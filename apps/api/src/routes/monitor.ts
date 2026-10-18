@@ -7,6 +7,7 @@ import type { CloudflareZoneSuggestion, MonitorIncidentEntry, MonitorOverview, M
 import { audit } from "@/lib/audit.js";
 import { requireAuth } from "@/lib/auth.js";
 import { ERP_CLIENT_ID, ErpUnavailableError } from "@/lib/erp/types.js";
+import { parisMonthKey } from "@/lib/fr-format.js";
 import { HttpError } from "@/lib/http.js";
 import { idParams, routeParam } from "@/lib/http-input.js";
 import { isPrivateHost } from "@/lib/monitor/checks.js";
@@ -263,8 +264,7 @@ export function monitorRoutes(services: Services): FastifyPluginAsync {
       const m = /^(\d{4}-\d{2})\.pdf$/.exec(file);
       if (!m || !MONTH_RE.test(m[1]!)) throw new HttpError(404, "Rapport introuvable.");
       const month = m[1]!;
-      const now = new Date(monitor.now());
-      const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+      const currentMonth = parisMonthKey(monitor.now());
       if (month > currentMonth) throw new HttpError(400, "Mois à venir : pas de rapport.");
       const target = await loadTarget(id);
       const existing = await prisma.monitorReport.findUnique({ where: { targetId_month: { targetId: id, month } } });

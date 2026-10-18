@@ -64,9 +64,10 @@ fi
 # --- Paquets ---
 title "1/6 Paquets du système"
 apk update
+# icu-data-full : Intl fr-FR complet (avec icu-data-en seul, dates et montants sortent en anglais).
 # python3, make, g++ : secours si un module natif (argon2, sharp) doit être compilé.
 apk add --no-cache \
-  nodejs npm git sqlite curl openssl ca-certificates tzdata \
+  nodejs npm git sqlite curl openssl ca-certificates tzdata icu-data-full \
   tar gzip procps logrotate rsync gnupg \
   python3 make g++ linux-headers
 _major="$(node -p "process.versions.node.split('.')[0]" 2>/dev/null || echo 0)"
@@ -76,6 +77,7 @@ if [ "$_major" -lt "$KH_NODE_MIN" ]; then
 fi
 require_node_min
 ok "Node $(node -v), npm $(npm -v)"
+intl_fr_ok || warn "Node ne formate pas encore en français (données ICU) : hubctl status après l'installation."
 
 # --- Compte et dossiers ---
 title "2/6 Compte de service et dossiers"

@@ -10,6 +10,7 @@ import { MAX_FILE_BYTES, MAX_FILES_PER_UPLOAD, MAX_PARTS_PER_UPLOAD } from "@/li
 import { accessConfig, getCookieSecure, getTrustedProxies } from "@/lib/env.js";
 import { registerClientIpHook, trustProxyFn } from "@/lib/client-ip.js";
 import { AccessVerifier, registerAccessGuard } from "@/lib/access.js";
+import { intlProblems } from "@/lib/intl-check.js";
 import { pendingMigrationCount } from "@/lib/migration-check.js";
 import { originGuardPlugin } from "@/plugins/origin-guard.js";
 import { authRoutes } from "@/routes/auth.js";
@@ -136,6 +137,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
             configured: services.monitor.veille.configured,
             lastSeenAt: services.monitor.health.edgeSeenAt ? new Date(services.monitor.health.edgeSeenAt).toISOString() : null,
           },
+          intl: { ok: intlProblems().length === 0, problems: intlProblems() },
         }),
   }));
   app.get("/robots.txt", async (_request, reply) => reply.type("text/plain; charset=utf-8").send(ROBOTS_TXT));

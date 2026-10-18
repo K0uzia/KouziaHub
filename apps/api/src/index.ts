@@ -2,6 +2,7 @@ import { assertSecurityEnv, accessConfig, getApiPort, isProduction } from "@/lib
 import { enableWal, prisma } from "@/lib/prisma.js";
 import { buildApp } from "@/app.js";
 import { createServices, startBackground } from "@/lib/services.js";
+import { intlProblems } from "@/lib/intl-check.js";
 import { checkPendingMigrations, checkPrismaClientUpToDate } from "@/lib/migration-check.js";
 
 // Une promesse rejetée sans gestionnaire ne doit jamais arrêter le hub : on journalise.
@@ -12,6 +13,9 @@ process.on("unhandledRejection", (reason) => {
 async function main() {
   assertSecurityEnv();
   await enableWal();
+
+  // Le hub démarre quand même : les PDF ne lisent pas Intl (fr-format.ts).
+  for (const problem of intlProblems()) console.error(`[boot] ${problem}`);
 
   if (!accessConfig()) console.warn("[boot] vérification Cloudflare Access coupée (dev seulement)");
 

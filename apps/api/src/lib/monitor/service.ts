@@ -4,6 +4,7 @@ import { readdir, rm } from "node:fs/promises";
 import path from "node:path";
 import type { MonitorCheck, MonitorIncident, MonitorTarget, Site } from "@prisma/client";
 import { audit } from "@/lib/audit.js";
+import { frDateNumeric, parisParts } from "@/lib/fr-format.js";
 import {
   decide,
   GROUP_ALERT_THRESHOLD,
@@ -236,10 +237,10 @@ export class MonitorService {
           await this.purge();
           this.lastPurgeAt = now;
         }
-        const date = new Date(now);
-        if (date.getDate() === 1 && this.monthlyReports) {
-          const prev = new Date(date.getFullYear(), date.getMonth() - 1, 1);
-          const key = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, "0")}`;
+        // Mois de Paris, pas celui du fuseau de l'hôte (UTC sur le CT Alpine).
+        const today = parisParts(now);
+        if (today.day === 1 && this.monthlyReports) {
+          const key = today.month === 1 ? `${today.year - 1}-12` : `${today.year}-${String(today.month - 1).padStart(2, "0")}`;
           if (this.lastMonthlyKey !== key) {
             this.lastMonthlyKey = key;
             await this.monthlyReports(key).catch((err) => console.error("[surveillance] rapports mensuels", err instanceof Error ? err.message : err));
@@ -637,7 +638,7 @@ export class MonitorService {
     const what = kind === "tls" ? "Le certificat" : "Le nom de domaine";
     await this.alertOnce(target.id, `${kind}_expiry`, lowestKey, {
       title: `${what} expire dans ${Math.max(0, daysLeft)} jour${daysLeft > 1 ? "s" : ""}`,
-      body: `${target.hostname} : échéance le ${new Date(expiresAt).toLocaleDateString("fr-FR")}.`,
+      body: `${target.hostname} : échéance le ${frDateNumeric(new Date(expiresAt))}.`,
       url: "/surveillance",
     });
   }
