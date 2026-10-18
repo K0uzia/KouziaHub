@@ -4,6 +4,7 @@
 #   hubctl cloudflare        jeton du tunnel Cloudflare du hub (propre au hub, distinct de l'ERP)
 #   hubctl secrets access    Cloudflare Access : domaine d'équipe, AUD, adresse attendue
 #   hubctl secrets api       API Cloudflare : jeton, identifiant de compte, identifiant de zone
+#   hubctl secrets veille    jeton de lecture des zones (surveillance : détection des domaines)
 #   hubctl secrets           les deux
 #   hubctl chromium          installer Chromium pour les vignettes automatiques (facultatif)
 
@@ -192,6 +193,29 @@ EOF
   fi
 }
 
+# --- Jeton de lecture des zones (surveillance) ---
+
+configure_veille() {
+  title "Jeton de lecture des zones Cloudflare (surveillance)"
+  cat <<EOF
+  Il sert seulement à lister vos domaines Cloudflare pour proposer de les surveiller ; rien n'est
+  ajouté sans votre accord. C'est un jeton à part, distinct du jeton API du hub.
+  Le créer : Cloudflare > My Profile > API Tokens > Create Token > Custom token, avec SEULEMENT :
+    - Zone > Zone > Read        (Zone Resources : All zones)
+  Expiration : dans un an.
+  État : jeton $(present CLOUDFLARE_ZONES_READ_TOKEN).
+  Entrée sans rien saisir = garder la valeur actuelle. La saisie reste invisible.
+EOF
+  ask_secret V "Jeton de lecture des zones"
+  if [ -n "$V" ]; then
+    printf '%s' "$V" | grep -Eq '^[A-Za-z0-9_.-]{30,200}$' \
+      || die "Jeton invalide (${#V} caractères reçus). Rien n'a changé."
+    env_set CLOUDFLARE_ZONES_READ_TOKEN "$V"
+    ok "Jeton de lecture des zones enregistré."
+  fi
+  V=""
+}
+
 # --- API Cloudflare ---
 
 configure_api() {
@@ -278,6 +302,11 @@ case "$SECTION" in
     configure_erp
     restart_if_needed
     ;;
+  veille)
+    [ -f "$KH_ENV_FILE" ] || die ".env absent : lancer « hubctl install »."
+    configure_veille
+    restart_if_needed
+    ;;
   secrets|"")
     [ -f "$KH_ENV_FILE" ] || die ".env absent : lancer « hubctl install »."
     configure_access
@@ -290,6 +319,6 @@ case "$SECTION" in
     restart_if_needed
     ;;
   *)
-    die "Réglage inconnu : $SECTION (cloudflare, secrets, secrets access, secrets api, secrets erp, chromium)"
+    die "Réglage inconnu : $SECTION (cloudflare, secrets, secrets access, secrets api, secrets erp, secrets veille, chromium)"
     ;;
 esac
