@@ -79,12 +79,11 @@
   /* Libellés des onglets du bas : « Messages » entier sur 5 onglets à 320 px. */
   --text-tab: clamp(0.75rem, 0.45rem + 1.1vw, 0.8125rem);
   /* Catalogue : largeur de page, largeur minimale d'une carte (1 colonne à 360 px, 2 sur tablette),
-     carte de la rangée « Modifiés récemment », format des vignettes (capture 1280 × 800). */
+     format des vignettes (capture 1280 × 800). */
   --page-max: 90rem;
   /* Pages de réglages et de formulaires : colonne de lecture plus étroite, centrée comme les autres. */
   --page-narrow: 56rem;
   --card-min: 17rem;
-  --recent-w: min(82%, 19rem);
   --thumb-ratio: 16 / 10;
   /* Fond du QR code de la double authentification (les applications lisent mal un QR sur fond sombre). */
   --qr-bg: #ffffff;
@@ -567,26 +566,6 @@ option:hover {
   gap: 1rem;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--card-min)), 1fr));
   list-style: none;
-}
-
-/* Rangée « Modifiés récemment » : défilement horizontal manuel, arrêt sur chaque carte, jamais automatique. */
-.recent-row {
-  display: flex;
-  margin: 0 calc(var(--gutter) * -1);
-  padding: 0.25rem var(--gutter) 1rem;
-  gap: 1rem;
-  list-style: none;
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-  scroll-padding-inline: var(--gutter);
-  scroll-snap-type: x mandatory;
-}
-
-.recent-item {
-  display: flex;
-  width: var(--recent-w);
-  flex: 0 0 auto;
-  scroll-snap-align: start;
 }
 
 /* Zone de dépôt : signalée pendant le survol (contour plein, fond teinté), plus large que le cadre visible. */

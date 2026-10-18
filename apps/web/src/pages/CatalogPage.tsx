@@ -21,9 +21,6 @@ type KindFilter = "all" | "client" | "perso";
 const KIND_IDS: readonly KindFilter[] = ["all", "client", "perso"];
 const STATE_IDS: readonly StateFilter[] = ["all", "online", "offline", "creating", "error"];
 const VIEWS = ["cards", "list"] as const;
-/** Rangée « Modifiés récemment » : seulement quand le catalogue dépasse ce nombre (sinon elle répète la grille). */
-const RECENT_MIN_SITES = 5;
-const RECENT_COUNT = 8;
 /** Relecture du catalogue tant qu'un site change d'état (création, mise en ligne, certificat). */
 const POLL_MS = 3000;
 /** Notices du mode démonstration, regroupées en un bandeau ; texte court au téléphone. */
@@ -70,12 +67,8 @@ export function CatalogPage() {
   const q = normalize(query.trim());
   const byKind = sites.filter((s) => (kind === "all" ? true : kind === "client" ? s.kind === "CLIENT" : s.kind === "PERSO"));
   const byQuery = byKind.filter((s) => matchesQuery(s, q));
-  const shown = byQuery.filter((s) => matchesState(s, stateFilter)).sort((a, b) => a.name.localeCompare(b.name, "fr"));
-  const filtering = kind !== "all" || stateFilter !== "all" || q !== "";
-  const recent =
-    !filtering && sites.length >= RECENT_MIN_SITES
-      ? [...sites].sort((a, b) => b.touchedAt.localeCompare(a.touchedAt)).slice(0, RECENT_COUNT)
-      : [];
+  // Tri par défaut : dernière modification d'abord (comme l'API), en cartes comme en liste.
+  const shown = byQuery.filter((s) => matchesState(s, stateFilter)).sort((a, b) => b.touchedAt.localeCompare(a.touchedAt));
 
   const count = (f: (s: SiteSummary) => boolean, list: SiteSummary[]) => list.filter(f).length;
   // Nombre par valeur, comme les filtres de l'ERP (Tous 12, Clients 9, Perso 3).
@@ -211,21 +204,6 @@ export function CatalogPage() {
             </Card>
           ) : (
             <>
-              {recent.length ? (
-                <section aria-labelledby={`${searchId}-recent`} className="min-w-0">
-                  <h2 id={`${searchId}-recent`} className="mb-3 text-lg font-semibold">
-                    Modifiés récemment
-                  </h2>
-                  <ul className="recent-row custom-scrollbar">
-                    {recent.map((s) => (
-                      <li key={s.id} className="recent-item">
-                        <SiteCard site={s} />
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              ) : null}
-
               <section aria-labelledby={`${searchId}-all`} className="min-w-0 space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <h2 id={`${searchId}-all`} className="text-lg font-semibold">
