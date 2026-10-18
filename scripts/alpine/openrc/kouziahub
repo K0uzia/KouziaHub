@@ -1,5 +1,7 @@
 #!/sbin/openrc-run
 # OpenRC : hub Kouzia (API qui sert aussi l'interface compilée). Réglages : /etc/conf.d/kouziahub
+# command et directory sont dans le code, qui appartient à root (lecture seule pour le service) ;
+# le processus tourne sous le compte du service, avec un dossier personnel hors du code.
 
 description="Hub Kouzia (API et interface)"
 
@@ -7,6 +9,7 @@ description="Hub Kouzia (API et interface)"
 : "${KH_USER:=kouziahub}"
 : "${KH_GROUP:=kouziahub}"
 : "${KH_LOG_DIR:=/var/log/kouziahub}"
+: "${KH_HOME_DIR:=/var/lib/kouziahub}"
 
 name="kouziahub"
 command="${KH_APP_DIR}/node_modules/.bin/tsx"
@@ -26,14 +29,19 @@ error_log="${KH_LOG_DIR}/app.err"
 
 depend() {
   need net
-  after firewall
+  after firewall kouziahub-firewall
 }
 
 start_pre() {
   checkpath -d -o root:root -m 0755 "$KH_LOG_DIR"
   checkpath -f -o "${KH_USER}:${KH_GROUP}" -m 0640 "$output_log" "$error_log"
+  checkpath -d -o "${KH_USER}:${KH_GROUP}" -m 0700 "$KH_HOME_DIR"
   if [ ! -x "$command" ]; then
     eerror "tsx introuvable : $command (hubctl update)"
+    return 1
+  fi
+  if [ "$(stat -c %u "$KH_APP_DIR")" != "0" ] || [ "$(stat -c %u "$command")" != "0" ]; then
+    eerror "Le code n'appartient pas à root : hubctl update (reprise des droits)"
     return 1
   fi
   if [ ! -f "${KH_APP_DIR}/.env" ]; then
@@ -46,4 +54,5 @@ start_pre() {
     eerror "Cloudflare Access pas encore renseigné : hubctl secrets access"
     return 1
   fi
+  export HOME="$KH_HOME_DIR"
 }

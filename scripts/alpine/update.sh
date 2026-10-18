@@ -52,6 +52,9 @@ on_exit() {
   fi
 }
 trap on_exit EXIT
+trap_signals
+# Une seule opération à la fois (mise à jour, restauration, installation, sauvegarde) ; le verrou suit exec.
+ops_lock refuse
 
 # --- Retour arrière : code d'avant, dépendances et interface reconstruites, sauvegarde d'avant ---
 do_rollback() {
@@ -71,15 +74,15 @@ do_rollback() {
   if [ -n "$_prev" ] && is_git_install; then
     log "Code remis à la version ${_prev}..."
     git_in_app checkout -f -B "$KH_REPO_BRANCH" "$_prev" || die "Impossible de remettre le code ${_prev}."
-    chown_sources
   fi
+  fix_ownership
   if deps_needed; then
     npm_ci || die "npm ci a échoué pendant le retour arrière (voir le message ci-dessus)."
   fi
-  run_as_app "npm run --silent db:generate" || die "prisma generate a échoué pendant le retour arrière."
+  db_generate || die "prisma generate a échoué pendant le retour arrière."
   build_web || die "Le build de l'interface a échoué pendant le retour arrière."
+  install_root_scripts
   install_openrc_scripts
-  install_hubctl_link
   # restore.sh remet base et fichiers, applique les migrations de ce code, redémarre et contrôle.
   sh "${SCRIPT_DIR}/restore.sh" --yes --no-safety-backup --no-env "$_bak" \
     || die "Le hub ne répond toujours pas après le retour arrière : envoyer « hubctl logs erreurs » au développeur."
@@ -120,7 +123,8 @@ if [ "$RESUMED" -eq 0 ]; then
 
   # Une sauvegarde d'une mise à jour plus ancienne ne doit jamais servir de retour arrière à celle-ci.
   rm -f "${KH_STATE_DIR}/pre-update-backup" "${KH_STATE_DIR}/previous-commit"
-  if [ "$SKIP_BACKUP" -eq 0 ] && [ -f "$(db_path)" ]; then
+  _db="$(db_path)" || exit 1
+  if [ "$SKIP_BACKUP" -eq 0 ] && [ -f "$_db" ]; then
     log "Sauvegarde automatique avant mise à jour..."
     if ! BAK="$(sh "${SCRIPT_DIR}/backup.sh" --tag avant-maj)"; then
       rc-service "$KH_SERVICE" start >/dev/null 2>&1 || true
@@ -139,18 +143,21 @@ if [ "$RESUMED" -eq 0 ]; then
     # Un npm install de secours peut avoir réécrit le verrou : GitHub fait foi.
     git_in_app checkout HEAD -- package-lock.json 2>/dev/null || true
     git_sync_from_origin "$KH_REPO_BRANCH"
-    # Ce shell a lu les scripts d'avant : la suite tourne sur les nouveaux.
-    trap - EXIT
-    if [ "$FORCE_DEPS" -eq 1 ]; then
-      exec sh "${SCRIPT_DIR}/update.sh" --resumed --no-git --force
-    fi
-    exec sh "${SCRIPT_DIR}/update.sh" --resumed --no-git
   fi
+  # Code à root AVANT d'exécuter quoi que ce soit du dépôt, puis copie root des scripts : la suite
+  # tourne sur les nouveaux scripts, jamais sur un fichier modifiable par le compte du service.
+  fix_ownership
+  install_root_scripts
+  trap - EXIT
+  if [ "$FORCE_DEPS" -eq 1 ]; then
+    exec sh "${KH_LIB_DIR}/update.sh" --resumed --no-git --force
+  fi
+  exec sh "${KH_LIB_DIR}/update.sh" --resumed --no-git
 fi
 
-chown_sources
-chown -R "${KH_USER}:${KH_GROUP}" "$(data_dir)" "$KH_STATE_DIR" 2>/dev/null || true
-[ ! -f "$KH_ENV_FILE" ] || env_fix_perms
+# Reprise des droits (idempotente ; migre une ancienne installation où le compte possédait le code).
+fix_ownership
+install_root_scripts
 
 if [ "$FORCE_DEPS" -eq 1 ] || deps_needed; then
   npm_ci || fail_update "npm ci a échoué."
@@ -161,8 +168,17 @@ db_migrate || fail_update "Les migrations de la base ont échoué."
 build_web || fail_update "La construction de l'interface a échoué."
 
 install_openrc_scripts
-install_hubctl_link
 install_system_conf
+# Ancienne installation où le service lançait Chromium lui-même : passage au compte dédié.
+if [ -n "$(env_get HUB_CHROMIUM_PATH)" ] && ! chromium_installed; then
+  log "Chromium : passage à un compte dédié (doas) et au pare-feu de sortie..."
+  if apk add --no-cache doas nftables >/dev/null 2>&1 && setup_chromium_isolation; then
+    install -o root -g root -m 755 "${KH_LIB_DIR}/openrc/${KH_FIREWALL_SERVICE}" "/etc/init.d/${KH_FIREWALL_SERVICE}"
+  else
+    warn "Passage de Chromium au compte dédié impossible : relancer « hubctl chromium »."
+  fi
+fi
+apply_firewall || true
 
 if access_configured; then
   log "Redémarrage du hub..."

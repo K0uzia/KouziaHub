@@ -1,0 +1,28 @@
+#!/sbin/openrc-run
+# OpenRC : pare-feu de sortie du compte kouziahub-chromium (table nftables « inet kouziahub » seule,
+# le reste du pare-feu du CT n'est pas touché). Règle écrite par hubctl : /etc/kouziahub/nftables.nft
+
+description="Hub Kouzia : sortie réseau de Chromium filtrée"
+
+: "${KH_NFT_FILE:=/etc/kouziahub/nftables.nft}"
+
+depend() {
+  need net
+  before kouziahub
+}
+
+start() {
+  ebegin "Pare-feu de Chromium (table inet kouziahub)"
+  if [ ! -f "$KH_NFT_FILE" ]; then
+    eend 1 "Règle absente : $KH_NFT_FILE (hubctl chromium)"
+    return 1
+  fi
+  nft -f "$KH_NFT_FILE" && nft list table inet kouziahub | grep -q skuid
+  eend $? "Pose refusée (CT non privilégié ? voir le README, repli Proxmox)"
+}
+
+stop() {
+  ebegin "Retrait du pare-feu de Chromium"
+  nft delete table inet kouziahub 2>/dev/null
+  eend 0
+}

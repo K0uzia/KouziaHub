@@ -1,0 +1,6 @@
+#!/bin/sh
+# Lanceur de Chromium pour le hub (HUB_CHROMIUM_PATH=/usr/local/lib/kouziahub/chromium-launch).
+# Lancé par le compte du service ; passe par doas, dont la seule règle permet ce passage vers le compte
+# dédié kouziahub-chromium (aucun accès au .env ni aux données, sortie réseau filtrée par nftables).
+# Copie root, lecture seule : /usr/local/lib/kouziahub (hubctl install et update).
+exec /usr/bin/doas -n -u kouziahub-chromium /usr/local/lib/kouziahub/chromium-sandboxed "$@"

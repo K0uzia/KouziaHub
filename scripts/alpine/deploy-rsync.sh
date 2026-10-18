@@ -4,7 +4,8 @@
 #
 #   sh scripts/alpine/deploy-rsync.sh root@<ip-du-ct> [--dry-run] [--skip-update]
 #   make alpine-deploy HOST=root@<ip-du-ct>
-# Les données, le .env et node_modules du CT ne sont jamais touchés (conf/rsync-exclude.txt).
+# Les données, le .env et node_modules du CT ne sont jamais touchés (conf/rsync-exclude.txt). Fichiers
+# reçus au nom de root (--no-owner) ; update.sh reprend ensuite les droits avant toute exécution.
 
 set -eu
 
@@ -33,11 +34,11 @@ command -v ssh >/dev/null 2>&1 || { echo "ssh est nécessaire sur ce PC." >&2; e
 
 echo "==> Copie du code vers ${REMOTE}:${REMOTE_DIR}"
 if [ "$DRY_RUN" -eq 1 ]; then
-  rsync -az --delete --dry-run --itemize-changes --exclude-from="${SCRIPT_DIR}/conf/rsync-exclude.txt" "${ROOT}/" "${REMOTE}:${REMOTE_DIR}/"
+  rsync -az --no-owner --no-group --delete --dry-run --itemize-changes --exclude-from="${SCRIPT_DIR}/conf/rsync-exclude.txt" "${ROOT}/" "${REMOTE}:${REMOTE_DIR}/"
   echo "Simulation terminée, rien n'a été copié."
   exit 0
 fi
-rsync -az --delete --exclude-from="${SCRIPT_DIR}/conf/rsync-exclude.txt" "${ROOT}/" "${REMOTE}:${REMOTE_DIR}/"
+rsync -az --no-owner --no-group --delete --exclude-from="${SCRIPT_DIR}/conf/rsync-exclude.txt" "${ROOT}/" "${REMOTE}:${REMOTE_DIR}/"
 
 if [ "$SKIP_UPDATE" -eq 1 ]; then
   echo "Copie faite, mise à jour non lancée."
