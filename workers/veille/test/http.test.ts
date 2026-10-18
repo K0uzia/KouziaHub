@@ -8,7 +8,7 @@ import { BASE, SECRET, makeD1, makeEnv, makeNet, signed } from "./helpers.js";
 const deps = (now = BASE): Deps => ({ now: () => now, fetch: makeNet().fetch });
 
 const target = (id: string, extra: Record<string, unknown> = {}) => ({ id, label: `Site ${id}`, url: `https://${id}.example.fr/`, keyword: null, ...extra });
-const sub = (n: number) => ({ endpoint: `https://push.example.com/${n}`, keys: { p256dh: "BPk".padEnd(87, "A"), auth: "abcdefghijklmnopqrstuv" } });
+const sub = (n: number) => ({ endpoint: `https://fcm.googleapis.com/fcm/send/${n}`, keys: { p256dh: "BPk".padEnd(87, "A"), auth: "abcdefghijklmnopqrstuv" } });
 
 async function expectRefused(res: Response) {
   expect(res.status).toBe(404);
@@ -79,6 +79,45 @@ describe("points d'entrée : tout refus répond la même 404", () => {
   });
 });
 
+describe("anti-rejeu et requête signée", () => {
+  it("même requête rejouée, horodatage plus ancien : refusés ; horodatage suivant : accepté", async () => {
+    const { db } = makeD1();
+    const env = makeEnv(db);
+    const body = { v: 1, targets: [target("a")], subscriptions: [] };
+    const first = await signed("POST", "/sync", body, BASE);
+    const replay = first.clone();
+    expect((await handleFetch(first, env, deps())).status).toBe(200);
+    await expectRefused(await handleFetch(replay, env, deps()));
+    await expectRefused(await handleFetch(await signed("POST", "/sync", body, BASE - 1000), env, deps()));
+    expect((await handleFetch(await signed("POST", "/sync", body, BASE + 1000), env, deps())).status).toBe(200);
+    // Le compteur est propre à chaque route : /report au même horodatage passe.
+    expect((await handleFetch(await signed("POST", "/report", { v: 1, at: BASE, observations: [] }, BASE), env, deps())).status).toBe(200);
+  });
+
+  it("paramètre « since » modifié après signature : refusé", async () => {
+    const { db } = makeD1();
+    const env = makeEnv(db);
+    const req = await signed("GET", "/state?since=1000", undefined, BASE);
+    const tampered = new Request(req.url.replace("since=1000", "since=0"), { method: "GET", headers: req.headers });
+    await expectRefused(await handleFetch(tampered, env, deps()));
+    expect((await handleFetch(await signed("GET", "/state?since=1000", undefined, BASE), env, deps())).status).toBe(200);
+  });
+
+  it("abonnement hors des services push connus : refusé", async () => {
+    const { db } = makeD1();
+    const env = makeEnv(db);
+    let ts = BASE;
+    for (const endpoint of ["https://evil.example/push", "https://192.168.1.1/push", "https://fcm.googleapis.com.evil.example/x", "https://fcm.googleapis.com:8443/x"]) {
+      ts += 1000;
+      const body = { v: 1, targets: [], subscriptions: [{ endpoint, keys: { p256dh: "BPk".padEnd(87, "A"), auth: "abcdefghijklmnopqrstuv" } }] };
+      await expectRefused(await handleFetch(await signed("POST", "/sync", body, ts), env, deps(ts)));
+    }
+    ts += 1000;
+    const ok = { v: 1, targets: [], subscriptions: [{ endpoint: "https://updates.push.services.mozilla.com/wpush/v2/abc", keys: { p256dh: "BPk".padEnd(87, "A"), auth: "abcdefghijklmnopqrstuv" } }] };
+    expect((await handleFetch(await signed("POST", "/sync", ok, ts), env, deps(ts))).status).toBe(200);
+  });
+});
+
 describe("POST /sync", () => {
   it("remplace cibles et abonnements, nettoie ce qui est retiré", async () => {
     const { db, rows, raw } = makeD1();
@@ -93,13 +132,13 @@ describe("POST /sync", () => {
 
     raw.exec(`INSERT INTO state VALUES ('b', 'edge', 2, 0, 503, 12, 'statut 503', ${BASE})`);
     raw.exec(`INSERT INTO incidents (target_id, started_at, basis) VALUES ('b', ${BASE}, 'hub,edge')`);
-    raw.exec(`INSERT INTO push_queue (created_at, endpoint, payload) VALUES (${BASE}, 'https://push.example.com/2', '{}')`);
+    raw.exec(`INSERT INTO push_queue (created_at, endpoint, payload) VALUES (${BASE}, 'https://fcm.googleapis.com/fcm/send/2', '{}')`);
 
-    await handleFetch(await signed("POST", "/sync", { v: 1, targets: [target("a", { label: "Nouveau nom" })], subscriptions: [sub(1)] }, BASE), env, deps());
+    await handleFetch(await signed("POST", "/sync", { v: 1, targets: [target("a", { label: "Nouveau nom" })], subscriptions: [sub(1)] }, BASE + 1000), env, deps());
     expect(rows("SELECT id, label FROM targets")).toEqual([{ id: "a", label: "Nouveau nom" }]);
     expect(rows("SELECT * FROM state")).toEqual([]);
     expect(rows("SELECT * FROM incidents")).toEqual([]);
-    expect(rows("SELECT endpoint FROM subscriptions")).toEqual([{ endpoint: "https://push.example.com/1" }]);
+    expect(rows("SELECT endpoint FROM subscriptions")).toEqual([{ endpoint: "https://fcm.googleapis.com/fcm/send/1" }]);
     expect(rows("SELECT * FROM push_queue")).toEqual([]);
   });
 });
@@ -148,7 +187,12 @@ describe("GET /state", () => {
     expect(body.now).toBe(BASE);
     expect(body.edgeSeenAt).toBe(BASE - 60_000);
     expect(body.hubSeenAt).toBe(BASE - 30_000);
-    expect(body.observations).toEqual([{ targetId: "a", observer: "edge", at: BASE - 60_000, ok: true, status: 200, ms: 30, reason: null }]);
+    expect(body.observations).toEqual([{ targetId: "a", observer: "edge", at: BASE - 60_000, ok: true, status: 200, ms: 30, reason: null, failures: 0 }]);
+    // État courant de chaque cible, même sans changement depuis « since » (cible b), avec ses échecs consécutifs.
+    expect(body.current).toEqual([
+      { targetId: "a", observer: "edge", at: BASE - 60_000, ok: true, status: 200, ms: 30, reason: null, failures: 0 },
+      { targetId: "b", observer: "edge", at: BASE - 600_000, ok: false, status: null, ms: null, reason: "délai dépassé", failures: 2 },
+    ]);
     expect(body.incidents).toEqual([{ targetId: "b", startedAt: BASE - 600_000, endedAt: null, basis: ["edge"] }]);
   });
 });

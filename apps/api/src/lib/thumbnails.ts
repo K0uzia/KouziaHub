@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -6,6 +5,7 @@ import path from "node:path";
 import sharp from "sharp";
 import { audit } from "@/lib/audit.js";
 import type { BlobStore } from "@/lib/blobs.js";
+import { chromiumLauncher, startChromium, type ChromiumConfig, type StartOptions } from "@/lib/chromium.js";
 import { contentTypeWithCharset } from "@/lib/mime.js";
 import { prisma } from "@/lib/prisma.js";
 
@@ -21,30 +21,18 @@ export const CAPTURE_CSP =
   "img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' data: blob:; connect-src 'self'; frame-src 'self'; " +
   "worker-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'";
 
-/** Bac à sable de Chromium actif sauf sous root (où Chromium refuse de démarrer avec). */
-const sandboxWanted = () => (typeof process.getuid === "function" ? process.getuid() !== 0 : true);
+export { resolveChromium } from "@/lib/chromium.js";
 
-export type ThumbnailOptions = {
+/** Chromium ne résout aucun nom : seul 127.0.0.1 (serveur éphémère) est joignable. */
+const CAPTURE_ARGS = ["--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1"];
+
+export type ThumbnailOptions = ChromiumConfig & {
   dataDir: string;
   blobs: BlobStore;
-  /** Exécutable Chromium ; undefined : HUB_CHROMIUM_PATH, sinon celui de playwright-core s'il existe. */
-  chromiumPath?: string | null;
   timeoutMs?: number;
+  /** Pour les tests : lancement par pipe, démarrage du lanceur, connexion CDP (lib/chromium.ts). */
+  start?: Pick<StartOptions, "launch" | "spawnBrowser" | "connect">;
 };
-
-/** Chromium utilisable pour la capture, null sinon (repli : image envoyée). */
-export async function resolveChromium(explicit?: string | null): Promise<string | null> {
-  if (explicit === null) return null;
-  const configured = explicit ?? process.env.HUB_CHROMIUM_PATH?.trim();
-  if (configured) return existsSync(configured) ? configured : null;
-  try {
-    const { chromium } = await import("playwright-core");
-    const candidate = chromium.executablePath();
-    return candidate && existsSync(candidate) ? candidate : null;
-  } catch {
-    return null;
-  }
-}
 
 /** Image redimensionnée en WebP 640 x 400 (recadrée au centre). */
 export async function toThumbnail(input: Buffer): Promise<Buffer> {
@@ -62,19 +50,24 @@ export async function toThumbnail(input: Buffer): Promise<Buffer> {
 export class ThumbnailService {
   private queue: Promise<void> = Promise.resolve();
   private readonly pending = new Set<string>();
-  private chromium: Promise<string | null> | null = null;
+  /** Dernier échec de lancement (bac à sable refusé, lanceur en erreur), pour l'état affiché. */
+  private lastLaunchFailure: string | null = null;
   /** Requêtes hors 127.0.0.1 abandonnées pendant la dernière capture (contrôle : aucun réseau extérieur). */
   lastBlocked: string[] = [];
+  /** Mode de lancement de la dernière capture (contrôle des tests). */
+  lastVia: "pipe" | "port" | null = null;
 
   constructor(private readonly options: ThumbnailOptions) {}
 
-  async captureAvailable(): Promise<boolean> {
-    return (await this.executable()) !== null;
+  /** Capture automatique disponible, ou la raison (repli : image envoyée). Même lanceur que la vitesse. */
+  async captureStatus(): Promise<{ available: boolean; reason: string | null }> {
+    const launcher = await chromiumLauncher("Capture des vignettes", this.options);
+    if (!launcher.ok) return { available: false, reason: launcher.reason };
+    return this.lastLaunchFailure ? { available: false, reason: this.lastLaunchFailure } : { available: true, reason: null };
   }
 
-  private executable(): Promise<string | null> {
-    this.chromium ??= resolveChromium(this.options.chromiumPath);
-    return this.chromium;
+  async captureAvailable(): Promise<boolean> {
+    return (await this.captureStatus()).available;
   }
 
   /** auto : capture après publication, sautée si Alexandre a choisi une image envoyée. */
@@ -110,8 +103,8 @@ export class ThumbnailService {
 
   /** Capture de la version servie ; false si impossible (Chromium absent, page d'attente, délai). */
   async capture(siteId: string): Promise<boolean> {
-    const executablePath = await this.executable();
-    if (!executablePath) return false;
+    const launcher = await chromiumLauncher("Capture des vignettes", this.options);
+    if (!launcher.ok) return false;
     const site = await prisma.site.findUnique({ where: { id: siteId } });
     if (!site?.currentVersionId) return false;
     const version = await prisma.version.findUnique({ where: { id: site.currentVersionId }, include: { files: true } });
@@ -122,30 +115,21 @@ export class ThumbnailService {
     const port = (server.address() as AddressInfo).port;
     const origin = `http://127.0.0.1:${port}`;
     const timeoutMs = this.options.timeoutMs ?? 30_000;
-    const { chromium } = await import("playwright-core");
-    let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+    let started: Awaited<ReturnType<typeof startChromium>> | null = null;
     const blocked: string[] = [];
     this.lastBlocked = blocked;
-    const deadline = setTimeout(() => void browser?.close().catch(() => undefined), timeoutMs);
+    this.lastVia = null;
+    const deadline = setTimeout(() => void started?.close(), timeoutMs);
     try {
-      const launch = (chromiumSandbox: boolean) =>
-        chromium.launch({
-          executablePath,
-          headless: true,
-          timeout: timeoutMs,
-          chromiumSandbox,
-          args: ["--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1", "--disable-background-networking", "--no-first-run"],
-        });
-      if (sandboxWanted()) {
-        try {
-          browser = await launch(true);
-        } catch (err) {
-          console.warn("[vignette] Chromium refuse le bac à sable, lancement sans", err instanceof Error ? err.message.split(/\r?\n/)[0] : err);
-          browser = await launch(false);
-        }
-      } else {
-        browser = await launch(false);
+      try {
+        started = await startChromium(launcher.executablePath, { timeoutMs, args: CAPTURE_ARGS, ...this.options.start });
+        this.lastLaunchFailure = null;
+        this.lastVia = started.via;
+      } catch (err) {
+        this.lastLaunchFailure = `Capture des vignettes désactivée : ${err instanceof Error ? err.message : "lancement impossible"}.`;
+        throw err;
       }
+      const browser = started.browser;
       const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: "block", acceptDownloads: false });
       await context.route("**/*", (route) => {
         const url = route.request().url();
@@ -173,7 +157,7 @@ export class ThumbnailService {
       return false;
     } finally {
       clearTimeout(deadline);
-      await browser?.close().catch(() => undefined);
+      await started?.close();
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }

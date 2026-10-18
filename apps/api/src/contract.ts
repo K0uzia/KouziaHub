@@ -251,7 +251,10 @@ export type OrphanReport = {
 export type SystemStatus = {
   cloudflare: { mode: "real" | "fake"; projectsUsed: number | null; projectsLimit: number };
   erp: { mode: "http" | "fake"; reachable: boolean };
-  thumbnails: { capture: boolean };
+  /** Capture automatique des vignettes ; indisponible avec la raison (repli : image envoyée). */
+  thumbnails: { capture: boolean; reason: string | null };
+  /** Mesure de vitesse de la surveillance : indisponible avec la raison (bac à sable, utilisateur dédié). */
+  speed: { available: boolean; reason: string | null };
   sitesDomain: string;
 };
 
@@ -375,6 +378,7 @@ export type MonitorOverview = {
     hubChecksRunning: boolean;
     push: { configured: boolean; devices: number };
     zonesToken: boolean;
+    speed: { available: boolean; reason: string | null };
   };
   recentIncidents: MonitorIncidentEntry[];
 };

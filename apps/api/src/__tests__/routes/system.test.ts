@@ -109,7 +109,8 @@ describe("système, clients et journal", () => {
     expect(status).toEqual({
       cloudflare: { mode: "fake", projectsUsed: 1, projectsLimit: 100 },
       erp: { mode: "fake", reachable: true },
-      thumbnails: { capture: false },
+      thumbnails: { capture: false, reason: expect.stringMatching(/Chromium absent/) },
+      speed: { available: false, reason: expect.stringMatching(/Chromium absent/) },
       sitesDomain: "kouzia.com",
     });
   });

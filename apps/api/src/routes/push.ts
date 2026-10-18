@@ -5,12 +5,14 @@ import { audit } from "@/lib/audit.js";
 import { requireAuth } from "@/lib/auth.js";
 import { HttpError } from "@/lib/http.js";
 import { idParams } from "@/lib/http-input.js";
+import { isAllowedPushEndpoint } from "@/lib/monitor/core.js";
 import { prisma } from "@/lib/prisma.js";
 import type { Services } from "@/lib/services.js";
 
 const subscribeSchema = z.object({
   subscription: z.object({
-    endpoint: z.string().url().max(2000).startsWith("https://"),
+    // Services push connus seulement : le hub et le Worker enverront des requêtes à cette adresse.
+    endpoint: z.string().url().max(2000).startsWith("https://").refine(isAllowedPushEndpoint),
     expirationTime: z.number().nullable().optional(),
     keys: z.object({ p256dh: z.string().min(16).max(200), auth: z.string().min(8).max(100) }),
   }),

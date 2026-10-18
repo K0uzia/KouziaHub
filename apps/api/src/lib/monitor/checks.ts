@@ -1,7 +1,11 @@
 // Contrôles de la surveillance côté hub (cadrage 10.4). Chaque accès réseau est injectable :
-// fetch (HTTP, RDAP), connecteur TLS, résolveur DNS. Aucun réseau réel en test.
+// fetch (HTTP, RDAP), résolution des noms, connecteur TLS, résolveur DNS. Aucun réseau réel en test.
 import { createHash } from "node:crypto";
-import { Resolver } from "node:dns/promises";
+import dns, { Resolver } from "node:dns/promises";
+import http from "node:http";
+import https from "node:https";
+import { isIP } from "node:net";
+import { Readable } from "node:stream";
 import tls, { type PeerCertificate } from "node:tls";
 
 export const HTTP_TIMEOUT_MS = 10_000;
@@ -11,6 +15,189 @@ export const USER_AGENT = "KouziaHub-Veille/1 (surveillance technique)";
 
 const DAY_MS = 86_400_000;
 export const daysUntil = (date: Date, now: number) => Math.floor((date.getTime() - now) / DAY_MS);
+
+// --- Garde réseau : jamais de connexion vers le réseau local ou la machine (SSRF) ---
+
+export type ResolvedAddress = { address: string; family: number };
+/** Résolution d'un nom en adresses (toutes). Injectable : les tests n'interrogent aucun DNS. */
+export type HostLookup = (hostname: string) => Promise<ResolvedAddress[]>;
+export const systemLookup: HostLookup = (hostname) => dns.lookup(hostname, { all: true, verbatim: true });
+
+export class PrivateAddressError extends Error {
+  constructor(host: string) {
+    super(`adresse privée refusée (${host.slice(0, 80)})`);
+    this.name = "PrivateAddressError";
+  }
+}
+
+/** Octets d'une IPv6 (16), null si l'écriture est invalide. Gère « :: » et la fin en IPv4 pointée. */
+function ipv6Bytes(ip: string): number[] | null {
+  let s = ip.toLowerCase().replace(/%.*$/, "");
+  let tail: number[] | null = null;
+  const lastColon = s.lastIndexOf(":");
+  const v4 = s.slice(lastColon + 1);
+  if (v4.includes(".")) {
+    if (isIP(v4) !== 4) return null;
+    tail = v4.split(".").map(Number);
+    s = `${s.slice(0, lastColon + 1)}0:0`;
+  }
+  const halves = s.split("::");
+  if (halves.length > 2) return null;
+  const parts = (p: string) => (p === "" ? [] : p.split(":"));
+  const head = parts(halves[0]!);
+  const rest = halves.length === 2 ? parts(halves[1]!) : [];
+  const missing = 8 - head.length - rest.length;
+  if (halves.length === 1 ? missing !== 0 : missing < 1) return null;
+  const groups = [...head, ...Array<string>(halves.length === 2 ? missing : 0).fill("0"), ...rest];
+  const bytes: number[] = [];
+  for (const g of groups) {
+    if (!/^[0-9a-f]{1,4}$/.test(g)) return null;
+    const n = parseInt(g, 16);
+    bytes.push(n >> 8, n & 255);
+  }
+  if (tail) bytes.splice(12, 4, ...tail);
+  return bytes;
+}
+
+/** 0/8, 10/8, 127/8, CGNAT 100.64/10, lien local 169.254/16, 172.16/12, 192.0.0/24, 192.168/16, 198.18/15, multicast et réservé (224/3). */
+function privateV4(b: number[]): boolean {
+  const [a, c, d] = b as [number, number, number, number];
+  return (
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    (a === 100 && c >= 64 && c <= 127) ||
+    (a === 169 && c === 254) ||
+    (a === 172 && c >= 16 && c <= 31) ||
+    (a === 192 && c === 0 && d === 0) ||
+    (a === 192 && c === 168) ||
+    (a === 198 && (c === 18 || c === 19)) ||
+    a >= 224
+  );
+}
+
+/**
+ * Adresse IP à ne jamais joindre : plages privées et spéciales IPv4 (privateV4) ; en IPv6, non
+ * spécifiée et boucle locale (::, ::1, et tout ::/96), IPv4 mappée (::ffff:a.b.c.d, vérifiée comme
+ * IPv4), NAT64 (64:ff9b::/96) et 6to4 (2002::/16) vers une IPv4 privée, ULA fc00::/7, lien local
+ * fe80::/10, site local fec0::/10, multicast ff00::/8. Ce qui n'est pas une IP est refusé.
+ */
+export function isPrivateAddress(ip: string): boolean {
+  const host = ip.replace(/^\[|\]$/g, "");
+  const kind = isIP(host);
+  if (kind === 4) return privateV4(host.split(".").map(Number));
+  if (kind !== 6) return true;
+  const b = ipv6Bytes(host);
+  if (!b) return true;
+  const zero = (from: number, to: number) => b.slice(from, to).every((x) => x === 0);
+  if (zero(0, 10) && b[10] === 0xff && b[11] === 0xff) return privateV4(b.slice(12));
+  if (zero(0, 12)) return true;
+  if (b[0] === 0 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && zero(4, 12)) return privateV4(b.slice(12));
+  if (b[0] === 0x20 && b[1] === 0x02) return privateV4(b.slice(2, 6));
+  if ((b[0]! & 0xfe) === 0xfc) return true;
+  if (b[0] === 0xfe && (b[1]! & 0x80) === 0x80) return true;
+  return b[0] === 0xff;
+}
+
+/** Noms réservés au réseau local (sans résolution) : localhost, .local, .lan, .internal, .home.arpa, nom sans point. */
+const LOCAL_NAME = /(^|\.)(localhost|local|lan|internal|home\.arpa)$/;
+
+/** Nom ou IP du réseau local ou de la machine, d'après l'écriture seule (refus à l'ajout d'une cible). */
+export function isPrivateHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+  if (isIP(host)) return isPrivateAddress(host);
+  return !host.includes(".") || LOCAL_NAME.test(host);
+}
+
+/**
+ * Résolution unique d'un nom, puis contrôle : refus si UNE des adresses est privée. L'adresse rendue
+ * est celle à laquelle se connecter, sans seconde résolution (pas de DNS rebinding possible).
+ */
+export async function resolvePublic(hostname: string, lookup: HostLookup): Promise<ResolvedAddress> {
+  const host = hostname.replace(/^\[|\]$/g, "");
+  const kind = isIP(host);
+  if (kind) {
+    if (isPrivateAddress(host)) throw new PrivateAddressError(host);
+    return { address: host, family: kind };
+  }
+  if (isPrivateHost(host)) throw new PrivateAddressError(host);
+  const all = await lookup(host);
+  if (all.length === 0) throw new Error("nom introuvable");
+  if (all.some((a) => isPrivateAddress(a.address))) throw new PrivateAddressError(host);
+  return all[0]!;
+}
+
+/** Requête HTTP vers une adresse déjà vérifiée : le nom reste dans l'URL (Host, SNI, certificat). */
+export type PinnedConnect = (url: URL, init: RequestInit, pinned: ResolvedAddress) => Promise<Response>;
+
+/**
+ * node:http(s) avec une résolution qui rend exactement l'adresse vérifiée (jamais le DNS) ; en-tête
+ * Host et nom TLS (SNI, contrôle du certificat) restent ceux de l'URL. Aucune redirection suivie.
+ */
+export const pinnedRequest: PinnedConnect = (url, init, pinned) =>
+  new Promise((resolve, reject) => {
+    const host = url.hostname.replace(/^\[|\]$/g, "");
+    const headers: Record<string, string> = {};
+    new Headers(init.headers).forEach((v, k) => {
+      headers[k] = v;
+    });
+    const lookup = ((_name: string, opts: { all?: boolean }, cb: (...args: unknown[]) => void) => {
+      if (opts?.all) cb(null, [pinned]);
+      else cb(null, pinned.address, pinned.family);
+    }) as unknown as http.RequestOptions["lookup"];
+    const options: https.RequestOptions = {
+      protocol: url.protocol,
+      hostname: host,
+      port: url.port || undefined,
+      path: `${url.pathname}${url.search}`,
+      method: init.method ?? "GET",
+      headers,
+      agent: false,
+      lookup,
+      signal: init.signal ?? undefined,
+      ...(url.protocol === "https:" && !isIP(host) ? { servername: host } : {}),
+    };
+    const req = (url.protocol === "https:" ? https : http).request(options, (res) => {
+      const status = res.statusCode ?? 0;
+      if (status < 200 || status > 599) {
+        res.destroy();
+        reject(new Error(`statut ${status} inattendu`));
+        return;
+      }
+      const h = new Headers();
+      for (const [k, v] of Object.entries(res.headers)) {
+        if (v === undefined) continue;
+        for (const one of Array.isArray(v) ? v : [v]) h.append(k, one);
+      }
+      const noBody = [204, 205, 304].includes(status) || options.method === "HEAD";
+      if (noBody) res.resume();
+      resolve(new Response(noBody ? null : (Readable.toWeb(res) as ReadableStream<Uint8Array>), { status, headers: h }));
+    });
+    req.on("error", reject);
+    if (typeof init.body === "string") req.write(init.body);
+    req.end();
+  });
+
+/**
+ * fetch protégé : chaque requête (et chaque saut de redirection, suivi à la main, 5 au plus) résout
+ * le nom une fois, refuse une adresse privée, puis se connecte à l'adresse vérifiée.
+ */
+export function guardedFetch(options: { lookup?: HostLookup; connect?: PinnedConnect } = {}): typeof fetch {
+  const lookup = options.lookup ?? systemLookup;
+  const connect = options.connect ?? pinnedRequest;
+  return (async (input: string | URL | Request, init: RequestInit = {}) => {
+    let url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
+    for (let hop = 0; ; hop++) {
+      if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password) throw new TypeError("adresse refusée");
+      const res = await connect(url, init, await resolvePublic(url.hostname, lookup));
+      const location = res.headers.get("location");
+      if (init.redirect === "manual" || res.status < 300 || res.status >= 400 || res.status === 304 || !location) return res;
+      await res.body?.cancel().catch(() => undefined);
+      if (hop >= HTTP_MAX_REDIRECTS) throw new TypeError("trop de redirections");
+      url = new URL(location, url);
+    }
+  }) as typeof fetch;
+}
 
 // --- HTTP ---
 
@@ -43,13 +230,14 @@ async function readCapped(res: Response, maxBytes: number): Promise<string> {
 
 /**
  * GET avec redirections suivies à la main (5 au plus), délai global de 10 s, corps plafonné à 2 Mio.
- * Réussite : statut final 2xx ou 3xx, et mot-clé présent s'il est demandé.
+ * Réussite : statut final 2xx ou 3xx, et mot-clé présent s'il est demandé. Par défaut, chaque saut
+ * passe par guardedFetch (adresse résolue et vérifiée avant la connexion).
  */
 export async function httpCheck(
   url: string,
   options: { fetch?: typeof fetch; keyword?: string | null; wantBody?: boolean; timeoutMs?: number; now?: () => number } = {},
 ): Promise<HttpCheckResult> {
-  const fetchImpl = options.fetch ?? fetch;
+  const fetchImpl = options.fetch ?? guardedFetch();
   const now = options.now ?? Date.now;
   const signal = AbortSignal.timeout(options.timeoutMs ?? HTTP_TIMEOUT_MS);
   const started = now();
@@ -79,6 +267,7 @@ export async function httpCheck(
     }
   } catch (err) {
     const name = (err as { name?: string }).name;
+    if (err instanceof PrivateAddressError) return { ok: false, status: null, ms: null, reason: "adresse privée refusée", finalUrl: current, body: null };
     const reason = name === "TimeoutError" || name === "AbortError" ? "délai dépassé" : "connexion impossible";
     return { ok: false, status: null, ms: null, reason, finalUrl: current, body: null };
   }
@@ -89,9 +278,22 @@ export async function httpCheck(
 export type PeerInfo = { cert: Pick<PeerCertificate, "valid_to" | "issuer" | "subject" | "subjectaltname">; authorized: boolean; authorizationError: string | null };
 export type TlsConnector = (hostname: string) => Promise<PeerInfo>;
 
-export const nodeTlsConnector: TlsConnector = (hostname) =>
+type TlsConnect = (options: tls.ConnectionOptions, secureListener: () => void) => tls.TLSSocket;
+
+/**
+ * Poignée de main sur l'adresse résolue une fois et vérifiée (resolvePublic), avec le nom d'origine
+ * en SNI : même garde que pour HTTP.
+ */
+export const makeTlsConnector =
+  (lookup: HostLookup = systemLookup, connect: TlsConnect = tls.connect): TlsConnector =>
+  async (hostname) => {
+    const pinned = await resolvePublic(hostname, lookup);
+    return tlsHandshake(connect, pinned.address, isIP(hostname) ? undefined : hostname);
+  };
+
+const tlsHandshake = (connect: TlsConnect, address: string, servername: string | undefined): Promise<PeerInfo> =>
   new Promise((resolve, reject) => {
-    const socket = tls.connect({ host: hostname, port: 443, servername: hostname, rejectUnauthorized: false, timeout: HTTP_TIMEOUT_MS }, () => {
+    const socket = connect({ host: address, port: 443, servername, rejectUnauthorized: false, timeout: HTTP_TIMEOUT_MS }, () => {
       const cert = socket.getPeerCertificate();
       resolve({
         cert,
@@ -106,6 +308,8 @@ export const nodeTlsConnector: TlsConnector = (hostname) =>
     });
     socket.once("error", (err) => reject(err));
   });
+
+export const nodeTlsConnector: TlsConnector = makeTlsConnector();
 
 export type TlsCheckResult = { ok: boolean; validTo: string | null; daysLeft: number | null; issuer: string | null; error: string | null };
 
@@ -145,7 +349,7 @@ export class RdapClient {
   private readonly now: () => number;
 
   constructor(options: { fetch?: typeof fetch; now?: () => number } = {}) {
-    this.fetchImpl = options.fetch ?? fetch;
+    this.fetchImpl = options.fetch ?? guardedFetch();
     this.now = options.now ?? Date.now;
   }
 

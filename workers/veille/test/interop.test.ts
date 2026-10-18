@@ -7,7 +7,7 @@ import { BASE, SECRET, makeD1, makeEnv, makeNet } from "./helpers.js";
 // Le vrai client du hub parle au vrai Worker, sans réseau : la requête construite par l'un est
 // traitée par l'autre. Vérifie que signature, chemins et corps concordent des deux côtés.
 function wire(now: number) {
-  const { db } = makeD1();
+  const { db, raw } = makeD1();
   const env = makeEnv(db);
   const deps: Deps = { now: () => now, fetch: makeNet().fetch };
   const seen: string[] = [];
@@ -18,7 +18,7 @@ function wire(now: number) {
   }) as typeof fetch;
   const client = (secret = SECRET) =>
     new HttpVeilleClient({ url: "https://kouzia-veille.example.workers.dev", secret, fetch: fetchToWorker, now: () => now });
-  return { client, seen };
+  return { client, seen, raw };
 }
 
 describe("interopérabilité hub et Worker", () => {
@@ -34,6 +34,31 @@ describe("interopérabilité hub et Worker", () => {
     expect(state.v).toBe(1);
     expect(state.hubSeenAt).toBe(BASE);
     expect(seen).toEqual(["POST /sync", "POST /report", "GET /state?since=0"]);
+  });
+
+  it("état courant avec les échecs consécutifs ; deux appels dans la même seconde acceptés (horodatage croissant)", async () => {
+    const { client, raw, seen } = wire(BASE);
+    raw.exec(`INSERT INTO state VALUES ('t1', 'edge', 3, 0, 503, 20, 'statut 503', ${BASE - 3_600_000})`);
+    const hub = client();
+    const first = await hub.state(BASE);
+    expect(first.observations).toEqual([]);
+    expect(first.current).toEqual([{ targetId: "t1", observer: "edge", at: BASE - 3_600_000, ok: false, status: 503, ms: 20, reason: "statut 503", failures: 3 }]);
+    await hub.state(BASE);
+    expect(seen).toEqual([`GET /state?since=${BASE}`, `GET /state?since=${BASE}`]);
+  });
+
+  it("une requête rejouée telle quelle est refusée", async () => {
+    const { db } = makeD1();
+    const env = makeEnv(db);
+    const deps: Deps = { now: () => BASE, fetch: makeNet().fetch };
+    const sent: Request[] = [];
+    const capture = (async (input: string | URL | Request, init?: RequestInit) => {
+      const req = new Request(input, init);
+      sent.push(req.clone());
+      return handleFetch(req, env, deps);
+    }) as typeof fetch;
+    await new HttpVeilleClient({ url: "https://kouzia-veille.example.workers.dev", secret: SECRET, fetch: capture, now: () => BASE }).state(0);
+    expect((await handleFetch(sent[0]!, env, deps)).status).toBe(404);
   });
 
   it("un autre secret est refusé par le Worker (404), le client le signale", async () => {

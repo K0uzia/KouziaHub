@@ -1,34 +1,42 @@
 // Surveillance côté hub (cadrage section 10) : cibles, contrôles, comparaison avec le Worker,
 // incidents, alertes non urgentes (et urgentes si le Worker manque), historique, purge.
+import { readdir, rm } from "node:fs/promises";
+import path from "node:path";
 import type { MonitorCheck, MonitorIncident, MonitorTarget, Site } from "@prisma/client";
 import { audit } from "@/lib/audit.js";
 import {
   decide,
   GROUP_ALERT_THRESHOLD,
   INCIDENT_REMINDER_MS,
+  isAllowedPushEndpoint,
   OBSERVER_STALE_MS,
   type Decision,
+  type EdgeObservation,
   type HttpObservation,
   type MonitorTargetSpec,
   type Observer,
   type ObserverState,
+  type StateResponse,
 } from "@/lib/monitor/core.js";
 import {
   contentHash,
   defaultResolver,
   dnsDrift,
   dnsSnapshot,
+  guardedFetch,
   httpCheck,
-  nodeTlsConnector,
+  makeTlsConnector,
   RdapClient,
+  systemLookup,
   daysUntil,
   registrableDomain,
   tlsCheck,
   type DnsResolver,
   type DnsSnapshot,
+  type HostLookup,
   type TlsConnector,
 } from "@/lib/monitor/checks.js";
-import { measureSpeed, type SpeedResult } from "@/lib/monitor/speed.js";
+import { measureSpeed, speedStatus, type SpeedResult } from "@/lib/monitor/speed.js";
 import type { VeilleClient } from "@/lib/monitor/worker-client.js";
 import { prisma } from "@/lib/prisma.js";
 import type { PushPayload, PushService } from "@/lib/push/service.js";
@@ -46,7 +54,10 @@ const RECENT_WINDOW_MS = 2 * 3_600_000;
 export type MonitorDeps = {
   push: PushService;
   veille: VeilleClient;
+  /** Par défaut : guardedFetch (adresse résolue une fois et vérifiée, jamais le réseau local). */
   fetch?: typeof fetch;
+  /** Résolution des noms pour la garde réseau (HTTP, TLS, vitesse). */
+  lookup?: HostLookup;
   tls?: TlsConnector;
   resolver?: DnsResolver;
   rdap?: RdapClient;
@@ -54,6 +65,8 @@ export type MonitorDeps = {
   chromiumPath?: string | null;
   speed?: (url: string) => Promise<SpeedResult>;
   now?: () => number;
+  /** Dossier des données : rapports PDF des cibles supprimées purgés. */
+  dataDir?: string;
 };
 
 export type TargetWithSite = MonitorTarget & { site: Pick<Site, "id" | "slug" | "state"> | null };
@@ -70,13 +83,26 @@ const toObservation = (c: MonitorCheck): HttpObservation => ({
   reason: c.detail ? ((JSON.parse(c.detail) as { reason?: string | null }).reason ?? null) : null,
 });
 
-/** État d'un point de contrôle depuis ses dernières observations (les plus récentes en tête). */
+/** Échecs consécutifs transmis par le Worker avec l'observation, null s'ils sont absents. */
+const reportedFailures = (c: MonitorCheck): number | null => {
+  if (!c.detail) return null;
+  const f = (JSON.parse(c.detail) as { failures?: unknown }).failures;
+  return typeof f === "number" && Number.isInteger(f) && f >= 0 ? f : null;
+};
+
+/**
+ * État d'un point de contrôle depuis ses dernières observations (les plus récentes en tête). Le Worker
+ * transmet son nombre d'échecs consécutifs : il fait foi (le hub peut ne pas avoir vu chaque échec).
+ */
 export function observerStateOf(checks: MonitorCheck[]): ObserverState | null {
   if (checks.length === 0) return null;
-  let failures = 0;
-  for (const c of checks) {
-    if (c.ok) break;
-    failures++;
+  let failures = reportedFailures(checks[0]!);
+  if (failures === null) {
+    failures = 0;
+    for (const c of checks) {
+      if (c.ok) break;
+      failures++;
+    }
   }
   return { consecutiveFailures: failures, last: toObservation(checks[0]!) };
 }
@@ -105,6 +131,8 @@ export class MonitorService {
   private readonly resolver: DnsResolver;
   private readonly rdap: RdapClient;
   private readonly speed: (url: string) => Promise<SpeedResult>;
+  private readonly dataDir: string | null;
+  private readonly chromiumPath: string | null | undefined;
   readonly now: () => number;
 
   /** Points de contrôle et synchronisation, pour l'écran Surveillance. */
@@ -115,6 +143,8 @@ export class MonitorService {
     error: null as string | null,
     hubLastCycleAt: null as number | null,
     running: false,
+    /** Incidents notifiés par le Worker (dernier GET /state), source de l'historique quand il est vivant. */
+    edgeIncidents: null as StateResponse["incidents"] | null,
   };
   private timer: NodeJS.Timeout | null = null;
   private syncChain: Promise<void> = Promise.resolve();
@@ -127,12 +157,20 @@ export class MonitorService {
   constructor(deps: MonitorDeps) {
     this.push = deps.push;
     this.veille = deps.veille;
-    this.fetchImpl = deps.fetch ?? fetch;
-    this.tls = deps.tls ?? nodeTlsConnector;
+    const lookup = deps.lookup ?? systemLookup;
+    this.fetchImpl = deps.fetch ?? guardedFetch({ lookup });
+    this.tls = deps.tls ?? makeTlsConnector(lookup);
     this.resolver = deps.resolver ?? defaultResolver();
     this.rdap = deps.rdap ?? new RdapClient({ fetch: this.fetchImpl });
-    this.speed = deps.speed ?? ((url) => measureSpeed(url, { chromiumPath: deps.chromiumPath }));
+    this.speed = deps.speed ?? ((url) => measureSpeed(url, { chromiumPath: deps.chromiumPath, lookup }));
+    this.dataDir = deps.dataDir ?? null;
+    this.chromiumPath = deps.chromiumPath;
     this.now = deps.now ?? Date.now;
+  }
+
+  /** Mesure de vitesse disponible, ou la raison de sa désactivation. */
+  speedStatus(): Promise<{ available: boolean; reason: string | null }> {
+    return speedStatus({ chromiumPath: this.chromiumPath });
   }
 
   // --- Cibles ---
@@ -153,7 +191,8 @@ export class MonitorService {
       if (!this.veille.configured) return;
       try {
         const targets: MonitorTargetSpec[] = (await this.activeTargets()).map((t) => ({ id: t.id, label: t.label, url: t.url, keyword: t.keyword }));
-        await this.veille.sync({ targets, subscriptions: await this.push.specs() });
+        const subscriptions = (await this.push.specs()).filter((s) => isAllowedPushEndpoint(s.endpoint));
+        await this.veille.sync({ targets, subscriptions });
         this.health.lastSyncAt = this.now();
         this.health.error = null;
       } catch (err) {
@@ -246,32 +285,86 @@ export class MonitorService {
     await this.aggregate(targets.map((t) => t.id), this.now());
   }
 
-  /** GET /state : observations du Worker enregistrées (observateur « edge »). */
+  /**
+   * GET /state : observations du Worker enregistrées (observateur « edge »). Changements depuis le
+   * curseur et état courant de chaque cible, sans doublon : une ligne déjà présente pour (cible, at)
+   * n'est jamais réinsérée (redémarrage du hub, curseur reparti de la base).
+   */
   async pullEdgeState(): Promise<void> {
     try {
-      const state = await this.veille.state(this.health.lastStateSince);
+      if (this.health.lastStateSince === 0) {
+        const last = await prisma.monitorCheck.findFirst({ where: { kind: "http", observer: "edge" }, orderBy: { at: "desc" }, select: { at: true } });
+        if (last) this.health.lastStateSince = last.at.getTime();
+      }
+      const since = this.health.lastStateSince;
+      const state = await this.veille.state(since);
       const known = new Set((await prisma.monitorTarget.findMany({ select: { id: true } })).map((t) => t.id));
-      const fresh = state.observations.filter((o) => known.has(o.targetId) && o.observer === "edge" && o.at > this.health.lastStateSince);
-      if (fresh.length > 0) {
-        await prisma.monitorCheck.createMany({
-          data: fresh.map((o) => ({
-            targetId: o.targetId,
-            kind: "http",
-            observer: "edge",
-            at: new Date(o.at),
-            ok: o.ok,
-            status: o.status,
-            ms: o.ms,
-            detail: JSON.stringify({ reason: o.reason?.slice(0, 120) ?? null }),
-          })),
+      const byKey = new Map<string, EdgeObservation>();
+      for (const o of [...(state.current ?? []), ...state.observations]) {
+        if (o.observer === "edge" && known.has(o.targetId) && Number.isFinite(o.at)) byKey.set(`${o.targetId}|${o.at}`, o);
+      }
+      const candidates = [...byKey.values()];
+      if (candidates.length > 0) {
+        const existing = await prisma.monitorCheck.findMany({
+          where: { kind: "http", observer: "edge", OR: candidates.map((o) => ({ targetId: o.targetId, at: new Date(o.at) })) },
+          select: { targetId: true, at: true },
         });
-        this.health.lastStateSince = Math.max(...fresh.map((o) => o.at));
+        const present = new Set(existing.map((e) => `${e.targetId}|${e.at.getTime()}`));
+        const fresh = candidates.filter((o) => !present.has(`${o.targetId}|${o.at}`));
+        if (fresh.length > 0) {
+          await prisma.monitorCheck.createMany({
+            data: fresh.map((o) => ({
+              targetId: o.targetId,
+              kind: "http",
+              observer: "edge",
+              at: new Date(o.at),
+              ok: o.ok,
+              status: o.status,
+              ms: o.ms,
+              detail: JSON.stringify({ reason: o.reason?.slice(0, 120) ?? null, ...(typeof o.failures === "number" ? { failures: o.failures } : {}) }),
+            })),
+          });
+        }
+        this.health.lastStateSince = Math.max(since, ...candidates.map((o) => o.at));
       }
       this.health.edgeSeenAt = state.edgeSeenAt;
+      this.health.edgeIncidents = state.incidents.filter((i) => known.has(i.targetId));
       this.health.error = null;
     } catch (err) {
       this.health.error = err instanceof Error ? err.message : "état du Worker illisible";
     }
+  }
+
+  /**
+   * Worker vivant : ses incidents (ceux qu'il a notifiés) deviennent l'historique du hub, repérés par
+   * (cible, début). Le hub n'en ouvre pas d'autres tant qu'il est vivant.
+   */
+  private async mirrorEdgeIncidents(targetIds: Set<string>, recent: Map<string, ObserverChecks>): Promise<Set<string>> {
+    const mirrored = new Set<string>();
+    for (const wi of this.health.edgeIncidents ?? []) {
+      if (!targetIds.has(wi.targetId)) continue;
+      const startedAt = new Date(wi.startedAt);
+      const endedAt = wi.endedAt === null ? null : new Date(wi.endedAt);
+      mirrored.add(`${wi.targetId}|${wi.startedAt}`);
+      const existing = await prisma.monitorIncident.findFirst({ where: { targetId: wi.targetId, startedAt } });
+      if (!existing) {
+        const last = recent.get(wi.targetId)?.edge[0];
+        await prisma.monitorIncident.create({
+          data: {
+            targetId: wi.targetId,
+            startedAt,
+            endedAt,
+            cause: last && !last.ok ? toObservation(last).reason : null,
+            observers: wi.basis.join(","),
+            notifiedAt: startedAt,
+            recoveredNotifiedAt: endedAt,
+          },
+        });
+      } else if (endedAt && !existing.endedAt) {
+        await prisma.monitorIncident.update({ where: { id: existing.id }, data: { endedAt, recoveredNotifiedAt: endedAt } });
+      }
+    }
+    return mirrored;
   }
 
   /** Le Worker est-il configuré et vivant (vu depuis moins de 15 min) ? */
@@ -330,9 +423,10 @@ export class MonitorService {
   async evaluate(targets: TargetWithSite[]): Promise<void> {
     const now = this.now();
     const recent = await this.recentChecks(targets.map((t) => t.id), now);
+    const hubAlerts = !this.edgeAlive(now);
+    const mirrored = !hubAlerts && this.health.edgeIncidents ? await this.mirrorEdgeIncidents(new Set(targets.map((t) => t.id)), recent) : null;
     const open = await prisma.monitorIncident.findMany({ where: { targetId: { in: targets.map((t) => t.id) }, endedAt: null } });
     const openByTarget = new Map(open.map((i) => [i.targetId, i]));
-    const hubAlerts = !this.edgeAlive(now);
     const why = this.veille.configured ? "décision du hub seul : surveillance Cloudflare interrompue" : "décision du hub seul : surveillance Cloudflare non configurée";
     const opened: Array<{ target: TargetWithSite; incident: MonitorIncident }> = [];
 
@@ -340,6 +434,8 @@ export class MonitorService {
       const checks = recent.get(target.id);
       const decision = this.decideFor(checks, now);
       const incident = openByTarget.get(target.id);
+      // Incident tenu par le Worker : ouvert et fermé par lui seul (mirrorEdgeIncidents).
+      if (mirrored && (!incident || mirrored.has(`${incident.targetId}|${incident.startedAt.getTime()}`))) continue;
       if (decision.verdict === "down" && !incident) {
         const cause = checks?.hub[0] ? toObservation(checks.hub[0]).reason : checks?.edge[0] ? toObservation(checks.edge[0]).reason : null;
         const created = await prisma.monitorIncident.create({
@@ -358,7 +454,7 @@ export class MonitorService {
           });
           await prisma.monitorIncident.update({ where: { id: incident.id }, data: { recoveredNotifiedAt: new Date(now) } });
         }
-      } else if (incident && hubAlerts && !incident.reminderAt && now - incident.startedAt.getTime() >= INCIDENT_REMINDER_MS) {
+      } else if (incident && hubAlerts && now - (incident.reminderAt ?? incident.startedAt).getTime() >= INCIDENT_REMINDER_MS) {
         await this.notify({
           title: `Toujours en panne : ${target.label}`,
           body: `Panne depuis ${formatDuration(now - incident.startedAt.getTime())} (${why}).`,
@@ -650,14 +746,37 @@ export class MonitorService {
 
   // --- Historique ---
 
-  /** Purge quotidienne : HTTP brut au-delà de 7 jours, le reste au-delà de 13 mois. */
+  /**
+   * Purge quotidienne : HTTP brut au-delà de 7 jours, sauf la dernière ligne de chaque couple (cible,
+   * observateur), qui porte l'état courant (le Worker n'envoie que les changements) ; le reste au-delà
+   * de 13 mois ; dossiers de rapports PDF des cibles supprimées (site supprimé en cascade).
+   */
   async purge(now = this.now()): Promise<void> {
     const raw = new Date(now - RAW_HTTP_RETENTION_MS);
     const long = new Date(now - LONG_RETENTION_MS);
-    await prisma.monitorCheck.deleteMany({ where: { kind: "http", at: { lt: raw } } });
-    await prisma.monitorCheck.deleteMany({ where: { at: { lt: long } } });
+    const latest = await prisma.monitorCheck.groupBy({ by: ["targetId", "observer"], where: { kind: "http" }, _max: { at: true } });
+    await prisma.monitorCheck.deleteMany({
+      where: {
+        kind: "http",
+        at: { lt: raw },
+        ...(latest.length ? { NOT: { OR: latest.map((l) => ({ targetId: l.targetId, observer: l.observer, at: l._max.at! })) } } : {}),
+      },
+    });
+    await prisma.monitorCheck.deleteMany({ where: { kind: { not: "http" }, at: { lt: long } } });
     await prisma.monitorHourly.deleteMany({ where: { hour: { lt: long } } });
     await prisma.monitorIncident.deleteMany({ where: { endedAt: { lt: long } } });
     await prisma.monitorAlert.deleteMany({ where: { sentAt: { lt: long } } });
+    await this.purgeOrphanReports();
+  }
+
+  /** Dossiers reports/<id> dont la cible n'existe plus. */
+  private async purgeOrphanReports(): Promise<void> {
+    if (!this.dataDir) return;
+    const dir = path.join(this.dataDir, "reports");
+    const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+    const ids = entries.filter((e) => e.isDirectory()).map((e) => e.name);
+    if (ids.length === 0) return;
+    const alive = new Set((await prisma.monitorTarget.findMany({ where: { id: { in: ids } }, select: { id: true } })).map((t) => t.id));
+    for (const id of ids) if (!alive.has(id)) await rm(path.join(dir, id), { recursive: true, force: true });
   }
 }

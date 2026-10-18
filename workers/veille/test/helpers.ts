@@ -18,7 +18,7 @@ export async function makeVapid() {
 }
 
 /** Abonnement comme le donnerait un navigateur (p256dh, auth). */
-export async function makeSubscription(endpoint = "https://push.example.com/abc") {
+export async function makeSubscription(endpoint = "https://fcm.googleapis.com/fcm/send/abc") {
   const pair = (await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"])) as { publicKey: CryptoKey; privateKey: CryptoKey };
   const raw = await crypto.subtle.exportKey("raw", pair.publicKey);
   const auth = crypto.getRandomValues(new Uint8Array(16));
@@ -115,8 +115,8 @@ export function makeEnv(db: D1Database, vapid?: { subject: string; publicKey: st
 export async function signed(method: "GET" | "POST", path: string, body: unknown, nowMs: number, secret = SECRET): Promise<Request> {
   const text = body === undefined ? "" : JSON.stringify(body);
   const ts = String(Math.floor(nowMs / 1000));
-  const pathname = new URL(path, "https://veille.example.workers.dev").pathname;
-  const sig = await signRequest(secret, ts, method, pathname, text);
+  const url = new URL(path, "https://veille.example.workers.dev");
+  const sig = await signRequest(secret, ts, method, `${url.pathname}${url.search}`, text);
   return new Request(new URL(path, "https://veille.example.workers.dev"), {
     method,
     headers: { [TIMESTAMP_HEADER]: ts, [SIGNATURE_HEADER]: sig, "content-type": "application/json" },

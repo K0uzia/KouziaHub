@@ -4,6 +4,7 @@ import {
   PROTOCOL_VERSION,
   SIGNATURE_HEADER,
   TIMESTAMP_HEADER,
+  isAllowedPushEndpoint,
   nextObserverState,
   verifyRequest,
   type HttpObservation,
@@ -17,7 +18,7 @@ import {
 import { slotOf } from "./checks.js";
 import { MAX_BODY_BYTES, MAX_OBSERVATIONS, MAX_SUBSCRIPTIONS, MAX_TARGETS, type Deps, type Env } from "./env.js";
 import { enqueueStatement, hubBackNotification } from "./push.js";
-import { metaNumber, rowToObservation, rowToState, setMetaStatement, stateChanged, upsertStatesStatement, type StateRow } from "./state.js";
+import { metaNumber, rowToEdgeObservation, rowToState, setMetaStatement, stateChanged, upsertStatesStatement, type StateRow } from "./state.js";
 
 /** Réponse unique de tout refus : même statut, même corps, mêmes en-têtes. */
 export const notFound = () => new Response("Not Found", { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } });
@@ -80,7 +81,7 @@ export function parseSync(raw: unknown): SyncBody | null {
   }
   const subscriptions: PushSubscriptionSpec[] = [];
   for (const s of raw.subscriptions) {
-    if (!isObj(s) || !str(s.endpoint, 1024) || !s.endpoint.startsWith("https://") || !isObj(s.keys)) return null;
+    if (!isObj(s) || !str(s.endpoint, 1024) || !isAllowedPushEndpoint(s.endpoint) || !isObj(s.keys)) return null;
     if (!str(s.keys.p256dh, 200) || !str(s.keys.auth, 100)) return null;
     subscriptions.push({ endpoint: s.endpoint, keys: { p256dh: s.keys.p256dh, auth: s.keys.auth } });
   }
@@ -159,21 +160,27 @@ async function handleReport(env: Env, body: ReportBody, now: number) {
   return json({ ok: true, accepted: body.observations.filter((o) => known.has(o.targetId)).length });
 }
 
+/**
+ * Changements depuis « since » et état courant de chaque cible (une ligne par cible : une cible stable
+ * n'a aucun changement récent), avec le nombre d'échecs consécutifs.
+ */
 async function handleState(env: Env, since: number, now: number) {
   const [obsRes, incRes, metaRes] = await env.DB.batch([
-    env.DB.prepare("SELECT * FROM state WHERE observer = 'edge' AND at >= ?1").bind(since),
+    env.DB.prepare("SELECT * FROM state WHERE observer = 'edge'"),
     env.DB.prepare(
       "SELECT target_id, started_at, ended_at, basis FROM incidents WHERE ended_at IS NULL OR ended_at >= ?1 OR started_at >= ?1 ORDER BY started_at DESC LIMIT 1000",
     ).bind(since),
     env.DB.prepare("SELECT key, value FROM meta WHERE key IN ('edge_seen_at', 'hub_seen_at')"),
   ]);
   const meta = metaRes!.results as Array<{ key: string; value: string | null }>;
+  const current = (obsRes!.results as unknown as StateRow[]).map(rowToEdgeObservation);
   const body: StateResponse = {
     v: PROTOCOL_VERSION,
     now,
     edgeSeenAt: metaNumber(meta, "edge_seen_at"),
     hubSeenAt: metaNumber(meta, "hub_seen_at"),
-    observations: (obsRes!.results as unknown as StateRow[]).map(rowToObservation),
+    observations: current.filter((o) => o.at >= since),
+    current,
     incidents: (incRes!.results as Array<{ target_id: string; started_at: number; ended_at: number | null; basis: string }>).map((i) => ({
       targetId: i.target_id,
       startedAt: i.started_at,
@@ -182,6 +189,21 @@ async function handleState(env: Env, since: number, now: number) {
     })),
   };
   return json(body);
+}
+
+/**
+ * Anti-rejeu : l'horodatage signé doit dépasser le dernier accepté pour la route (gardé dans meta).
+ * Une seule requête, atomique : la ligne n'est rendue que si elle a été insérée ou relevée.
+ */
+async function claimTimestamp(env: Env, route: string, timestamp: string): Promise<boolean> {
+  const row = await env.DB.prepare(
+    `INSERT INTO meta (key, value) VALUES (?1, ?2)
+     ON CONFLICT (key) DO UPDATE SET value = excluded.value WHERE CAST(meta.value AS INTEGER) < CAST(excluded.value AS INTEGER)
+     RETURNING value`,
+  )
+    .bind(`last_ts:${route}`, timestamp)
+    .first();
+  return row !== null;
 }
 
 export async function handleFetch(request: Request, env: Env, deps: Deps): Promise<Response> {
@@ -196,13 +218,16 @@ export async function handleFetch(request: Request, env: Env, deps: Deps): Promi
     env.MONITOR_SHARED_SECRET,
     { timestamp: request.headers.get(TIMESTAMP_HEADER), signature: request.headers.get(SIGNATURE_HEADER) },
     request.method,
-    url.pathname,
+    `${url.pathname}${url.search}`,
     body,
     now,
   );
   if (!signed) return notFound();
+  // Horodatage consommé seulement par une requête signée et valide (après lecture du contenu).
+  const fresh = () => claimTimestamp(env, route, request.headers.get(TIMESTAMP_HEADER)!);
 
   if (route === "GET /state") {
+    if (!(await fresh())) return notFound();
     const since = Number(url.searchParams.get("since") ?? "0");
     return handleState(env, Number.isFinite(since) && since >= 0 ? since : 0, now);
   }
@@ -214,8 +239,8 @@ export async function handleFetch(request: Request, env: Env, deps: Deps): Promi
   }
   if (route === "POST /sync") {
     const parsed = parseSync(raw);
-    return parsed ? handleSync(env, parsed) : notFound();
+    return parsed && (await fresh()) ? handleSync(env, parsed) : notFound();
   }
   const parsed = parseReport(raw);
-  return parsed ? handleReport(env, parsed, now) : notFound();
+  return parsed && (await fresh()) ? handleReport(env, parsed, now) : notFound();
 }

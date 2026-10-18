@@ -9,6 +9,7 @@ import { requireAuth } from "@/lib/auth.js";
 import { ERP_CLIENT_ID, ErpUnavailableError } from "@/lib/erp/types.js";
 import { HttpError } from "@/lib/http.js";
 import { idParams, routeParam } from "@/lib/http-input.js";
+import { isPrivateHost } from "@/lib/monitor/checks.js";
 import { generateReport, MONTH_RE } from "@/lib/monitor/report.js";
 import type { TargetWithSite } from "@/lib/monitor/service.js";
 import { buildEntries, incidentEntry } from "@/lib/monitor/view.js";
@@ -34,7 +35,7 @@ function badRequest(error: z.ZodError): HttpError {
   return new HttpError(400, first?.message && !first.message.startsWith("Invalid") ? first.message : "Données invalides.");
 }
 
-/** URL surveillée : http(s), nom d'hôte valide, sans identifiants. */
+/** URL surveillée : http(s), nom d'hôte public valide (ni IP privée ni nom du réseau local), sans identifiants. */
 function parseTargetUrl(raw: string): { url: string; hostname: string } {
   let u: URL;
   try {
@@ -44,6 +45,7 @@ function parseTargetUrl(raw: string): { url: string; hostname: string } {
   }
   if (u.protocol !== "https:" && u.protocol !== "http:") throw new HttpError(400, "Adresse en https:// ou http:// seulement.");
   if (u.username || u.password) throw new HttpError(400, "Adresse sans identifiants.");
+  if (isPrivateHost(u.hostname)) throw new HttpError(400, "Adresse du réseau local refusée.");
   const host = normalizeFinalDomain(u.hostname.startsWith("www.") ? u.hostname.slice(4) : u.hostname);
   if (!host.ok) throw new HttpError(400, "Nom de domaine invalide.");
   u.hash = "";
@@ -114,6 +116,7 @@ export function monitorRoutes(services: Services): FastifyPluginAsync {
           hubChecksRunning: monitor.started,
           push: { configured: services.push.configured, devices: await prisma.pushSubscription.count() },
           zonesToken: services.zones.configured,
+          speed: await monitor.speedStatus(),
         },
         recentIncidents: recent.map((i) => incidentEntry(i, i.target.label)),
       };

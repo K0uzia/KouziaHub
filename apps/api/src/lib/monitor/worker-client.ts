@@ -35,6 +35,8 @@ export class HttpVeilleClient implements VeilleClient {
   private readonly base: string;
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => number;
+  /** Dernier horodatage signé par route : le Worker refuse un horodatage déjà vu ou plus ancien. */
+  private readonly lastTimestamp = new Map<string, number>();
 
   constructor(options: { url: string; secret: string; fetch?: typeof fetch; now?: () => number }) {
     const url = new URL(options.url);
@@ -46,8 +48,13 @@ export class HttpVeilleClient implements VeilleClient {
   }
 
   private async call(method: "GET" | "POST", pathname: string, query: string, body: string): Promise<Response> {
-    const timestamp = String(Math.floor(this.now() / 1000));
-    const signature = await signRequest(this.#secret, timestamp, method, pathname, body);
+    // Strictement croissant par route (deux appels dans la même seconde) ; l'avance reste dans la
+    // fenêtre de 5 min acceptée par le Worker.
+    const route = `${method} ${pathname}`;
+    const ts = Math.max(Math.floor(this.now() / 1000), (this.lastTimestamp.get(route) ?? 0) + 1);
+    this.lastTimestamp.set(route, ts);
+    const timestamp = String(ts);
+    const signature = await signRequest(this.#secret, timestamp, method, `${pathname}${query}`, body);
     let res: Response;
     try {
       res = await this.fetchImpl(`${this.base}${pathname}${query}`, {
@@ -77,7 +84,7 @@ export class HttpVeilleClient implements VeilleClient {
     await res.body?.cancel().catch(() => undefined);
   }
 
-  /** La requête est signée sur le chemin seul (sans ?since=), corps vide. */
+  /** Signée sur le chemin et la requête (?since=), corps vide. */
   async state(since: number): Promise<StateResponse> {
     const res = await this.call("GET", "/state", `?since=${Math.max(0, Math.floor(since))}`, "");
     const text = await res.text();
@@ -88,7 +95,7 @@ export class HttpVeilleClient implements VeilleClient {
     } catch {
       throw new VeilleUnavailable("Worker de surveillance : réponse illisible.");
     }
-    if (json?.v !== PROTOCOL_VERSION || !Array.isArray(json.observations) || !Array.isArray(json.incidents)) {
+    if (json?.v !== PROTOCOL_VERSION || !Array.isArray(json.observations) || !Array.isArray(json.incidents) || (json.current !== undefined && !Array.isArray(json.current))) {
       throw new VeilleUnavailable("Worker de surveillance : version du protocole inattendue.");
     }
     return json;

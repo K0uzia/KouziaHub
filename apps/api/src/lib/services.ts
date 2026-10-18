@@ -97,6 +97,7 @@ export function createServices(overrides: ServicesOverrides = {}): Services {
     push: services.push,
     veille: overrides.monitor?.veille ?? veilleFromEnv(),
     chromiumPath: overrides.chromiumPath,
+    dataDir,
     ...overrides.monitor,
   });
   services.monitor.monthlyReports = async (month) => {
