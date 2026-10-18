@@ -226,6 +226,8 @@ configure_api() {
   SEULEMENT ces droits :
     - Account > Cloudflare Pages > Edit       (Account Resources : votre compte seulement)
     - Zone > DNS > Edit                        (Zone Resources : Specific zone > kouzia.com)
+    - Zone > Cache Purge > Purge               (même zone : bouton « Purger le cache Cloudflare »)
+  Sans ce dernier droit, tout marche sauf la purge du cache (le hub le dit).
   Expiration : dans un an. Filtrage par adresse IP : oui si l'IP de la box est fixe.
   Identifiants : page de kouzia.com dans Cloudflare, colonne de droite, rubrique « API »
   (Zone ID et Account ID, 32 caractères chacun).

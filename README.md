@@ -76,6 +76,7 @@ Créer le jeton : Cloudflare > My Profile > API Tokens > Create Token > Custom t
 
 - Account > Cloudflare Pages > Edit (Account Resources : votre compte) ;
 - Zone > DNS > Edit (Zone Resources : Specific zone > `kouzia.com`) ;
+- Zone > Cache Purge > Purge (même zone `kouzia.com` seulement) : sert au bouton « Purger le cache Cloudflare » d'un site, utile après un changement de règles de cache ou quand un ancien fichier reste servi. Sans ce droit, tout le reste fonctionne et le hub explique quoi ajouter ;
 - rien d'autre ;
 - expiration : dans un an ;
 - filtrage par adresse IP : oui si l'IP de votre box est fixe.
