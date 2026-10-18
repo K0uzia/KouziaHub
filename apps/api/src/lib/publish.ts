@@ -85,8 +85,44 @@ export async function snapshotVersion(siteId: string, versionId: string): Promis
 }
 
 /**
+ * Déploiements Cloudflare créés pendant la fenêtre de la version (depuis sa création) et inconnus du hub :
+ * restes d'une tentative dont la réponse s'est perdue (délai dépassé après création, appel rejoué).
+ * L'API ne renvoie pas le manifeste : on rattache le plus récent de la fenêtre, une seule publication
+ * tournant à la fois par site ; les autres sont supprimés, jamais celui servi.
+ */
+async function strayDeployments(services: Services, site: { id: string; pagesProject: string }, since: Date) {
+  const known = new Set(
+    (await prisma.version.findMany({ where: { siteId: site.id, cfDeploymentId: { not: null } }, select: { cfDeploymentId: true } })).map(
+      (v) => v.cfDeploymentId!,
+    ),
+  );
+  const list = await services.cloudflare.listDeployments(site.pagesProject);
+  return list
+    .filter((d) => !known.has(d.id) && Date.parse(d.createdOn) >= since.getTime())
+    .sort((a, b) => Date.parse(b.createdOn) - Date.parse(a.createdOn));
+}
+
+/** Début de la fenêtre : création de la version, moins une marge pour un écart d'horloge avec Cloudflare. */
+const windowStart = (createdAt: Date) => new Date(createdAt.getTime() - 60_000);
+
+async function deleteStrays(services: Services, project: string, ids: string[]): Promise<void> {
+  for (const id of ids) await services.cloudflare.deleteDeployment(project, id).catch(() => undefined);
+}
+
+async function markPublished(siteId: string, versionId: string, deployment: { id: string; url: string }): Promise<void> {
+  const now = new Date();
+  await prisma.version.update({
+    where: { id: versionId },
+    data: { status: "PUBLISHED", cfDeploymentId: deployment.id, cfDeploymentUrl: deployment.url || null, publishedAt: now, error: null },
+  });
+  await prisma.site.update({ where: { id: siteId }, data: { currentVersionId: versionId, touchedAt: now } });
+  await refreshDirty(siteId);
+}
+
+/**
  * Envoie une version à Cloudflare et la rend servie. Rejouable : une version déjà déployée n'est pas
- * renvoyée. _headers et _redirects partent comme champs dédiés, jamais comme fichiers servis.
+ * renvoyée, et un déploiement créé par une tentative précédente sans réponse est rattaché au lieu d'en
+ * créer un second. _headers et _redirects partent comme champs dédiés, jamais comme fichiers servis.
  */
 export async function deployVersion(services: Services, siteId: string, versionId: string): Promise<void> {
   const site = await prisma.site.findUniqueOrThrow({ where: { id: siteId } });
@@ -95,6 +131,14 @@ export async function deployVersion(services: Services, siteId: string, versionI
   if (version.status === "PUBLISHED" && version.cfDeploymentId) {
     await prisma.site.update({ where: { id: siteId }, data: { currentVersionId: version.id } });
     await refreshDirty(siteId);
+    return;
+  }
+  // Reprise : un déploiement de la fenêtre de cette version existe déjà chez Cloudflare.
+  const strays = await strayDeployments(services, site, windowStart(version.createdAt));
+  if (strays.length > 0) {
+    const [adopted, ...rest] = strays;
+    await markPublished(siteId, versionId, adopted!);
+    await deleteStrays(services, site.pagesProject, rest.map((d) => d.id));
     return;
   }
   await prisma.version.update({ where: { id: versionId }, data: { status: "UPLOADING", error: null } });
@@ -123,13 +167,10 @@ export async function deployVersion(services: Services, siteId: string, versionI
       ...(config.headersFile !== undefined ? { headersFile: config.headersFile } : {}),
       ...(config.redirectsFile !== undefined ? { redirectsFile: config.redirectsFile } : {}),
     });
-    const now = new Date();
-    await prisma.version.update({
-      where: { id: versionId },
-      data: { status: "PUBLISHED", cfDeploymentId: deployment.id, cfDeploymentUrl: deployment.url || null, publishedAt: now, error: null },
-    });
-    await prisma.site.update({ where: { id: siteId }, data: { currentVersionId: versionId, touchedAt: now } });
-    await refreshDirty(siteId);
+    await markPublished(siteId, versionId, deployment);
+    // Appel rejoué après une coupure : d'autres déploiements de la fenêtre peuvent exister, supprimés.
+    const extra = await strayDeployments(services, site, windowStart(version.createdAt)).catch(() => []);
+    await deleteStrays(services, site.pagesProject, extra.map((d) => d.id));
   } catch (err) {
     await prisma.version.update({
       where: { id: versionId },

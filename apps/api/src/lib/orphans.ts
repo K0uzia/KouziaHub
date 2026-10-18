@@ -1,6 +1,6 @@
 import type { OrphanFinding, OrphanReport } from "@/contract.js";
 import { audit } from "@/lib/audit.js";
-import { HUB_DNS_COMMENT_PREFIX, type CfDnsRecord, type CfProject, type CloudflareGateway } from "@/lib/cloudflare/types.js";
+import { HUB_DNS_COMMENT_PREFIX, isFailClosed, type CfDnsRecord, type CfProject, type CloudflareGateway } from "@/lib/cloudflare/types.js";
 import { HttpError } from "@/lib/http.js";
 import { PROJECTS_LIMIT } from "@/lib/limits.js";
 import { prisma } from "@/lib/prisma.js";
@@ -87,6 +87,9 @@ function toReport(row: { checkedAt: Date; mode: string; findings: string; error:
   return { checkedAt: row.checkedAt.toISOString(), mode: row.mode === "real" ? "real" : "fake", findings, error: row.error };
 }
 
+/** Début du détail d'un écart « fail closed » non recalé (repère stable pour la notice du catalogue). */
+export const FAIL_CLOSED_FINDING = "Réglage « fail closed » non appliqué";
+
 /** Contrôle des orphelins : CNAME du hub, projets « kz- » et sites en base comparés. */
 export class OrphanService {
   constructor(
@@ -108,11 +111,40 @@ export class OrphanService {
     return analyse(records, projects, sites, this.sitesDomain);
   }
 
-  async check(): Promise<OrphanReport> {
+  /**
+   * Contrôle quotidien du réglage « fail closed » des projets du hub (kz-*) : lecture de chaque projet ;
+   * écart recalé (même PATCH qu'à la reprise de l'étape projet) et journalisé ; recalage en échec :
+   * journal en erreur et constat dans le rapport (notice du catalogue).
+   */
+  private async checkFailClosed(): Promise<OrphanFinding[]> {
+    const out: OrphanFinding[] = [];
+    const projects = (await this.cloudflare.listProjects()).filter((p) => p.name.startsWith(PAGES_PROJECT_PREFIX));
+    for (const { name } of projects) {
+      const project = await this.cloudflare.getProject(name);
+      if (!project || isFailClosed(project)) continue;
+      try {
+        await this.cloudflare.setFailClosed(name);
+        await audit({ action: "cloudflare.fail_open.fix", result: "ok", detail: `Projet ${name} : Functions recalées en « fail closed »` });
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : "erreur inconnue";
+        await audit({ action: "cloudflare.fail_open.fix", result: "error", detail: `Projet ${name} : ${reason}`.slice(0, 500) });
+        out.push({ type: "project", name, detail: `${FAIL_CLOSED_FINDING} : ${reason}`, deletable: false });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * failClosed : avec le contrôle du réglage « fail closed » (contrôle quotidien et « Vérifier maintenant ») ;
+   * sans (contrôle d'après démarrage, pas de rattrapage), les constats précédents de ce réglage sont gardés.
+   */
+  async check(options: { failClosed?: boolean } = {}): Promise<OrphanReport> {
     let findings: OrphanFinding[] = [];
     let error: string | null = null;
     try {
       findings = await this.findings();
+      if (options.failClosed !== false) findings.push(...(await this.checkFailClosed()));
+      else findings.push(...(await this.latest()).findings.filter((f) => f.type === "project" && f.detail.startsWith(FAIL_CLOSED_FINDING)));
     } catch (err) {
       error = `Contrôle impossible : ${err instanceof Error ? err.message : "erreur inconnue"}`;
     }

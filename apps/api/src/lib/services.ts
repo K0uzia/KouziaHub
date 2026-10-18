@@ -128,9 +128,11 @@ export async function startBackground(services: Services): Promise<void> {
   const interrupted = await services.engine.recoverInterrupted();
   if (interrupted > 0) console.warn(`[démarrage] ${interrupted} opération(s) interrompue(s), à reprendre depuis le hub`);
   await services.domains.resumeAll();
-  const run = () => void services.orphans.check().catch((err) => console.error("[orphelins] contrôle impossible", err instanceof Error ? err.message : err));
-  const first = setTimeout(run, 60_000);
-  const daily = setInterval(run, DAY_MS);
+  const run = (failClosed: boolean) => () =>
+    void services.orphans.check({ failClosed }).catch((err) => console.error("[orphelins] contrôle impossible", err instanceof Error ? err.message : err));
+  // Après le démarrage : orphelins seulement ; le réglage « fail closed » est vérifié au contrôle quotidien.
+  const first = setTimeout(run(false), 60_000);
+  const daily = setInterval(run(true), DAY_MS);
   const gc = setInterval(() => void services.blobs.gc().catch(() => undefined), DAY_MS);
   for (const t of [first, daily, gc]) t.unref();
   services.timers.push(first, daily, gc);

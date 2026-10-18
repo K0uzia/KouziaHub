@@ -210,6 +210,60 @@ describe("envoi d'un zip", () => {
   });
 });
 
+describe("publication : délai dépassé après création du déploiement", () => {
+  async function failedPublish() {
+    await upload([{ filename: "index.html", content: "<h1>v</h1>" }]);
+    const project = (await detail()).pagesProject;
+    const before = hub.cf.deployments(project).length;
+    hub.cf.failAfterNext("deploy");
+    await publish("première tentative");
+    const failed = await detail();
+    expect(failed.operation?.status).toBe("FAILED");
+    // Cloudflare a bien créé le déploiement, le hub ne le sait pas.
+    expect(hub.cf.deployments(project)).toHaveLength(before + 1);
+    return { project, before, failed };
+  }
+  const tracked = async () => (await prisma.version.findMany({ where: { siteId, cfDeploymentId: { not: null } } })).map((v) => v.cfDeploymentId);
+
+  it("la reprise rattache le déploiement créé : un seul déploiement suivi, aucun orphelin", async () => {
+    const { project, failed } = await failedPublish();
+    const created = hub.cf.deployments(project).at(-1)!.id;
+    const deploys = () => hub.cf.calls.filter((c) => c.startsWith("deploy:")).length;
+    const deploysBefore = deploys();
+    const retry = await hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/operations/${failed.operation!.id}/retry`, headers: hub.headers });
+    expect(retry.statusCode).toBe(200);
+    await settle(hub);
+    // Aucun nouveau déploiement : celui de la première tentative est rattaché à la version.
+    expect(deploys()).toBe(deploysBefore);
+    const version = (await prisma.version.findMany({ where: { siteId, note: "première tentative" } }))[0]!;
+    expect(version.cfDeploymentId).toBe(created);
+    expect(version.status).toBe("PUBLISHED");
+    // Plus aucun déploiement inconnu du hub (la page d'attente, elle, est purgée par la rétention).
+    const deployments = hub.cf.deployments(project);
+    const known = await tracked();
+    for (const d of deployments) expect(known).toContain(d.id);
+    const site = await detail();
+    expect(site.operation).toBeNull();
+    expect(site.currentVersion?.number).toBe((await versions()).find((v) => v.note === "première tentative")!.number);
+  });
+
+  it("deux déploiements restés de la tentative : le plus récent est rattaché, l'autre supprimé", async () => {
+    const { project, failed } = await failedPublish();
+    const first = hub.cf.deployments(project).at(-1)!.id;
+    // Appel rejoué par le client HTTP après une coupure : un second déploiement identique.
+    await hub.cf.deploy(project, { files: [], workerJs: "// doublon" });
+    const newest = hub.cf.deployments(project).at(-1)!.id;
+    await hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/operations/${failed.operation!.id}/retry`, headers: hub.headers });
+    await settle(hub);
+    const deployments = hub.cf.deployments(project).map((d) => d.id);
+    expect(deployments).toContain(newest);
+    expect(deployments).not.toContain(first);
+    expect(hub.cf.calls).toContain(`deleteDeployment:${first}`);
+    const known = await tracked();
+    for (const id of deployments) expect(known).toContain(id);
+  });
+});
+
 describe("publication et versions", () => {
   it("refuse sans index.html à la racine", async () => {
     await upload([{ filename: "page.html", content: "x" }]);

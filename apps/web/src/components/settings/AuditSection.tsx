@@ -33,6 +33,7 @@ const ACTION_LABEL: Record<string, string> = {
   "thumbnail.upload": "Vignette envoyée",
   "thumbnail.capture": "Capture de la vignette",
   "orphan.delete": "Suppression d'un enregistrement DNS orphelin",
+  "cloudflare.fail_open.fix": "Réglage « fail closed » d'un projet recalé",
 };
 
 export function AuditSection() {

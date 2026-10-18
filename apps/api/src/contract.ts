@@ -131,7 +131,8 @@ export type CatalogResponse = {
 
 export type Notice = {
   level: "info" | "warning" | "error";
-  code: "cloudflare_fake" | "erp_unavailable" | "erp_fake" | "orphans" | "projects_near_limit";
+  /** fail_open : réglage « fail closed » d'un projet Pages non recalé par le contrôle quotidien. */
+  code: "cloudflare_fake" | "erp_unavailable" | "erp_fake" | "orphans" | "projects_near_limit" | "fail_open";
   message: string;
 };
 
