@@ -2,6 +2,13 @@ import { prisma } from "@/lib/prisma.js";
 
 // Ordre enfants puis parents (clés étrangères SQLite).
 const TABLES = [
+  "MonitorCheck",
+  "MonitorHourly",
+  "MonitorIncident",
+  "MonitorAlert",
+  "MonitorReport",
+  "MonitorTarget",
+  "PushSubscription",
   "VersionFile",
   "Version",
   "WorkingFile",

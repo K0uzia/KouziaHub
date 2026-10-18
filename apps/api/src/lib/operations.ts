@@ -9,6 +9,7 @@ import { PLACEHOLDER_HTML } from "@/lib/placeholder.js";
 import { prisma } from "@/lib/prisma.js";
 import { applyRetention, createVersion, deployVersion, hostnameOf } from "@/lib/publish.js";
 import type { Services } from "@/lib/services.js";
+import { recalibrateContent } from "@/lib/monitor/targets.js";
 
 /** Erreur d'étape au message affichable tel quel. */
 export class StepError extends Error {}
@@ -336,7 +337,12 @@ export class OperationEngine {
       siteSlug: op.siteSlug,
       detail: typeof params.versionNumber === "number" ? `version ${params.versionNumber}` : null,
     });
-    if (op.kind === "PUBLISH" && stillThere) this.services.thumbnails.enqueue(op.siteId!, { auto: true });
+    if (op.kind === "PUBLISH" && stillThere) {
+      this.services.thumbnails.enqueue(op.siteId!, { auto: true });
+      await recalibrateContent(op.siteId!, (sha) => this.services.blobs.read(sha)).catch(() => undefined);
+    }
+    // Cibles actives changées (site en ligne, coupé, supprimé) : configuration du Worker à jour.
+    void this.services.monitor.requestSync();
   }
 
   /** Démarrage : une opération restée RUNNING (arrêt du serveur) passe en échec, à reprendre. */
@@ -467,6 +473,7 @@ export class DomainWatcher {
           data: { domainStatus: "ACTIVE", ...(site.dnsRecordId && site.state !== "ONLINE" ? { state: "ONLINE", touchedAt: new Date() } : {}) },
         });
         await this.setWaitingDetail(siteId, "done");
+        void this.services.monitor.requestSync();
         await audit({ action: "site.certificate", result: "ok", siteId, siteSlug: site.slug });
         return;
       }
