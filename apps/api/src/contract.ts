@@ -270,15 +270,10 @@ export type SystemStatus = {
 //
 // GET    /api/sites/:id/files                    : FilesResponse
 // GET    /api/sites/:id/files/raw?path=          : contenu du fichier (téléchargement, Content-Disposition attachment)
-// POST   /api/sites/:id/files   multipart : champs « dir » (dossier cible, facultatif) puis fichiers ;
-//                                le nom de chaque fichier peut contenir des sous-dossiers (envoi de dossier)
-//                                : UploadResult (ajout ou remplacement)
 // POST   /api/sites/:id/files/delete   { paths: string[] } (un dossier se termine par « / ») : FilesResponse
 // POST   /api/sites/:id/files/move     { from: string, to: string } (renommer) : FilesResponse
-// POST   /api/sites/:id/zip     multipart : un fichier zip, champ « mode » = "replace" | "merge" : UploadResult
 //
-// Envoi par morceaux (l'interface passe tous ses envois par ces sessions ; les deux routes ci-dessus restent pour
-// les petits envois directs et les scripts) :
+// Envoi de fichiers et de zips : uniquement par sessions, en morceaux (seul chemin d'entrée des fichiers) :
 // GET    /api/sites/:id/uploads                  : UploadSession[] (sessions ouvertes du site, pour reprendre)
 // POST   /api/sites/:id/uploads   CreateUploadInput : UploadSession (400 sans rien d'envoyable)
 // GET    /api/sites/:id/uploads/:uid             : UploadSession (404 code "upload_expired" après 24 h)

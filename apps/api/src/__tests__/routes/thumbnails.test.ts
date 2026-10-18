@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { BlobStore } from "@/lib/blobs.js";
 import { CAPTURE_CSP, resolveChromium, ThumbnailService } from "@/lib/thumbnails.js";
 import { resetDb } from "../helpers/db.js";
-import { buildTestHub, createPersoSite, multipart, settle, type TestHub } from "../helpers/hub.js";
+import { buildTestHub, createPersoSite, multipart, settle, uploadFiles, type TestHub } from "../helpers/hub.js";
 
 let hub: TestHub | null = null;
 afterEach(async () => {
@@ -90,11 +90,10 @@ describe.skipIf(!chromium)("capture automatique (Chromium local)", () => {
       '<!doctype html><html><head><link rel="stylesheet" href="/s.css"></head>' +
       '<body><h1>Alpha</h1><img src="https://example.com/pixel.png" alt="">' +
       '<script>try { new WebSocket("ws://" + location.host + "/ws"); } catch (e) {}</script></body></html>';
-    const body = multipart([], [
-      { filename: "index.html", content: html, type: "text/html" },
-      { filename: "s.css", content: "body{background:#cc3300;margin:0}", type: "text/css" },
+    await uploadFiles(hub, siteId, [
+      { filename: "index.html", content: html },
+      { filename: "s.css", content: "body{background:#cc3300;margin:0}" },
     ]);
-    await hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/files`, headers: { ...hub.headers, ...body.headers }, payload: body.payload });
     await hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/publish`, headers: hub.headers, payload: {} });
     await settle(hub);
     await hub.services.thumbnails.idle();
@@ -119,8 +118,7 @@ describe.skipIf(!chromium)("capture automatique (Chromium local)", () => {
     const png = await sharp({ create: { width: 800, height: 500, channels: 3, background: "#00aa00" } }).png().toBuffer();
     const thumb = multipart([], [{ filename: "t.png", content: png, type: "image/png" }]);
     await hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/thumbnail`, headers: { ...hub.headers, ...thumb.headers }, payload: thumb.payload });
-    const files = multipart([], [{ filename: "index.html", content: "<h1>x</h1>", type: "text/html" }]);
-    await hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/files`, headers: { ...hub.headers, ...files.headers }, payload: files.payload });
+    await uploadFiles(hub, siteId, [{ filename: "index.html", content: "<h1>x</h1>" }]);
     await hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/publish`, headers: hub.headers, payload: {} });
     await settle(hub);
     await hub.services.thumbnails.idle();

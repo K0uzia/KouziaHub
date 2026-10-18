@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FilesResponse, SiteDetail, UploadResult, VersionEntry } from "@/contract.js";
 import { prisma, resetDb } from "../helpers/db.js";
-import { buildTestHub, createPersoSite, makeZip, multipart, patchName, patchUncompressedSize, settle, type MultipartFile, type TestHub } from "../helpers/hub.js";
+import { buildTestHub, createPersoSite, uploadFiles, uploadZip, makeZip, patchName, patchUncompressedSize, settle, type MultipartFile, type TestHub } from "../helpers/hub.js";
 
 let hub: TestHub;
 let siteId: string;
@@ -18,16 +18,11 @@ afterEach(async () => {
   await hub.app.close();
 });
 
-async function upload(files: MultipartFile[], dir?: string) {
-  // Champs de l'interface : « dir » d'abord, puis les fichiers sous « files ».
-  const body = multipart(dir !== undefined ? [["dir", dir]] : [], files.map((f) => ({ field: "files", ...f })));
-  return hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/files`, headers: { ...hub.headers, ...body.headers }, payload: body.payload });
-}
+// Envoi comme l'interface : par session (l'ancienne route multipart est retirée).
+const upload = (files: MultipartFile[], dir?: string) => uploadFiles(hub, siteId, files, dir);
 
-async function sendZip(zip: Buffer, mode: string) {
-  const body = multipart([["mode", mode]], [{ field: "file", filename: "site.zip", content: zip, type: "application/zip" }]);
-  return hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/zip`, headers: { ...hub.headers, ...body.headers }, payload: body.payload });
-}
+// Zip envoyé comme l'interface : session zip, morceaux, finalisation (l'ancienne route /zip est retirée).
+const sendZip = (zip: Buffer, mode: string) => uploadZip(hub, siteId, zip, mode);
 
 const files = async () => (await hub.app.inject({ method: "GET", url: `/api/sites/${siteId}/files`, headers: hub.headers })).json() as FilesResponse;
 const paths = async () => (await files()).files.map((f) => f.path);
@@ -87,10 +82,14 @@ describe("explorateur de fichiers", () => {
     ]);
     const body = res.json() as UploadResult;
     expect(body.accepted).toEqual(["page.html"]);
-    expect(body.rejected).toEqual([
-      { path: "Index.html", reason: "Un fichier « index.html » existe déjà avec le même nom à la casse près." },
-      { path: "PAGE.html", reason: "Un fichier « page.html » existe déjà avec le même nom à la casse près." },
-    ]);
+    // PAGE.html : écarté dès l'ouverture de la session (doublon dans l'envoi) ; Index.html : à la finalisation.
+    expect(body.rejected).toEqual(
+      expect.arrayContaining([
+        { path: "Index.html", reason: "Un fichier « index.html » existe déjà avec le même nom à la casse près." },
+        { path: "PAGE.html", reason: expect.stringMatching(/casse/) },
+      ]),
+    );
+    expect(body.rejected).toHaveLength(2);
     expect((await paths()).sort()).toEqual(["index.html", "page.html"]);
     const move = await hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/files/move`, headers: hub.headers, payload: { from: "page.html", to: "INDEX.html" } });
     expect(move.statusCode).toBe(409);

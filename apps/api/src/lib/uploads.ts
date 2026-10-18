@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, stat, statfs, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { CreateUploadInput, RejectedFile, UploadFileDecl, UploadSession } from "@/contract.js";
 import type { FileRef } from "@/lib/files.js";
@@ -9,8 +9,12 @@ import {
   MAX_FILE_BYTES,
   MAX_FILES,
   MAX_SITE_BYTES,
+  MAX_UPLOAD_PENDING_BYTES,
+  MAX_UPLOAD_SESSIONS,
+  MAX_UPLOAD_SESSIONS_PER_SITE,
   MAX_UPLOAD_ZIP_BYTES,
   UPLOAD_CHUNK_BYTES,
+  UPLOAD_DISK_MARGIN_BYTES,
   UPLOAD_SESSION_TTL_MS,
 } from "@/lib/limits.js";
 import type { BlobStore } from "@/lib/blobs.js";
@@ -21,6 +25,12 @@ const SHA = /^[0-9a-f]{64}$/;
 const ID = /^[0-9a-f]{24}$/;
 
 type Meta = UploadSession & { siteId: string; chunkHashes: Record<string, string> };
+
+/** Octets libres pour un utilisateur ordinaire sur le volume de `dir` (fs.statfs). */
+export async function diskFreeBytes(dir: string): Promise<number> {
+  const info = await statfs(dir);
+  return Number(info.bavail) * Number(info.bsize);
+}
 
 function mib(bytes: number): string {
   return `${(bytes / MIB).toFixed(1).replace(".", ",")} Mio`;
@@ -42,8 +52,39 @@ export class UploadStore {
   constructor(
     dataDir: string,
     private readonly now: () => number = Date.now,
+    /** Place libre du volume (remplaçable dans les tests). */
+    private readonly freeBytes: (dir: string) => Promise<number> = diskFreeBytes,
   ) {
     this.dir = path.join(dataDir, "uploads");
+  }
+
+  /** Refus clair si écrire `bytes` laisserait moins que la réserve sur le disque du hub. */
+  private async ensureDiskSpace(bytes: number): Promise<void> {
+    await mkdir(this.dir, { recursive: true });
+    const free = await this.freeBytes(this.dir);
+    if (free - bytes < UPLOAD_DISK_MARGIN_BYTES) {
+      throw new HttpError(
+        507,
+        `Place disque insuffisante sur le hub : il reste ${mib(free)}, il faut ${mib(bytes)} plus une réserve de ${mib(UPLOAD_DISK_MARGIN_BYTES)}. Libérez de la place (anciennes versions, sauvegardes) puis réessayez.`,
+        "disk_full",
+      );
+    }
+  }
+
+  /** Sessions ouvertes non expirées, tous sites confondus. */
+  private async openMetas(): Promise<Meta[]> {
+    const ids = await readdir(this.dir).catch(() => [] as string[]);
+    const out: Meta[] = [];
+    for (const id of ids) {
+      if (!ID.test(id)) continue;
+      try {
+        const meta = JSON.parse(await readFile(path.join(this.dir, id, "session.json"), "utf8")) as Meta;
+        if (Date.parse(meta.expiresAt) > this.now()) out.push(meta);
+      } catch {
+        /* illisible : nettoyé par sweep() */
+      }
+    }
+    return out;
   }
 
   private sessionDir(id: string): string {
@@ -141,6 +182,25 @@ export class UploadStore {
       totalBytes = input.size;
     }
 
+    // Plafonds : sessions ouvertes (par site, au total), octets en attente, place libre sur le disque.
+    const open = await this.openMetas();
+    if (open.filter((m) => m.siteId === siteId).length >= MAX_UPLOAD_SESSIONS_PER_SITE || open.length >= MAX_UPLOAD_SESSIONS) {
+      throw new HttpError(
+        409,
+        `Trop d'envois en cours : ${MAX_UPLOAD_SESSIONS_PER_SITE} au plus par site et ${MAX_UPLOAD_SESSIONS} au total. Reprenez ou annulez un envoi interrompu.`,
+        "too_many_uploads",
+      );
+    }
+    const pending = open.reduce((n, m) => n + m.totalBytes, 0);
+    if (pending + totalBytes > MAX_UPLOAD_PENDING_BYTES) {
+      throw new HttpError(
+        413,
+        `Envois en attente trop lourds : ${mib(pending)} déjà réservés, ${mib(MAX_UPLOAD_PENDING_BYTES)} au plus. Terminez ou annulez un envoi interrompu.`,
+        "upload_quota",
+      );
+    }
+    await this.ensureDiskSpace(totalBytes);
+
     const meta: Meta = {
       id,
       siteId,
@@ -198,6 +258,7 @@ export class UploadStore {
       }
       // Morceau déjà reçu, identique : rien à faire (reprise après une coupure, envoi en double).
       if (meta.chunkHashes[String(index)] === sha) return publicView(meta);
+      await this.ensureDiskSpace(data.length);
       await writeFile(path.join(this.sessionDir(id), "chunks", String(index)), data);
       meta.chunkHashes[String(index)] = sha;
       if (!meta.received.includes(index)) meta.received.push(index);
@@ -235,12 +296,21 @@ export class UploadStore {
         const zipPath = path.join(dir, "site.zip");
         const out = createWriteStream(zipPath);
         const hash = createHash("sha256");
-        for (let i = 0; i < meta.chunkCount; i++) {
-          const buf = await readFile(path.join(dir, "chunks", String(i)));
-          hash.update(buf);
-          if (!out.write(buf)) await new Promise((r) => out.once("drain", r));
+        try {
+          for (let i = 0; i < meta.chunkCount; i++) {
+            const chunk = path.join(dir, "chunks", String(i));
+            const buf = await readFile(chunk);
+            hash.update(buf);
+            if (!out.write(buf)) await new Promise((r) => out.once("drain", r));
+            // Morceau copié : supprimé tout de suite, le zip ne prend pas deux fois sa place.
+            await unlink(chunk);
+          }
+          await new Promise<void>((resolve, reject) => out.end((err?: Error | null) => (err ? reject(err) : resolve())));
+        } catch (err) {
+          out.destroy();
+          await done();
+          throw err;
         }
-        await new Promise<void>((resolve, reject) => out.end((err?: Error | null) => (err ? reject(err) : resolve())));
         if (hash.digest("hex") !== meta.files[0]!.sha256) {
           throw new HttpError(400, "Le zip reçu ne correspond pas à celui annoncé (empreinte différente) : relancez l'envoi.", "file_hash_mismatch");
         }
@@ -261,10 +331,18 @@ export class UploadStore {
         );
       }
       const stored: FileRef[] = [];
-      reader.reset();
-      for (const f of meta.files) {
-        const blob = await blobs.putBuffer(await reader.read(f.size));
-        stored.push({ path: f.path, sha256: blob.sha256, size: blob.size });
+      // Copie dans le magasin de blobs : chaque morceau est supprimé dès qu'il est entièrement lu.
+      const consumer = new ChunkReader(path.join(dir, "chunks"), true);
+      try {
+        for (const f of meta.files) {
+          const blob = await blobs.putBuffer(await consumer.read(f.size));
+          stored.push({ path: f.path, sha256: blob.sha256, size: blob.size });
+        }
+        await consumer.finish();
+      } catch (err) {
+        // Morceaux en partie supprimés : la session ne peut plus servir.
+        await done();
+        throw err;
       }
       return { session: publicView(meta), stored, zipPath: null, done };
     });
@@ -299,11 +377,15 @@ class ChunkReader {
   private offset = 0;
   private current: Buffer | null = null;
 
-  constructor(private readonly dir: string) {}
+  constructor(
+    private readonly dir: string,
+    /** Supprime chaque morceau dès qu'il est entièrement lu. */
+    private readonly consume = false,
+  ) {}
 
-  reset() {
-    this.index = 0;
-    this.offset = 0;
+  /** Fin de lecture : dernier morceau supprimé (mode consommation). */
+  async finish(): Promise<void> {
+    if (this.consume && this.current) await unlink(path.join(this.dir, String(this.index - 1))).catch(() => undefined);
     this.current = null;
   }
 
@@ -312,6 +394,7 @@ class ChunkReader {
     let need = size;
     while (need > 0) {
       if (!this.current || this.offset >= this.current.length) {
+        if (this.consume && this.current) await unlink(path.join(this.dir, String(this.index - 1)));
         this.current = await readFile(path.join(this.dir, String(this.index)));
         this.index++;
         this.offset = 0;
