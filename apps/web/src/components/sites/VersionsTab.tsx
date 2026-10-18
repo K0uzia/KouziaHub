@@ -9,6 +9,9 @@ import { Badge, Card, EmptyState } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { MoreMenu } from "@/components/ui/MoreMenu";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { ExportDialog } from "@/components/sites/ExportDialog";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faFileZipper } from "@fortawesome/free-solid-svg-icons";
 
 type Pending = { kind: "publish" | "restore"; version: VersionEntry };
 
@@ -18,13 +21,16 @@ export function VersionsTab({
   versions,
   onSite,
   onRestored,
+  onGoServer,
 }: {
   site: SiteDetail;
   versions: Resource<VersionEntry[]>;
   onSite: (s: SiteDetail) => void;
   onRestored: (files: FilesResponse) => void;
+  onGoServer: () => void;
 }) {
   const [pending, setPending] = useState<Pending | null>(null);
+  const [exporting, setExporting] = useState<VersionEntry | null>(null);
   const [busy, setBusy] = useState(false);
   const running = site.operation?.status === "RUNNING";
   const current = versions.data?.find((v) => v.current) ?? null;
@@ -79,9 +85,23 @@ export function VersionsTab({
     );
   }
 
+  const exportable = (v: VersionEntry) => v.status === "PUBLISHED" && v.source !== "placeholder";
+
   return (
     <>
       <h2 className="sr-only">Historique des versions</h2>
+      {current && exportable(current) ? (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] p-3 sm:p-4">
+          <p className="min-w-0 flex-[1_1_14rem] text-sm text-[var(--muted)]">
+            Version en ligne : <strong className="text-[var(--text)]">version {current.number}</strong>. Pour la mise en ligne sur le domaine final,
+            téléchargez-la prête pour l'hébergeur.
+          </p>
+          <Button variant="secondary" onClick={() => setExporting(current)}>
+            <FontAwesomeIcon icon={faFileZipper} className="h-3.5 w-3.5" aria-hidden />
+            Télécharger la version de production
+          </Button>
+        </div>
+      ) : null}
       {/* Liste et non tableau : la note garde toute la largeur (un tableau la réduisait à une lettre par ligne). */}
       <ol aria-label={`Versions de ${site.hostname}, de la plus récente à la plus ancienne`} className="ui-card divide-y divide-[var(--border)] p-0">
         {list.map((v) => {
@@ -120,6 +140,11 @@ export function VersionsTab({
                       label: "Restaurer dans les fichiers de travail",
                       onSelect: () => setPending({ kind: "restore", version: v }),
                       disabled: !hasFiles || running,
+                    },
+                    {
+                      label: "Télécharger la version de production",
+                      onSelect: () => setExporting(v),
+                      disabled: !exportable(v),
                     },
                   ]}
                 />
@@ -162,6 +187,15 @@ export function VersionsTab({
         busy={busy}
         onConfirm={() => void confirm()}
         onClose={() => setPending(null)}
+      />
+      <ExportDialog
+        site={site}
+        version={exporting}
+        onClose={() => setExporting(null)}
+        onGoServer={() => {
+          setExporting(null);
+          onGoServer();
+        }}
       />
       <ConfirmDialog
         open={pending?.kind === "restore"}

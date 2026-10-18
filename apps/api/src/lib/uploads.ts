@@ -24,6 +24,29 @@ const MIB = 1024 * 1024;
 const SHA = /^[0-9a-f]{64}$/;
 const ID = /^[0-9a-f]{24}$/;
 
+/**
+ * Sessions occupées (morceau en écriture, assemblage, import du résultat), partagées par toutes les
+ * instances d'UploadStore du processus : la purge du cache du hub ne supprime jamais une session occupée.
+ */
+const sessionLocks = new Map<string, Promise<unknown>>();
+const busySessions = new Map<string, number>();
+
+export function isUploadSessionBusy(id: string): boolean {
+  return sessionLocks.has(id) || busySessions.has(id);
+}
+
+/** Marque une session occupée pendant fn (finalisation : assemblage puis import). */
+export async function withUploadSessionBusy<T>(id: string, fn: () => Promise<T>): Promise<T> {
+  busySessions.set(id, (busySessions.get(id) ?? 0) + 1);
+  try {
+    return await fn();
+  } finally {
+    const n = (busySessions.get(id) ?? 1) - 1;
+    if (n <= 0) busySessions.delete(id);
+    else busySessions.set(id, n);
+  }
+}
+
 type Meta = UploadSession & { siteId: string; chunkHashes: Record<string, string> };
 
 /** Octets libres pour un utilisateur ordinaire sur le volume de `dir` (fs.statfs). */
@@ -47,7 +70,6 @@ function publicView(meta: Meta): UploadSession {
  */
 export class UploadStore {
   readonly dir: string;
-  private readonly locks = new Map<string, Promise<unknown>>();
 
   constructor(
     dataDir: string,
@@ -94,13 +116,13 @@ export class UploadStore {
 
   /** Écritures d'une même session l'une après l'autre (morceaux envoyés en parallèle). */
   private async locked<T>(id: string, fn: () => Promise<T>): Promise<T> {
-    const previous = this.locks.get(id) ?? Promise.resolve();
+    const previous = sessionLocks.get(id) ?? Promise.resolve();
     const run = previous.catch(() => undefined).then(fn);
-    this.locks.set(id, run);
+    sessionLocks.set(id, run);
     try {
       return await run;
     } finally {
-      if (this.locks.get(id) === run) this.locks.delete(id);
+      if (sessionLocks.get(id) === run) sessionLocks.delete(id);
     }
   }
 

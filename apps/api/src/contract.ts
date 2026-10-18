@@ -424,3 +424,127 @@ export type PushDevice = { id: string; label: string; endpoint: string; createdA
 // POST   /api/push/subscribe   { subscription: PushSubscriptionJSON, label: string } : PushDevice
 // DELETE /api/push/devices/:id                     : { ok: true }
 // POST   /api/push/test                            : { sent: number; failed: number }
+
+// --- Purges, cache et export de production ---
+
+/** Nombre d'éléments supprimés et place libérée. */
+export type PurgeCount = { count: number; bytes: number };
+
+/** POST /api/sites/:id/files/purge : vider la version de travail (et, au choix, les anciennes versions). */
+export type SiteFilesPurgeInput = { confirm: string; versions?: boolean };
+export type SiteFilesPurgeResult = {
+  removedFiles: number;
+  /** null si l'option « anciennes versions » n'était pas demandée. */
+  versions: {
+    /** Numéros des versions passées en PURGED (déploiement Cloudflare supprimé). */
+    purged: number[];
+    /** Numéros gardés : la version servie, et celles dont la suppression chez Cloudflare a échoué. */
+    kept: number[];
+    failed: Array<{ number: number; error: string }>;
+  } | null;
+  freedBytes: number;
+  files: FilesResponse;
+};
+
+export type StorageUsage = {
+  /** Par site : contenus de la version de travail, versions gardées (chaque contenu compté une fois et hors
+   *  version de travail), vignette, envois en cours. Un contenu partagé entre sites compte dans chacun. */
+  sites: Array<{ siteId: string; slug: string; workingBytes: number; versionsBytes: number; thumbnailBytes: number; uploadsBytes: number; totalBytes: number }>;
+  /** Disque réellement occupé : magasin d'objets (dédoublonné), vignettes, envois en cours, temporaires. */
+  total: { blobsBytes: number; orphanBytes: number; thumbnailsBytes: number; uploadsBytes: number; tempBytes: number; totalBytes: number };
+};
+
+/**
+ * Purge du cache du hub. uploads : sessions d'envoi, même en cours (d'un site si siteId, sinon toutes) ;
+ * temp et orphans : globaux, ignorés avec siteId ; thumbnails : vignettes capturées seulement (régénérables).
+ */
+export type HubCachePurgeInput = {
+  siteId?: string | null;
+  uploads?: boolean;
+  temp?: boolean;
+  thumbnails?: boolean;
+  orphans?: boolean;
+  /** Obligatoire (true) avec uploads ou thumbnails : suppressions visibles (envoi à relancer, vignette à recapturer). */
+  confirm?: boolean;
+};
+export type HubCachePurgeResult = {
+  freedBytes: number;
+  uploads: PurgeCount | null;
+  /** Sessions d'envoi occupées (morceau en écriture, assemblage, import) : gardées. */
+  uploadsSkipped: number;
+  temp: PurgeCount | null;
+  thumbnails: PurgeCount | null;
+  orphans: PurgeCount | null;
+};
+
+/** Purge du cache Cloudflare d'un site : par nom d'hôte, repli par adresses en lots de 100. */
+export type CachePurgeResult = {
+  method: "hosts" | "files";
+  hosts: string[];
+  /** Domaine final hors de la zone du hub : non purgé (autre zone, autre jeton). */
+  skippedHosts: string[];
+  urlsPurged: number;
+  urlsTotal: number;
+  /** Faux si la limite de Cloudflare (5 purges par minute) a interrompu la purge par adresses. */
+  complete: boolean;
+  message: string;
+};
+
+export type ExportTarget = "hostinger" | "pages";
+
+export type ExportIssue = {
+  level: "info" | "warning" | "error";
+  code:
+    | "no_final_domain"
+    | "no_404"
+    | "robots_blocking"
+    | "robots_sitemap_domain"
+    | "robots_generated"
+    | "sitemap_generated"
+    | "sitemap_domain"
+    | "sitemap_child_missing"
+    | "noindex_meta"
+    | "x_robots_meta"
+    | "canonical_missing"
+    | "canonical_domain"
+    | "title_missing"
+    | "description_missing"
+    | "html_too_large"
+    | "dev_files_removed"
+    | "pages_files_removed"
+    | "htaccess_modified";
+  message: string;
+  /** Fichiers ou adresses concernés (20 au plus) ; total donne leur nombre réel. */
+  paths: string[];
+  total: number;
+};
+
+export type ExportSummary = {
+  versionId: string;
+  versionNumber: number;
+  target: ExportTarget;
+  /** Nom du zip : <slug>-v<N>-production.zip (suffixe -pages pour Cloudflare Pages). */
+  fileName: string;
+  fileCount: number;
+  totalBytes: number;
+  finalDomain: string | null;
+  /** https://<forme canonique du domaine final>, null sans domaine final. */
+  canonicalOrigin: string | null;
+  /** Fichiers produits par le hub (.htaccess, robots.txt, sitemap.xml, 404, LISEZMOI.txt, _headers...). */
+  generated: string[];
+  /** Fichiers de la version retirés, avec la raison. */
+  removed: RejectedFile[];
+  issues: ExportIssue[];
+};
+
+// Routes des purges et de l'export
+//
+// POST   /api/sites/:id/files/purge     SiteFilesPurgeInput : SiteFilesPurgeResult (confirm = slug exact, sinon 400)
+// POST   /api/sites/:id/cache/purge                          : CachePurgeResult (cache Cloudflare du sous-domaine)
+//                                ; 403 code "cf_permission" (jeton sans Cache Purge), 409 code "cf_rate_limited"
+// GET    /api/storage                                        : StorageUsage
+// POST   /api/storage/purge             HubCachePurgeInput    : HubCachePurgeResult (400 code "confirm_required"
+//                                                              si uploads ou thumbnails sans confirm: true)
+// GET    /api/sites/:id/export/summary?version=&target=      : ExportSummary (version : défaut la version servie ;
+//                                                              target : hostinger par défaut, ou pages)
+// GET    /api/sites/:id/export?version=&target=              : zip en pièce jointe (Content-Disposition attachment)

@@ -6,11 +6,13 @@ import { SecuritySection } from "@/components/settings/SecuritySection";
 import { NotificationsSection } from "@/components/settings/NotificationsSection";
 import { ControlsSection } from "@/components/settings/ControlsSection";
 import { AuditSection } from "@/components/settings/AuditSection";
+import { StorageSection } from "@/components/settings/StorageSection";
 
 const SECTIONS = [
   { id: "securite", label: "Sécurité" },
   { id: "notifications", label: "Notifications" },
   { id: "controles", label: "Contrôles" },
+  { id: "stockage", label: "Stockage" },
   { id: "journal", label: "Journal" },
 ];
 
@@ -27,7 +29,7 @@ export function SettingsPage() {
 
   return (
     <div className="page-narrow">
-      <PageHeader title="Réglages" subtitle="Sécurité du compte, notifications, état des services et journal des actions." />
+      <PageHeader title="Réglages" subtitle="Sécurité du compte, notifications, état des services, place utilisée et journal des actions." />
       <nav aria-label="Sections des réglages" className="mb-6">
         <ul className="flex flex-wrap gap-2">
           {SECTIONS.map((s) => (
@@ -46,6 +48,7 @@ export function SettingsPage() {
         <SecuritySection />
         <NotificationsSection />
         <ControlsSection />
+        <StorageSection />
         <AuditSection />
       </div>
     </div>

@@ -44,6 +44,11 @@ const ACTION_LABEL: Record<string, string> = {
   "push.unsubscribe": "Appareil retiré des notifications",
   "push.test": "Notification de test",
   "cloudflare.fail_open.fix": "Réglage « fail closed » d'un projet recalé",
+  "files.purge": "Fichiers de travail vidés",
+  "versions.purge": "Anciennes versions supprimées",
+  "cache.purge": "Place libérée sur le hub",
+  "cache.cloudflare.purge": "Cache Cloudflare vidé",
+  "version.export": "Version de production téléchargée",
 };
 
 export function AuditSection() {
