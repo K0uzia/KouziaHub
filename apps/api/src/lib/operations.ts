@@ -500,11 +500,12 @@ export class DomainWatcher {
       if (signal.aborted) return;
       if (!domain) return;
       if (domain.status === "active") {
+        // Étape close AVANT le passage en ligne : un site lu « en ligne » a toujours son étape certificat finie.
+        await this.setWaitingDetail(siteId, "done");
         await prisma.site.update({
           where: { id: siteId },
           data: { domainStatus: "ACTIVE", ...(site.dnsRecordId && site.state !== "ONLINE" ? { state: "ONLINE", touchedAt: new Date() } : {}) },
         });
-        await this.setWaitingDetail(siteId, "done");
         void this.services.monitor.requestSync();
         await audit({ action: "site.certificate", result: "ok", siteId, siteSlug: site.slug });
         return;
