@@ -1,8 +1,12 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022"],
-    "types": ["node"],
+    "lib": [
+      "ES2022"
+    ],
+    "types": [
+      "node"
+    ],
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "strict": true,
@@ -10,7 +14,18 @@
     "noUnusedParameters": true,
     "skipLibCheck": true,
     "isolatedModules": true,
-    "noEmit": true
+    "noEmit": true,
+    "paths": {
+      "@/*": [
+        "../../apps/api/src/*"
+      ]
+    }
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "tools/**/*.ts", "vitest.config.ts", "../../scripts/veille-deploy.ts"]
+  "include": [
+    "src/**/*.ts",
+    "test/**/*.ts",
+    "tools/**/*.ts",
+    "vitest.config.ts",
+    "../../scripts/veille-deploy.ts"
+  ]
 }
