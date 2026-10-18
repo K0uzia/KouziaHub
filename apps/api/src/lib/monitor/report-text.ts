@@ -3,36 +3,31 @@
 // Language Is for Everyone, Even Experts » (l'essentiel d'abord, phrases courtes). Aucun terme technique
 // visible : ni sigle, ni code d'erreur.
 
+import { FR_MONTHS, parisDayKey, parisParts } from "@/lib/fr-format.js";
+
 export const PARIS = "Europe/Paris";
 
-// --- Dates, heures et durées en français, fuseau Europe/Paris ---
-
-const dayFmt = new Intl.DateTimeFormat("fr-FR", { timeZone: PARIS, day: "numeric", month: "long" });
-const dayYearFmt = new Intl.DateTimeFormat("fr-FR", { timeZone: PARIS, day: "numeric", month: "long", year: "numeric" });
-const timeFmt = new Intl.DateTimeFormat("fr-FR", { timeZone: PARIS, hour: "numeric", minute: "2-digit", hourCycle: "h23" });
-const monthFmt = new Intl.DateTimeFormat("fr-FR", { timeZone: PARIS, month: "long" });
-const monthYearFmt = new Intl.DateTimeFormat("fr-FR", { timeZone: PARIS, month: "long", year: "numeric" });
+// --- Dates, heures et durées en français, fuseau Europe/Paris (sans Intl : fr-format.ts) ---
 
 /** « 1er mars » pour le premier jour du mois, comme à l'écrit. */
-const firstDay = (text: string) => text.replace(/^1 /, "1er ");
-/** Espaces fines de Intl remplacées : hors du jeu de caractères de la police du PDF. */
-const plainSpaces = (text: string) => text.replace(/[  ]/g, " ");
+const dayText = (day: number) => (day === 1 ? "1er" : String(day));
 
 /** « 12 octobre » */
-export const frDay = (d: Date) => firstDay(plainSpaces(dayFmt.format(d)));
+export function frDay(d: Date): string {
+  const p = parisParts(d);
+  return `${dayText(p.day)} ${FR_MONTHS[p.month - 1]}`;
+}
 /** « 31 décembre 2026 » */
-export const frDayYear = (d: Date) => firstDay(plainSpaces(dayYearFmt.format(d)));
+export const frDayYear = (d: Date) => `${frDay(d)} ${parisParts(d).year}`;
 /** « 3 h 02 » */
 export function frTime(d: Date): string {
-  const [h, m] = plainSpaces(timeFmt.format(d)).split(":");
-  return `${Number(h)} h ${m}`;
+  const p = parisParts(d);
+  return `${p.hour} h ${String(p.minute).padStart(2, "0")}`;
 }
 /** « septembre » */
-export const frMonth = (d: Date) => plainSpaces(monthFmt.format(d));
+export const frMonth = (d: Date) => FR_MONTHS[parisParts(d).month - 1]!;
 /** « octobre 2026 » */
-export const frMonthYear = (d: Date) => plainSpaces(monthYearFmt.format(d));
-
-const parisDayKey = (d: Date) => plainSpaces(dayYearFmt.format(d));
+export const frMonthYear = (d: Date) => `${frMonth(d)} ${parisParts(d).year}`;
 
 const unit = (n: number, one: string, many: string) => `${n} ${n > 1 ? many : one}`;
 

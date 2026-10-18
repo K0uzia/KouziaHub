@@ -185,7 +185,7 @@ describe("écran Surveillance, détail, rapport", () => {
 describe("santé locale", () => {
   it("/api/health donne l'état minimal de la veille (appel local, sans session)", async () => {
     const res = await hub.app.inject({ method: "GET", url: "/api/health" });
-    expect(res.json()).toMatchObject({ ok: true, veille: { configured: false, lastSeenAt: null } });
+    expect(res.json()).toMatchObject({ ok: true, veille: { configured: false, lastSeenAt: null }, intl: { ok: true, problems: [] } });
   });
 });
 

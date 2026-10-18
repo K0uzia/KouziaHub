@@ -158,6 +158,8 @@ fi
 # Reprise des droits (idempotente ; migre une ancienne installation où le compte possédait le code).
 fix_ownership
 install_root_scripts
+# Installation d'avant icu-data-full : posé une fois, chargé au redémarrage plus bas.
+ensure_icu_full || true
 
 if [ "$FORCE_DEPS" -eq 1 ] || deps_needed; then
   npm_ci || fail_update "npm ci a échoué."
