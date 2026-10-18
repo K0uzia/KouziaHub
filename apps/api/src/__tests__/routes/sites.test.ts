@@ -238,7 +238,10 @@ describe("moteur d'opérations", () => {
 describe("certificat en attente", () => {
   it("attente n'est pas un échec : étape « waiting », puis en ligne quand Cloudflare dit actif", async () => {
     await hub.app.close();
-    hub = await buildTestHub({ cloudflare: new FakeCloudflare({ activationDelayMs: 150 }), watcherDelaysMs: [30] });
+    // Horloge du faux Cloudflare menée à la main : sous charge, une création plus lente que le délai
+    // d'activation rendait le site déjà en ligne avant la première vérification.
+    let t = 1_000_000;
+    hub = await buildTestHub({ cloudflare: new FakeCloudflare({ activationDelayMs: 60_000, now: () => t }), watcherDelaysMs: [30] });
     const res = await hub.app.inject({ method: "POST", url: "/api/sites", headers: hub.headers, payload: { kind: "PERSO", slug: "alpha", label: "A" } });
     await settle(hub);
     const waiting = await get(res.json().id);
@@ -246,7 +249,8 @@ describe("certificat en attente", () => {
     expect(waiting.operation).toMatchObject({ status: "DONE" });
     expect(waiting.operation!.steps.at(-1)).toMatchObject({ key: "certificate", status: "waiting", detail: "certificat en cours, quelques minutes" });
 
-    const deadline = Date.now() + 3000;
+    t += 120_000;
+    const deadline = Date.now() + 10_000;
     let site = waiting;
     while (Date.now() < deadline && site.state !== "ONLINE") {
       await new Promise((r) => setTimeout(r, 40));
@@ -255,7 +259,7 @@ describe("certificat en attente", () => {
     expect(site).toMatchObject({ state: "ONLINE", domainStatus: "ACTIVE", operation: null });
     const op = await prisma.operation.findFirstOrThrow({ where: { siteId: waiting.id, kind: "CREATE" } });
     expect(JSON.parse(op.steps).at(-1)).toMatchObject({ key: "certificate", status: "done" });
-  });
+  }, 20_000);
 });
 
 describe("certificat : jamais bloqué", () => {
