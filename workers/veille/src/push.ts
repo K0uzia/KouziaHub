@@ -29,15 +29,29 @@ const names = (labels: string[]) => {
   return more > 0 ? `${shown} et ${more} autre${more > 1 ? "s" : ""}` : shown;
 };
 
-/** Anti-rafale : au-delà de 3 cibles dans le même cycle, une seule notification groupée par type. */
-export function buildNotifications(now: number, openings: Opening[], recoveries: Recovery[], reminders: Reminder[]): PushPayload[] {
+/** Tag (et sujet) de la notification groupée des pannes : une nouvelle version remplace la précédente. */
+export const GROUP_OPENING_TAG = "panne-groupe";
+
+/**
+ * Anti-rafale : au-delà de 3 cibles dans le même cycle, une seule notification groupée par type.
+ * Pour les pannes, le cycle est la fenêtre glissante de 5 minutes : `windowLabels` liste toutes les
+ * cibles ouvertes dans la fenêtre (passages précédents compris). Une fois le seuil dépassé, chaque
+ * nouvelle ouverture remplace la notification groupée (même tag) au lieu d'en ajouter une.
+ */
+export function buildNotifications(
+  now: number,
+  openings: Opening[],
+  recoveries: Recovery[],
+  reminders: Reminder[],
+  windowLabels: string[] = openings.map((o) => o.label),
+): PushPayload[] {
   const out: PushPayload[] = [];
-  if (openings.length > GROUP_ALERT_THRESHOLD) {
+  if (openings.length > 0 && windowLabels.length > GROUP_ALERT_THRESHOLD) {
     out.push({
-      title: `${openings.length} sites en panne`,
-      body: `${names(openings.map((o) => o.label))} ne répondent plus.`,
+      title: `${windowLabels.length} sites en panne`,
+      body: `${names(windowLabels)} ne répondent plus.`,
       url: SCREEN,
-      tag: `panne-groupe-${now}`,
+      tag: GROUP_OPENING_TAG,
     });
   } else {
     for (const o of openings) {

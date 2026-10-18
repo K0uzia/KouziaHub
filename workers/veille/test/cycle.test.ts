@@ -18,7 +18,7 @@ async function bench(opts: { ids: string[]; devices?: number; rules?: Record<str
   const vapid = await makeVapid();
   const env = makeEnv(d1.db, vapid);
   const net = makeNet(opts.rules ?? {});
-  const subs = await Promise.all(Array.from({ length: opts.devices ?? 1 }, (_, i) => makeSubscription(`https://push.example.com/dev${i}`)));
+  const subs = await Promise.all(Array.from({ length: opts.devices ?? 1 }, (_, i) => makeSubscription(`https://fcm.googleapis.com/fcm/send/dev${i}`)));
   const deps = (now: number): Deps => ({ now: () => now, fetch: net.fetch });
   const targets = opts.ids.map((id) => ({ id, label: `${id}.example.fr`, url: urlOf(id), keyword: null }));
   const res = await handleFetch(await signed("POST", "/sync", { v: 1, targets, subscriptions: subs.map(({ endpoint, keys }) => ({ endpoint, keys })) }, at(0)), env, deps(at(0)));
@@ -31,7 +31,7 @@ async function bench(opts: { ids: string[]; devices?: number; rules?: Record<str
   };
   const cycle = (now: number) => runCycle(env, deps(now), now);
   /** Notifications reçues par les services push (déchiffrées : non, on lit la file envoyée). */
-  const pushCalls = () => net.calls.filter((c) => c.url.startsWith("https://push.example.com/"));
+  const pushCalls = () => net.calls.filter((c) => c.url.startsWith("https://fcm.googleapis.com/fcm/send/"));
   const queued = () => d1.rows<{ payload: string }>("SELECT payload FROM push_queue ORDER BY id").map((r) => JSON.parse(r.payload) as PushPayload);
   return { ...d1, env, net, deps, report, cycle, pushCalls, queued };
 }
@@ -228,14 +228,14 @@ describe("file d'envoi", () => {
 
   it("410 : l'abonnement est retiré avec ses notifications en attente ; autre échec : nouvel essai", async () => {
     const [id] = idsInSlot(0, 1);
-    const b = await bench({ ids: [id!], devices: 2, rules: { [urlOf(id!)]: DOWN, "https://push.example.com/dev0": { status: 410 }, "https://push.example.com/dev1": { status: 500 } } });
+    const b = await bench({ ids: [id!], devices: 2, rules: { [urlOf(id!)]: DOWN, "https://fcm.googleapis.com/fcm/send/dev0": { status: 410 }, "https://fcm.googleapis.com/fcm/send/dev1": { status: 500 } } });
     await b.report(at(0, 0, -30_000), { [id!]: false });
     await b.cycle(at(0, 0));
     await b.report(at(0, 1, -30_000), { [id!]: false });
     const r = await b.cycle(at(0, 1));
     expect(r.push).toEqual({ sent: 0, gone: 1, failed: 1 });
-    expect(b.rows("SELECT endpoint FROM subscriptions")).toEqual([{ endpoint: "https://push.example.com/dev1" }]);
-    expect(b.rows("SELECT endpoint, attempts FROM push_queue")).toEqual([{ endpoint: "https://push.example.com/dev1", attempts: 1 }]);
+    expect(b.rows("SELECT endpoint FROM subscriptions")).toEqual([{ endpoint: "https://fcm.googleapis.com/fcm/send/dev1" }]);
+    expect(b.rows("SELECT endpoint, attempts FROM push_queue")).toEqual([{ endpoint: "https://fcm.googleapis.com/fcm/send/dev1", attempts: 1 }]);
 
     // Abandon après 5 essais.
     for (let i = 1; i <= 4; i++) {
@@ -255,5 +255,66 @@ describe("file d'envoi", () => {
     for (const p of all) expect(`${p.title} ${p.body}`).not.toMatch(LONG_DASHES);
     expect(formatDuration(7_380_000)).toBe("2 h 03");
     expect(formatDuration(90_000_000)).toBe("1 j 1 h");
+  });
+});
+
+describe("anti-rafale sur un cycle complet (fenêtre glissante de 5 min)", () => {
+  it("pannes ouvertes à des minutes différentes : au-delà de 3, une seule notification groupée remplace les autres", async () => {
+    const ids = [0, 1, 2, 3, 4].map((slot) => idsInSlot(slot, 1, `w${slot}-`)[0]!);
+    const rules = Object.fromEntries(ids.map((id) => [urlOf(id), DOWN]));
+    const b = await bench({ ids, rules });
+    const fails = Object.fromEntries(ids.map((id) => [id, false]));
+    for (let slot = 0; slot < 5; slot++) {
+      await b.report(at(slot, 0, -30_000), fails);
+      await notificationsOf(b, at(slot, 0));
+    }
+    // File relue après chaque passage (envoi coupé : rien ne part).
+    const queue: string[][] = [];
+    for (let slot = 0; slot < 5; slot++) {
+      await b.report(at(slot, 1, -30_000), fails);
+      await notificationsOf(b, at(slot, 1));
+      queue.push(b.queued().map((p) => p.title));
+    }
+    expect(queue.map((q) => q.length)).toEqual([1, 2, 3, 1, 1]);
+    expect(queue[2]!.every((t) => t.startsWith("Site en panne : "))).toBe(true);
+    // Au-delà de 3 dans la fenêtre : les ouvertures en file et la version groupée précédente sont remplacées.
+    expect(queue[3]).toEqual(["4 sites en panne"]);
+    expect(queue[4]).toEqual(["5 sites en panne"]);
+    expect(b.queued()[0]!.tag).toBe("panne-groupe");
+    expect(b.rows("SELECT COUNT(*) AS n FROM incidents")).toEqual([{ n: 5 }]);
+  });
+});
+
+describe("course entre un passage et un /report", () => {
+  it("rapport du hub reçu pendant les contrôles : ni « hub hors ligne » ni « de nouveau en ligne »", async () => {
+    const [id] = idsInSlot(0, 1);
+    const b = await bench({ ids: [id!] });
+    await b.report(at(0, 0), { [id!]: true });
+    const now = at(0, 4); // 20 min sans rapport au début du passage (tranche 0)
+    const env = { ...b.env, VAPID_PRIVATE_KEY: undefined };
+    const deps: Deps = {
+      now: () => now,
+      fetch: async (url, init) => {
+        await b.report(now, { [id!]: true }); // le hub revient pendant le contrôle
+        return b.net.fetch(url, init);
+      },
+    };
+    await runCycle(env, deps, now);
+    expect(b.queued().map((p) => p.title)).toEqual([]);
+    expect(b.rows("SELECT value FROM meta WHERE key = 'hub_offline_since'")).toEqual([]);
+    await b.report(now + 300_000, {});
+    expect(b.queued()).toEqual([]);
+  });
+});
+
+describe("purge de D1", () => {
+  it("incidents fermés depuis plus de 30 jours supprimés (passage de l'heure pile)", async () => {
+    const b = await bench({ ids: [] });
+    const now = at(0, 0); // 12 h 00
+    b.raw.exec(`INSERT INTO incidents (target_id, started_at, ended_at, basis) VALUES ('x', ${now - 40 * 86_400_000}, ${now - 31 * 86_400_000}, 'edge')`);
+    b.raw.exec(`INSERT INTO incidents (target_id, started_at, ended_at, basis) VALUES ('y', ${now - 30 * 86_400_000}, ${now - 29 * 86_400_000}, 'edge')`);
+    b.raw.exec(`INSERT INTO incidents (target_id, started_at, basis) VALUES ('z', ${now - 60 * 86_400_000}, 'edge')`);
+    await b.cycle(now);
+    expect(b.rows("SELECT target_id FROM incidents ORDER BY target_id")).toEqual([{ target_id: "y" }, { target_id: "z" }]);
   });
 });

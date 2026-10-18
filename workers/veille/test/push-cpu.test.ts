@@ -55,7 +55,7 @@ describe("coût CPU d'un passage complet", () => {
       const ids = idsInSlot(0, 40);
       // Toutes en panne des deux côtés au 2e tour : 40 états écrits, une notification groupée, 4 appareils.
       const net = makeNet(Object.fromEntries(ids.map((id) => [`https://${id}.example.fr/`, { status: 503 }])));
-      const subs = await Promise.all([0, 1, 2, 3].map((i) => makeSubscription(`https://push.example.com/d${i}`)));
+      const subs = await Promise.all([0, 1, 2, 3].map((i) => makeSubscription(`https://fcm.googleapis.com/fcm/send/d${i}`)));
       const deps = (now: number) => ({ now: () => now, fetch: net.fetch });
       const targets = ids.map((id) => ({ id, label: id, url: `https://${id}.example.fr/`, keyword: null }));
       await handleFetch(await signed("POST", "/sync", { v: 1, targets, subscriptions: subs }, at(0)), env, deps(at(0)));

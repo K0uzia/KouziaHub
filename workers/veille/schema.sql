@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS state (
   PRIMARY KEY (target_id, observer)
 );
 
--- Incidents (panne au sens du tableau 10.1) et notifications déjà envoyées.
+-- Incidents (panne au sens du tableau 10.1) et notifications déjà envoyées. Fermés : purgés après 30 jours.
 CREATE TABLE IF NOT EXISTS incidents (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   target_id TEXT NOT NULL,
@@ -50,7 +50,8 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 );
 
 -- Valeurs uniques : battement de cœur du hub (hub_seen_at), dernier passage du Worker (edge_seen_at),
--- début du silence du hub déjà notifié (hub_offline_since), version du schéma.
+-- début du silence du hub déjà notifié (hub_offline_since), dernier horodatage signé accepté par route
+-- (last_ts:<MÉTHODE> <chemin>, anti-rejeu), version du schéma.
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT

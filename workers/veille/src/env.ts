@@ -66,6 +66,8 @@ export const PUSH_PER_PASS = 4;
 /** Une notification non partie après ce délai n'a plus de sens. */
 export const PUSH_QUEUE_TTL_MS = 24 * 3_600_000;
 export const PUSH_MAX_ATTEMPTS = 5;
+/** Incidents fermés gardés dans D1 (l'historique long est dans le hub). */
+export const INCIDENT_RETENTION_MS = 30 * 86_400_000;
 /** Lecture du HTML pour le mot-clé : au-delà, le mot-clé est cherché dans le début seulement. */
 export const KEYWORD_SCAN_BYTES = 256 * 1024;
 /** Corps accepté sur /sync et /report. */

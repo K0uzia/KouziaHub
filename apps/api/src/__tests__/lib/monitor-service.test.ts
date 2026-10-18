@@ -1,6 +1,10 @@
 import { createECDH, randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
-import { verifyRequest, type HttpObservation, type StateResponse, type SyncBody, type ReportBody } from "@/lib/monitor/core.js";
+import { verifyRequest, type EdgeObservation, type HttpObservation, type StateResponse, type SyncBody, type ReportBody } from "@/lib/monitor/core.js";
 import type { DnsResolver, PeerInfo } from "@/lib/monitor/checks.js";
 import { RdapClient } from "@/lib/monitor/checks.js";
 import { MonitorService } from "@/lib/monitor/service.js";
@@ -26,7 +30,9 @@ class FakeVeille implements VeilleClient {
   syncs: Array<Omit<SyncBody, "v">> = [];
   reports: Array<Omit<ReportBody, "v">> = [];
   edgeSeenAt: number | null = null;
-  observations: HttpObservation[] = [];
+  observations: EdgeObservation[] = [];
+  current: EdgeObservation[] | undefined = undefined;
+  incidents: StateResponse["incidents"] = [];
   async sync(body: Omit<SyncBody, "v">) {
     this.syncs.push(body);
   }
@@ -34,7 +40,15 @@ class FakeVeille implements VeilleClient {
     this.reports.push(body);
   }
   async state(since: number): Promise<StateResponse> {
-    return { v: 1, now: Date.now(), edgeSeenAt: this.edgeSeenAt, hubSeenAt: null, observations: this.observations.filter((o) => o.at > since), incidents: [] };
+    return {
+      v: 1,
+      now: Date.now(),
+      edgeSeenAt: this.edgeSeenAt,
+      hubSeenAt: null,
+      observations: this.observations.filter((o) => o.at >= since),
+      ...(this.current ? { current: this.current } : {}),
+      incidents: this.incidents,
+    };
   }
 }
 
@@ -94,11 +108,16 @@ describe("décision et incidents, hub seul (Worker non configuré)", () => {
     t += 5 * MIN;
     await m.runHttpCycle();
     expect(push.sent).toHaveLength(2);
+    // Puis toutes les 24 h, comme le Worker (dernier rappel daté d'il y a 24 h).
+    await prisma.monitorIncident.update({ where: { id: incident.id }, data: { reminderAt: new Date(t - DAY) } });
+    t += 5 * MIN;
+    await m.runHttpCycle();
+    expect(push.sent.map((p) => p.title)).toEqual(["Panne : a.fr", "Toujours en panne : a.fr", "Toujours en panne : a.fr"]);
 
     status.delete(a.url);
     t += 5 * MIN;
     await m.runHttpCycle();
-    expect(push.sent.at(-1)).toMatchObject({ title: "Rétabli : a.fr", body: expect.stringMatching(/après 24 h 15 min/) });
+    expect(push.sent.at(-1)).toMatchObject({ title: "Rétabli : a.fr", body: expect.stringMatching(/après 24 h 20 min/) });
     expect((await prisma.monitorIncident.findFirstOrThrow()).endedAt).not.toBeNull();
   });
 
@@ -123,7 +142,7 @@ describe("décision et incidents, hub seul (Worker non configuré)", () => {
 });
 
 describe("décision avec les observations du Worker", () => {
-  it("Worker vivant : panne vue des deux côtés, incident pour l'historique, aucune alerte urgente du hub", async () => {
+  it("Worker vivant : l'historique reprend les incidents notifiés par le Worker, aucune alerte urgente du hub", async () => {
     const veille = new FakeVeille();
     const m = service(veille);
     const a = await target("a.fr");
@@ -134,12 +153,25 @@ describe("décision avec les observations du Worker", () => {
       { targetId: a.id, observer: "edge", at: t - MIN, ok: false, status: 503, ms: 80, reason: "statut 503" },
     ];
     await m.runHttpCycle();
+    // Le hub voit 2 échecs des deux côtés, mais seul le Worker ouvre (et notifie) l'incident.
     t += 5 * MIN;
     veille.edgeSeenAt = t;
     await m.runHttpCycle();
-    expect(await prisma.monitorIncident.findFirstOrThrow()).toMatchObject({ observers: "hub,edge", notifiedAt: null });
+    expect(await prisma.monitorIncident.count()).toBe(0);
+    const startedAt = t - 2 * MIN;
+    veille.incidents = [{ targetId: a.id, startedAt, endedAt: null, basis: ["hub", "edge"] }];
+    t += 5 * MIN;
+    veille.edgeSeenAt = t;
+    await m.runHttpCycle();
+    expect(await prisma.monitorIncident.findFirstOrThrow()).toMatchObject({ observers: "hub,edge", startedAt: new Date(startedAt), notifiedAt: new Date(startedAt), endedAt: null, cause: "statut 503" });
+    veille.incidents = [{ targetId: a.id, startedAt, endedAt: t + MIN, basis: ["hub", "edge"] }];
+    t += 5 * MIN;
+    veille.edgeSeenAt = t;
+    await m.runHttpCycle();
+    expect(await prisma.monitorIncident.findFirstOrThrow()).toMatchObject({ endedAt: new Date(t - 4 * MIN), recoveredNotifiedAt: new Date(t - 4 * MIN) });
+    expect(await prisma.monitorIncident.count()).toBe(1);
     expect(push.sent).toEqual([]);
-    expect(veille.reports).toHaveLength(2);
+    expect(veille.reports).toHaveLength(4);
     expect(veille.reports[0]!.observations).toEqual([expect.objectContaining({ targetId: a.id, observer: "hub", ok: false, status: 503 })]);
     expect(await prisma.monitorCheck.count({ where: { observer: "edge" } })).toBe(2);
   });
@@ -356,7 +388,7 @@ describe("historique", () => {
 describe("échange signé avec le Worker (fetch injecté)", () => {
   const SECRET = "secret-partage-veille-de-test";
 
-  it("POST /sync et /report signés, GET /state signé sur le chemin seul", async () => {
+  it("POST /sync et /report signés, GET /state signé avec sa requête", async () => {
     const received: Array<{ method: string; path: string; body: string; ok: boolean }> = [];
     const workerFetch = (async (input: string | URL | Request, init?: RequestInit) => {
       const url = new URL(String(input));
@@ -366,7 +398,7 @@ describe("échange signé avec le Worker (fetch injecté)", () => {
         SECRET,
         { timestamp: headers.get("x-kouzia-veille-timestamp"), signature: headers.get("x-kouzia-veille-signature") },
         init?.method ?? "GET",
-        url.pathname,
+        `${url.pathname}${url.search}`,
         body,
         Date.now(),
       );
@@ -380,7 +412,9 @@ describe("échange signé avec le Worker (fetch injecté)", () => {
     const veille = new HttpVeilleClient({ url: "https://kouzia-veille.exemple.workers.dev", secret: SECRET, fetch: workerFetch });
     await createAdmin();
     const user = await prisma.user.findFirstOrThrow();
-    await prisma.pushSubscription.create({ data: { userId: user.id, endpoint: "https://push.exemple/abc", p256dh: "p".repeat(20), auth: "a".repeat(10), label: "Téléphone" } });
+    await prisma.pushSubscription.create({ data: { userId: user.id, endpoint: "https://fcm.googleapis.com/fcm/send/abc", p256dh: "p".repeat(20), auth: "a".repeat(10), label: "Téléphone" } });
+    // Adresse hors des services push connus (ancienne base) : jamais transmise au Worker.
+    await prisma.pushSubscription.create({ data: { userId: user.id, endpoint: "https://push.exemple/abc", p256dh: "p".repeat(20), auth: "a".repeat(10), label: "Ancien" } });
     const a = await target("a.fr", { keyword: "Bienvenue" });
     await target("b.fr", { enabled: false });
     t = Date.now();
@@ -392,7 +426,7 @@ describe("échange signé avec le Worker (fetch injecté)", () => {
     expect(sync).toEqual({
       v: 1,
       targets: [{ id: a.id, label: "a.fr", url: "https://a.fr/", keyword: "Bienvenue" }],
-      subscriptions: [{ endpoint: "https://push.exemple/abc", keys: { p256dh: "p".repeat(20), auth: "a".repeat(10) } }],
+      subscriptions: [{ endpoint: "https://fcm.googleapis.com/fcm/send/abc", keys: { p256dh: "p".repeat(20), auth: "a".repeat(10) } }],
     });
     const report = JSON.parse(received[1]!.body) as ReportBody;
     expect(report).toMatchObject({ v: 1, at: t, observations: [expect.objectContaining({ targetId: a.id, observer: "hub" })] });
@@ -440,5 +474,79 @@ describe("Web Push (fetch factice)", () => {
 
   it("sans clés VAPID : rien n'est envoyé", async () => {
     expect(await new PushService({ vapid: null }).sendToAll({ title: "x", body: "y", url: "/" })).toEqual({ sent: 0, failed: 0, removed: 0 });
+  });
+});
+
+describe("état du Worker au-delà de 7 jours et redémarrage du hub", () => {
+  it("purge : la dernière ligne de chaque (cible, observateur) est gardée, même ancienne", async () => {
+    const a = await target("a.fr");
+    const old = (days: number) => new Date(t - days * DAY);
+    await prisma.monitorCheck.createMany({
+      data: [
+        { targetId: a.id, kind: "http", observer: "edge", at: old(20), ok: false },
+        { targetId: a.id, kind: "http", observer: "edge", at: old(10), ok: true },
+        { targetId: a.id, kind: "http", observer: "hub", at: old(9), ok: true },
+        { targetId: a.id, kind: "http", observer: "hub", at: old(1), ok: true },
+      ],
+    });
+    await service().purge();
+    const left = await prisma.monitorCheck.findMany({ orderBy: { at: "asc" }, select: { observer: true, at: true } });
+    expect(left).toEqual([
+      { observer: "edge", at: old(10) },
+      { observer: "hub", at: old(1) },
+    ]);
+  });
+
+  it("site sain depuis plus de 7 jours côté Worker : son état courant revient par /state, échec du hub seul = local_only", async () => {
+    const veille = new FakeVeille();
+    const a = await target("a.fr");
+    // Base purgée : plus aucune ligne edge. Le Worker n'a aucun changement depuis 8 jours.
+    veille.current = [{ targetId: a.id, observer: "edge", at: t - 8 * DAY, ok: true, status: 200, ms: 30, reason: null, failures: 0 }];
+    veille.edgeSeenAt = t;
+    const m = service(veille);
+    m.health.lastStateSince = t - MIN;
+    status.set(a.url, 503);
+    await m.runHttpCycle();
+    t += 5 * MIN;
+    veille.edgeSeenAt = t;
+    await m.runHttpCycle();
+    expect(m.decideFor((await m.recentChecks([a.id])).get(a.id))).toEqual({ verdict: "local_only", basis: ["hub", "edge"] });
+    expect(await prisma.monitorCheck.count({ where: { observer: "edge" } })).toBe(1);
+  });
+
+  it("redémarrage : curseur repris de la base, aucune ligne en double ; échecs consécutifs transmis par le Worker", async () => {
+    const veille = new FakeVeille();
+    const a = await target("a.fr");
+    // Un seul échec côté Worker (failures 1), renvoyé à chaque /state.
+    veille.observations = [{ targetId: a.id, observer: "edge", at: t - MIN, ok: false, status: 503, ms: 50, reason: "statut 503", failures: 1 }];
+    veille.current = veille.observations;
+    veille.edgeSeenAt = t;
+    await service(veille).pullEdgeState();
+    const restarted = service(veille);
+    await restarted.pullEdgeState();
+    expect(await prisma.monitorCheck.count({ where: { observer: "edge" } })).toBe(1);
+    expect(restarted.health.lastStateSince).toBe(t - MIN);
+    expect(restarted.decideFor((await restarted.recentChecks([a.id])).get(a.id)).verdict).not.toBe("down");
+
+    // Le hub n'a vu que la dernière ligne, mais le Worker en est à 3 échecs : il fait foi.
+    veille.observations = [{ targetId: a.id, observer: "edge", at: t, ok: false, status: 503, ms: 50, reason: "statut 503", failures: 3 }];
+    veille.current = veille.observations;
+    await restarted.pullEdgeState();
+    const checks = (await restarted.recentChecks([a.id])).get(a.id)!;
+    expect(checks.edge).toHaveLength(2);
+    const { observerStateOf } = await import("@/lib/monitor/service.js");
+    expect(observerStateOf(checks.edge)?.consecutiveFailures).toBe(3);
+  });
+
+  it("purge : dossiers de rapports PDF des cibles supprimées (site supprimé en cascade)", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "kz-rapports-"));
+    const kept = await target("a.fr");
+    for (const id of [kept.id, "cible-supprimee"]) {
+      await mkdir(path.join(dataDir, "reports", id), { recursive: true });
+      await writeFile(path.join(dataDir, "reports", id, "2026-09.pdf"), "pdf");
+    }
+    await service(new NoVeilleClient(), { dataDir }).purge();
+    expect(existsSync(path.join(dataDir, "reports", kept.id, "2026-09.pdf"))).toBe(true);
+    expect(existsSync(path.join(dataDir, "reports", "cible-supprimee"))).toBe(false);
   });
 });

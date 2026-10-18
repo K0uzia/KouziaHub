@@ -105,7 +105,7 @@ describe("domaines ajoutés à la main et zones Cloudflare", () => {
     const entry = created.json() as MonitorTargetEntry;
     expect(entry).toMatchObject({ url: "https://www.client-exemple.fr/", hostname: "www.client-exemple.fr", source: "manual", clientName: "Démo 01 : boulangerie" });
     expect((await send("POST", "/api/monitor/targets", { url: "https://www.client-exemple.fr/", label: "x" })).statusCode).toBe(409);
-    for (const bad of ["ftp://a.fr", "https://user:pw@a.fr", "pas une adresse", "https://localhost/"]) {
+    for (const bad of ["ftp://a.fr", "https://user:pw@a.fr", "pas une adresse", "https://localhost/", "https://nas.lan/", "https://pve.local/", "https://box.internal/", "https://routeur.home.arpa/", "https://ct.localhost/", "http://192.168.1.10:3100/", "http://[::ffff:127.0.0.1]/"]) {
       expect((await send("POST", "/api/monitor/targets", { url: bad, label: "x" })).statusCode, bad).toBe(400);
     }
     status.set("https://www.client-exemple.fr/", 503);
@@ -199,22 +199,30 @@ describe("notifications Web Push", () => {
   it("clé publique, abonnement, appareils (avec endpoint), test, 410 retire l'abonnement, retrait", async () => {
     const config = await get<{ publicKey: string | null }>("/api/push/config");
     expect(config.publicKey).toMatch(/^B[A-Za-z0-9_-]{86}$/);
-    const sub = await send("POST", "/api/push/subscribe", { subscription: subscription("https://push.exemple/telephone"), label: "Téléphone" });
+    const sub = await send("POST", "/api/push/subscribe", { subscription: subscription("https://fcm.googleapis.com/fcm/send/telephone"), label: "Téléphone" });
     expect(sub.statusCode).toBe(201);
-    await send("POST", "/api/push/subscribe", { subscription: subscription("https://push.exemple/expire"), label: "Ancien" });
+    await send("POST", "/api/push/subscribe", { subscription: subscription("https://fcm.googleapis.com/fcm/send/expire"), label: "Ancien" });
     const devices = await get<PushDevice[]>("/api/push/devices");
-    expect(devices.map((d) => d.endpoint).sort()).toEqual(["https://push.exemple/expire", "https://push.exemple/telephone"]);
+    expect(devices.map((d) => d.endpoint).sort()).toEqual(["https://fcm.googleapis.com/fcm/send/expire", "https://fcm.googleapis.com/fcm/send/telephone"]);
     expect((await send("POST", "/api/push/subscribe", { subscription: { endpoint: "http://non-https" }, label: "x" })).statusCode).toBe(400);
+    // Services push connus seulement, en https sur le port par défaut.
+    for (const endpoint of ["https://evil.example/push", "https://192.168.1.10/push", "https://fcm.googleapis.com.evil.example/x", "http://fcm.googleapis.com/fcm/send/x", "https://fcm.googleapis.com:8443/x"]) {
+      expect((await send("POST", "/api/push/subscribe", { subscription: subscription(endpoint), label: "x" })).statusCode, endpoint).toBe(400);
+    }
+    for (const endpoint of ["https://updates.push.services.mozilla.com/wpush/v2/a", "https://web.push.apple.com/a", "https://wns2-par02p.notify.windows.com/w/?token=a"]) {
+      expect((await send("POST", "/api/push/subscribe", { subscription: subscription(endpoint), label: "autre" })).statusCode, endpoint).toBe(201);
+      await prisma.pushSubscription.deleteMany({ where: { endpoint } });
+    }
 
     const test = await send("POST", "/api/push/test");
     expect(test.json()).toEqual({ sent: 1, failed: 0 });
-    expect(pushCalls.sort()).toEqual(["https://push.exemple/expire", "https://push.exemple/telephone"]);
+    expect(pushCalls.sort()).toEqual(["https://fcm.googleapis.com/fcm/send/expire", "https://fcm.googleapis.com/fcm/send/telephone"]);
     expect((await get<PushDevice[]>("/api/push/devices")).map((d) => d.label)).toEqual(["Téléphone"]);
 
     const id = (sub.json() as PushDevice).id;
     expect((await send("DELETE", `/api/push/devices/${id}`)).json()).toEqual({ ok: true });
     expect((await send("DELETE", `/api/push/devices/${id}`)).statusCode).toBe(404);
     const actions = (await prisma.auditEvent.findMany({ where: { action: { startsWith: "push." } } })).map((a) => a.action).sort();
-    expect(actions).toEqual(["push.subscribe", "push.subscribe", "push.test", "push.unsubscribe"]);
+    expect(actions).toEqual([...Array<string>(5).fill("push.subscribe"), "push.test", "push.unsubscribe"]);
   });
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   decide,
+  isAllowedPushEndpoint,
   nextObserverState,
   OBSERVER_STALE_MS,
   signRequest,
@@ -64,11 +65,43 @@ describe("signature hub <-> Worker", () => {
     expect(await ok(sig, "POST", "/report", body, "autre-secret")).toBe(false);
   });
 
+  it("la requête (?since=) fait partie du message signé ; sans requête, message inchangé", async () => {
+    const ts = String(Math.floor(NOW / 1000));
+    const sig = await signRequest(SECRET, ts, "GET", "/state?since=1000");
+    const ok = (target: string) => verifyRequest(SECRET, { timestamp: ts, signature: sig }, "GET", target, "", NOW);
+    expect(await ok("/state?since=1000")).toBe(true);
+    expect(await ok("/state?since=0")).toBe(false);
+    expect(await ok("/state")).toBe(false);
+  });
+
   it("refuse un horodatage hors fenêtre ou des en-têtes mal formés", async () => {
     const old = String(Math.floor(NOW / 1000) - 600);
     const sig = await signRequest(SECRET, old, "GET", "/state");
     expect(await verifyRequest(SECRET, { timestamp: old, signature: sig }, "GET", "/state", "", NOW)).toBe(false);
     expect(await verifyRequest(SECRET, { timestamp: null, signature: sig }, "GET", "/state", "", NOW)).toBe(false);
     expect(await verifyRequest(SECRET, { timestamp: "abc", signature: "sha256=zz" }, "GET", "/state", "", NOW)).toBe(false);
+  });
+});
+
+describe("services push acceptés", () => {
+  it("Google, Mozilla, Apple, Microsoft en https sur le port par défaut ; rien d'autre", () => {
+    for (const e of [
+      "https://fcm.googleapis.com/fcm/send/abc",
+      "https://updates.push.services.mozilla.com/wpush/v2/abc",
+      "https://web.push.apple.com/abc",
+      "https://wns2-par02p.notify.windows.com/w/?token=abc",
+      "https://db5p.notify.windows.com/w/?token=abc",
+    ]) expect(isAllowedPushEndpoint(e), e).toBe(true);
+    for (const e of [
+      "http://fcm.googleapis.com/fcm/send/abc",
+      "https://fcm.googleapis.com:8443/x",
+      "https://user:pw@fcm.googleapis.com/x",
+      "https://fcm.googleapis.com.evil.example/x",
+      "https://evilpush.apple.com.example/x",
+      "https://notify.windows.com.evil/x",
+      "https://192.168.1.10/push",
+      "https://localhost/push",
+      "pas une adresse",
+    ]) expect(isAllowedPushEndpoint(e), e).toBe(false);
   });
 });

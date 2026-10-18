@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import sharp from "sharp";
 import { afterEach, describe, expect, it } from "vitest";
 import type { SiteDetail } from "@/contract.js";
@@ -7,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BlobStore } from "@/lib/blobs.js";
 import { CAPTURE_CSP, resolveChromium, ThumbnailService } from "@/lib/thumbnails.js";
-import { resetDb } from "../helpers/db.js";
+import { prisma, resetDb } from "../helpers/db.js";
 import { buildTestHub, createPersoSite, multipart, settle, type TestHub } from "../helpers/hub.js";
 
 let hub: TestHub | null = null;
@@ -126,5 +127,101 @@ describe.skipIf(!chromium)("capture automatique (Chromium local)", () => {
     await hub.services.thumbnails.idle();
     const site = (await hub.app.inject({ method: "GET", url: `/api/sites/${siteId}`, headers: hub.headers })).json() as SiteDetail;
     expect(site.thumbnailSource).toBe("upload");
+  });
+});
+
+describe("capture : même lancement que la mesure de vitesse (lib/chromium.ts)", () => {
+  /** Site publié, capture automatique coupée dans le hub (Chromium absent) : le test la lance lui-même. */
+  async function published() {
+    const { hub, siteId } = await setup(null);
+    const body = multipart([], [{ filename: "index.html", content: '<!doctype html><body style="margin:0;background:#cc3300"><h1>Alpha</h1></body>', type: "text/html" }]);
+    await hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/files`, headers: { ...hub.headers, ...body.headers }, payload: body.payload });
+    await hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/publish`, headers: hub.headers, payload: {} });
+    await settle(hub);
+    await hub.services.thumbnails.idle();
+    return { hub, siteId, dataDir: hub.services.dataDir, blobs: new BlobStore(hub.services.dataDir) };
+  }
+
+  it("production sans utilisateur dédié : capture indisponible, avec la raison", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "kouzia-hub-thumb-"));
+    const svc = new ThumbnailService({ dataDir, blobs: new BlobStore(dataDir), chromiumPath: process.execPath, production: true, chromiumUser: null });
+    expect(await svc.captureStatus()).toEqual({ available: false, reason: expect.stringMatching(/^Capture des vignettes désactivée : .*HUB_CHROMIUM_USER/) });
+    expect(await svc.captureAvailable()).toBe(false);
+    const withUser = new ThumbnailService({ dataDir, blobs: new BlobStore(dataDir), chromiumPath: process.execPath, production: true, chromiumUser: "kouziahub-chromium" });
+    expect(await withUser.captureStatus()).toEqual({ available: true, reason: null });
+  });
+
+  it("faux lanceur : pipe puis port en échec, capture impossible, raison affichée, repli sur l'image envoyée", async () => {
+    const { siteId, dataDir, blobs } = await published();
+    const launches: Array<boolean | undefined> = [];
+    const spawned: string[][] = [];
+    const svc = new ThumbnailService({
+      dataDir,
+      blobs,
+      chromiumPath: process.execPath,
+      start: {
+        launch: async (o) => {
+          launches.push(o.chromiumSandbox);
+          throw new Error("Failed to connect to the browser (pipe)");
+        },
+        spawnBrowser: (_exe, args) => {
+          spawned.push(args);
+          return spawn(process.execPath, ["-e", "process.stderr.write('doas: refus\n'); process.exit(1)"], { stdio: ["ignore", "ignore", "pipe"] });
+        },
+      },
+    });
+    expect(await svc.capture(siteId)).toBe(false);
+    expect(launches).toEqual([true]);
+    expect(spawned).toHaveLength(1);
+    expect(spawned[0]).toContain("--remote-debugging-port=0");
+    expect(spawned[0]).toContain("--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1");
+    expect(spawned[0]!.some((a) => /no-sandbox/.test(a))).toBe(false);
+    expect(await svc.captureStatus()).toEqual({ available: false, reason: expect.stringMatching(/bac à sable \(pipe : Failed to connect.*port : lanceur arrêté/) });
+    expect((await prisma.site.findUniqueOrThrow({ where: { id: siteId } })).thumbnailPath).toBeNull();
+  });
+
+  it("serveur éphémère sur un port choisi par le système (listen(0)), en 127.0.0.1", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "kouzia-hub-thumb-"));
+    const svc = new ThumbnailService({ dataDir, blobs: new BlobStore(dataDir), chromiumPath: null });
+    const [a, b] = await Promise.all([svc.serveVersion(new Map()), svc.serveVersion(new Map())]);
+    try {
+      const [pa, pb] = [a.address() as AddressInfo, b.address() as AddressInfo];
+      expect([pa.address, pb.address]).toEqual(["127.0.0.1", "127.0.0.1"]);
+      expect(pa.port).not.toBe(pb.port);
+      expect(Math.min(pa.port, pb.port)).toBeGreaterThan(1023);
+    } finally {
+      a.close();
+      b.close();
+    }
+  });
+
+  describe.skipIf(!chromium)("Chromium local", () => {
+    it("capture réelle par pipe", { timeout: 60_000 }, async () => {
+      const { siteId, dataDir, blobs } = await published();
+      const svc = new ThumbnailService({ dataDir, blobs, chromiumPath: chromium });
+      expect(await svc.capture(siteId)).toBe(true);
+      expect(svc.lastVia).toBe("pipe");
+      expect(await svc.captureStatus()).toEqual({ available: true, reason: null });
+    });
+
+    it("capture réelle par port forcé (pipe refusé comme par doas), connexion CDP en 127.0.0.1", { timeout: 60_000 }, async () => {
+      const { siteId, dataDir, blobs } = await published();
+      const svc = new ThumbnailService({
+        dataDir,
+        blobs,
+        chromiumPath: chromium,
+        start: {
+          launch: async () => {
+            throw new Error("pipe fermé par le lanceur");
+          },
+        },
+      });
+      expect(await svc.capture(siteId)).toBe(true);
+      expect(svc.lastVia).toBe("port");
+      const site = await prisma.site.findUniqueOrThrow({ where: { id: siteId } });
+      expect(site.thumbnailSource).toBe("capture");
+      const { info } = await sharp(join(dataDir, site.thumbnailPath!)).raw().toBuffer({ resolveWithObject: true });
+      expect([info.width, info.height]).toEqual([640, 400]);
+    });
   });
 });

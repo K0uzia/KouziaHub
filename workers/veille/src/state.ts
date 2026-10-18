@@ -1,6 +1,6 @@
 // Lecture et écriture de l'état D1. Écritures groupées en une requête par sorte (json_each), pour rester
 // loin des 50 requêtes par invocation et n'écrire que ce qui change (cadrage 10.2).
-import type { HttpObservation, Observer, ObserverState } from "../../../apps/api/src/lib/monitor/core.js";
+import type { EdgeObservation, HttpObservation, Observer, ObserverState } from "../../../apps/api/src/lib/monitor/core.js";
 import type { D1PreparedStatement, Env } from "./env.js";
 
 export type StateRow = {
@@ -23,6 +23,8 @@ export const rowToObservation = (r: StateRow): HttpObservation => ({
   ms: r.ms,
   reason: r.reason,
 });
+
+export const rowToEdgeObservation = (r: StateRow): EdgeObservation => ({ ...rowToObservation(r), failures: r.failures });
 
 export const rowToState = (r: StateRow): ObserverState => ({ consecutiveFailures: r.failures, last: rowToObservation(r) });
 

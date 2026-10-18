@@ -27,18 +27,20 @@ export function systemRoutes(services: Services): FastifyPluginAsync {
     });
 
     app.get("/api/system", async (): Promise<SystemStatus> => {
-      const [projectsUsed, reachable, capture] = await Promise.all([
+      const [projectsUsed, reachable, capture, speed] = await Promise.all([
         services.projects.used(),
         services.erp.list().then(
           () => true,
           () => false,
         ),
-        services.thumbnails.captureAvailable(),
+        services.thumbnails.captureStatus(),
+        services.monitor.speedStatus(),
       ]);
       return {
         cloudflare: { mode: services.cloudflare.mode, projectsUsed, projectsLimit: services.projects.limit },
         erp: { mode: services.erp.mode, reachable },
-        thumbnails: { capture },
+        thumbnails: { capture: capture.available, reason: capture.reason },
+        speed,
         sitesDomain: services.sitesDomain,
       };
     });

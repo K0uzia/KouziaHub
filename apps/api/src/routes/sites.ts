@@ -341,8 +341,9 @@ export function sitesRoutes(services: Services): FastifyPluginAsync {
     app.post("/api/sites/:id/thumbnail/capture", async (request) => {
       const { id } = idParams.parse(request.params);
       const site = await loadSite(id);
-      if (!(await services.thumbnails.captureAvailable())) {
-        throw new HttpError(409, "Capture indisponible (Chromium absent) : envoyer une image.", "capture_unavailable");
+      const capture = await services.thumbnails.captureStatus();
+      if (!capture.available) {
+        throw new HttpError(409, `${capture.reason ?? "Capture indisponible"} Envoyer une image.`, "capture_unavailable");
       }
       if (!site.currentVersionId) throw new HttpError(409, "Rien n'est encore publié.");
       services.thumbnails.enqueue(id);
