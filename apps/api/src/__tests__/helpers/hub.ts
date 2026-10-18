@@ -8,7 +8,12 @@ import { FakeCloudflare } from "@/lib/cloudflare/fake.js";
 import type { CloudflareGateway } from "@/lib/cloudflare/types.js";
 import { FakeErpDirectory } from "@/lib/erp/fake.js";
 import type { ErpDirectory } from "@/lib/erp/types.js";
-import { createServices, type Services } from "@/lib/services.js";
+import { createServices, type Services, type ServicesOverrides } from "@/lib/services.js";
+
+/** fetch qui refuse tout : garantit qu'aucun test ne sort sur le réseau par mégarde. */
+export const refusingFetch = (async (input: string | URL | Request) => {
+  throw new Error(`réseau interdit en test : ${String(input)}`);
+}) as typeof fetch;
 import { prisma } from "@/lib/prisma.js";
 import { authed, createAdmin, loginCookie, TEST_EMAIL } from "./auth.js";
 
@@ -21,7 +26,15 @@ export type TestHub = {
 
 /** App complète sur un Cloudflare et un ERP factices en mémoire, données dans un dossier temporaire. */
 export async function buildTestHub(
-  opts: { cloudflare?: CloudflareGateway; erp?: ErpDirectory; chromiumPath?: string | null; watcherDelaysMs?: number[] } = {},
+  opts: {
+    cloudflare?: CloudflareGateway;
+    erp?: ErpDirectory;
+    chromiumPath?: string | null;
+    watcherDelaysMs?: number[];
+    monitor?: ServicesOverrides["monitor"];
+    push?: ServicesOverrides["push"];
+    zones?: ServicesOverrides["zones"];
+  } = {},
 ): Promise<TestHub> {
   const cf = (opts.cloudflare as FakeCloudflare | undefined) ?? new FakeCloudflare();
   const services = createServices({
@@ -31,6 +44,10 @@ export async function buildTestHub(
     sitesDomain: "kouzia.com",
     domainWatcher: { delaysMs: opts.watcherDelaysMs ?? [20] },
     chromiumPath: opts.chromiumPath === undefined ? null : opts.chromiumPath,
+    // Surveillance : aucun réseau, même si un test déclenche un contrôle sans fake dédié.
+    monitor: { fetch: refusingFetch, speed: async () => ({ available: false, reason: "test" }), ...opts.monitor },
+    ...(opts.push ? { push: opts.push } : {}),
+    ...(opts.zones ? { zones: opts.zones } : {}),
   });
   const app = await buildApp({ silent: true, serveStatic: false, accessVerifier: null, services });
   if (!(await prisma.user.findUnique({ where: { email: TEST_EMAIL } }))) await createAdmin();

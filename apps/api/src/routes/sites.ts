@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { ServerConfigPreview, VersionEntry } from "@/contract.js";
 import { buildHtaccess, normalizeFinalDomain, notFoundPageError, pagesDeployConfig } from "@/lib/server-config.js";
 import { profileOf, writeServerConfig } from "@/lib/server-config-store.js";
+import { syncSiteTargets } from "@/lib/monitor/targets.js";
 import { audit } from "@/lib/audit.js";
 import { requireAuth } from "@/lib/auth.js";
 import { ERP_CLIENT_ID, ErpUnavailableError } from "@/lib/erp/types.js";
@@ -100,6 +101,7 @@ export function sitesRoutes(services: Services): FastifyPluginAsync {
         },
       });
       await writeServerConfig(services.blobs, site.id, { reason: "création du site" });
+      await syncSiteTargets(site.id, services.sitesDomain);
       await services.engine.start(site.id, "CREATE");
       return reply.code(201).send(await siteDetail(site.id, services));
     });
@@ -138,6 +140,9 @@ export function sitesRoutes(services: Services): FastifyPluginAsync {
       });
       await audit({ action: "site.update", result: "ok", siteId: id, siteSlug: site.slug });
       if (profileChanged) await writeServerConfig(services.blobs, id, { reason: "profil modifié" });
+      if (profileChanged || nextClient !== site.erpClientId) {
+        if (await syncSiteTargets(id, services.sitesDomain)) void services.monitor.requestSync();
+      }
       return siteDetail(id, services);
     });
 

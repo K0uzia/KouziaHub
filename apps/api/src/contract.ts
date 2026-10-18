@@ -36,6 +36,8 @@ export type ErpClient = {
   clientNumber: string | null;
   displayName: string;
   type: "B2B" | "B2C" | "ASSOCIATION";
+  /** Contrat de maintenance (facultatif, ignoré tant que la route de l'ERP ne le fournit pas). */
+  maintenance?: { active: boolean; startsAt: string | null; endsAt: string | null };
 };
 
 export type SiteSummary = {
@@ -277,6 +279,8 @@ export type SiteMonitorBadge = {
   uptime30d: number | null;
   /** Incident ouvert le plus ancien (ISO), null sinon. */
   openIncidentSince: string | null;
+  /** Plus petit nombre de jours restants (certificat ou domaine) sur les cibles surveillées, null si inconnu. */
+  expiresInDays: number | null;
 };
 
 export type MonitorCheckKind = "http" | "tls" | "domain" | "dns" | "content" | "speed";
@@ -354,7 +358,8 @@ export type MonitorTargetDetail = MonitorTargetEntry & {
 
 export type CloudflareZoneSuggestion = { name: string; alreadyWatched: boolean };
 
-export type PushDevice = { id: string; label: string; createdAt: string; lastSuccessAt: string | null; lastError: string | null };
+/** endpoint : pour reconnaître « cet appareil » (renvoyé seulement à l'utilisateur connecté). */
+export type PushDevice = { id: string; label: string; endpoint: string; createdAt: string; lastSuccessAt: string | null; lastError: string | null };
 
 // Routes de la surveillance
 //

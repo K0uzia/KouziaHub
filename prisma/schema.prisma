@@ -29,6 +29,7 @@ model User {
   sessions                   Session[]
   recoveryCodes              AdminRecoveryCode[]
   loginChallenges            AdminLoginChallenge[]
+  pushSubscriptions          PushSubscription[]
 }
 
 model AdminRecoveryCode {
@@ -138,6 +139,7 @@ model Site {
   versions         Version[]
   workingFiles     WorkingFile[]
   operations       Operation[]
+  monitorTargets   MonitorTarget[]
 
   @@index([erpClientId])
   @@index([touchedAt])
@@ -268,4 +270,133 @@ model OrphanCheck {
   /// JSON : [{ type: "dns"|"project"|"site", name, detail }]
   findings  String
   error     String?
+}
+
+// --- Surveillance des sites (cadrage section 10) ---
+
+/** Abonnement Web Push d'un appareil (repris de l'ERP). */
+model PushSubscription {
+  id            String    @id @default(cuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  endpoint      String    @unique
+  p256dh        String
+  auth          String
+  label         String
+  createdAt     DateTime  @default(now())
+  lastSuccessAt DateTime?
+  lastErrorAt   DateTime?
+  lastError     String?
+
+  @@index([userId])
+}
+
+/** Adresse surveillée : version de travail ou domaine final d'un site, zone Cloudflare, domaine manuel. */
+model MonitorTarget {
+  id             String            @id @default(cuid())
+  siteId         String?
+  site           Site?             @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  /// Cible d'un site : "working" (<slug>.kouzia.com) ou "final" (domaine final du profil).
+  siteRole       String?
+  label          String
+  url            String
+  hostname       String
+  /// "site", "cloudflare" ou "manual".
+  source         String
+  erpClientId    String?
+  enabled        Boolean           @default(true)
+  keyword        String?
+  /// Référence DNS acceptée par Alexandre (JSON : A, AAAA, CNAME, NS, MX).
+  dnsReference   String?
+  dnsReferenceAt DateTime?
+  /// Empreinte du HTML normalisé de l'accueil (référence du contrôle de contenu).
+  contentHash    String?
+  contentHashAt  DateTime?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  checks         MonitorCheck[]
+  hourly         MonitorHourly[]
+  incidents      MonitorIncident[]
+  reports        MonitorReport[]
+
+  @@index([siteId])
+  @@index([hostname])
+}
+
+/** Contrôle brut : HTTP gardé 7 jours, les autres 13 mois. */
+model MonitorCheck {
+  id       String        @id @default(cuid())
+  targetId String
+  target   MonitorTarget @relation(fields: [targetId], references: [id], onDelete: Cascade)
+  /// "http", "tls", "domain", "dns", "content", "speed".
+  kind     String
+  /// "hub" ou "edge".
+  observer String
+  at       DateTime
+  ok       Boolean
+  status   Int?
+  ms       Int?
+  /// JSON sans secret ni donnée personnelle.
+  detail   String?
+
+  @@index([targetId, kind, at])
+  @@index([kind, at])
+}
+
+/** Agrégat horaire des contrôles HTTP, par point de contrôle (13 mois). */
+model MonitorHourly {
+  id       String        @id @default(cuid())
+  targetId String
+  target   MonitorTarget @relation(fields: [targetId], references: [id], onDelete: Cascade)
+  hour     DateTime
+  observer String
+  checks   Int
+  failures Int
+  avgMs    Int?
+  p95Ms    Int?
+
+  @@unique([targetId, hour, observer])
+  @@index([hour])
+}
+
+/** Panne au sens de la règle de décision (les deux points, ou un seul si l'autre est muet). */
+model MonitorIncident {
+  id                  String        @id @default(cuid())
+  targetId            String
+  target              MonitorTarget @relation(fields: [targetId], references: [id], onDelete: Cascade)
+  startedAt           DateTime
+  endedAt             DateTime?
+  cause               String?
+  /// Points de contrôle de la décision, séparés par une virgule ("hub,edge").
+  observers           String
+  notifiedAt          DateTime?
+  recoveredNotifiedAt DateTime?
+  reminderAt          DateTime?
+
+  @@index([targetId, startedAt])
+  @@index([endedAt])
+}
+
+/** Notification non urgente déjà envoyée (déduplication : seuils, écart DNS, contenu). */
+model MonitorAlert {
+  id       String   @id @default(cuid())
+  targetId String?
+  kind     String
+  dedupKey String   @unique
+  sentAt   DateTime @default(now())
+
+  @@index([targetId])
+}
+
+/** Rapport mensuel PDF d'une cible. */
+model MonitorReport {
+  id        String        @id @default(cuid())
+  targetId  String
+  target    MonitorTarget @relation(fields: [targetId], references: [id], onDelete: Cascade)
+  /// "AAAA-MM".
+  month     String
+  path      String
+  createdAt DateTime      @default(now())
+
+  @@unique([targetId, month])
 }

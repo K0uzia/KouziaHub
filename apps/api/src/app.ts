@@ -19,6 +19,8 @@ import { createServices, type Services } from "@/lib/services.js";
 import { sitesRoutes } from "@/routes/sites.js";
 import { filesRoutes } from "@/routes/files.js";
 import { systemRoutes } from "@/routes/system.js";
+import { monitorRoutes } from "@/routes/monitor.js";
+import { pushRoutes } from "@/routes/push.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -112,6 +114,8 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   await app.register(sitesRoutes(services));
   await app.register(filesRoutes(services));
   await app.register(systemRoutes(services));
+  await app.register(monitorRoutes(services));
+  await app.register(pushRoutes(services));
 
   app.get("/api/health", async () => ({ ok: true, pendingMigrations: pendingMigrationCount() }));
   app.get("/robots.txt", async (_request, reply) => reply.type("text/plain; charset=utf-8").send(ROBOTS_TXT));
