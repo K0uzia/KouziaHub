@@ -5,6 +5,7 @@ import {
   CloudflareError,
   HUB_DNS_COMMENT_PREFIX,
   type CfDeployment,
+  type CfDeploymentInfo,
   type CfDnsRecord,
   type CfDomain,
   type CfProject,
@@ -22,7 +23,14 @@ type FakeDeployment = {
   redirectsFile: string | null;
   createdAt: number;
 };
-type FakeProject = { name: string; subdomain: string; domains: FakeDomain[]; deployments: FakeDeployment[] };
+type FakeProject = {
+  name: string;
+  subdomain: string;
+  domains: FakeDomain[];
+  deployments: FakeDeployment[];
+  /** deployment_configs.{production,preview}.fail_open ; absent : projet créé avant le réglage (« fail open »). */
+  failOpen?: { production: boolean | null; preview: boolean | null };
+};
 type FakeState = { projects: FakeProject[]; dns: CfDnsRecord[] };
 
 export type FakeMethod = Exclude<keyof CloudflareGateway, "mode">;
@@ -47,6 +55,7 @@ export class FakeCloudflare implements CloudflareGateway {
   /** Noms de projet déjà pris ailleurs sur pages.dev : le sous-domaine reçoit un suffixe. */
   readonly takenSubdomains = new Set<string>();
   private readonly failures = new Map<FakeMethod, Error[]>();
+  private readonly failuresAfter = new Map<FakeMethod, Error[]>();
   private state: FakeState = { projects: [], dns: [] };
   private readonly activationDelayMs: number;
   private readonly now: () => number;
@@ -68,6 +77,21 @@ export class FakeCloudflare implements CloudflareGateway {
     const list = this.failures.get(method) ?? [];
     list.push(error);
     this.failures.set(method, list);
+  }
+
+  /**
+   * La prochaine invocation de `method` aboutit chez Cloudflare puis échoue côté hub (délai dépassé après
+   * création) : l'effet est fait, l'appelant ne le sait pas.
+   */
+  failAfterNext(method: FakeMethod, error: Error = new CloudflareError("Cloudflare injoignable (réseau ou délai dépassé).", null)): void {
+    const list = this.failuresAfter.get(method) ?? [];
+    list.push(error);
+    this.failuresAfter.set(method, list);
+  }
+
+  private checkAfter(method: FakeMethod): void {
+    const next = this.failuresAfter.get(method)?.shift();
+    if (next) throw next;
   }
 
   /** Projet hors hub (compte partagé avec d'autres projets). */
@@ -138,9 +162,12 @@ export class FakeCloudflare implements CloudflareGateway {
   async createProject(name: string): Promise<CfProject> {
     this.check("createProject");
     const existing = this.project(name);
-    if (existing) return { name: existing.name, subdomain: existing.subdomain };
+    if (existing) {
+      if (existing.failOpen?.production !== false || existing.failOpen?.preview !== false) await this.setFailClosed(name);
+      return { name: existing.name, subdomain: existing.subdomain };
+    }
     const subdomain = this.takenSubdomains.has(name) ? `${name}-${randomBytes(2).toString("hex")}.pages.dev` : `${name}.pages.dev`;
-    this.state.projects.push({ name, subdomain, domains: [], deployments: [] });
+    this.state.projects.push({ name, subdomain, domains: [], deployments: [], failOpen: { production: false, preview: false } });
     this.calls.push(`createProject:${name}`);
     this.save();
     return { name, subdomain };
@@ -149,7 +176,23 @@ export class FakeCloudflare implements CloudflareGateway {
   async getProject(name: string): Promise<CfProject | null> {
     this.check("getProject");
     const p = this.project(name);
-    return p ? { name: p.name, subdomain: p.subdomain } : null;
+    return p ? { name: p.name, subdomain: p.subdomain, failOpen: { production: p.failOpen?.production ?? null, preview: p.failOpen?.preview ?? null } } : null;
+  }
+
+  async setFailClosed(name: string): Promise<void> {
+    this.check("setFailClosed");
+    const p = this.project(name);
+    if (!p) throw new CloudflareError("Projet Cloudflare introuvable.", 404);
+    p.failOpen = { production: false, preview: false };
+    this.calls.push(`setFailClosed:${name}`);
+    this.save();
+  }
+
+  /** Force le réglage fail_open d'un projet (tests : projet en « fail open »). */
+  setFailOpen(name: string, value: boolean): void {
+    const p = this.project(name);
+    if (p) p.failOpen = { production: value, preview: value };
+    this.save();
   }
 
   async listProjects(): Promise<CfProject[]> {
@@ -260,7 +303,17 @@ export class FakeCloudflare implements CloudflareGateway {
     p.deployments.push(deployment);
     this.calls.push(`deploy:${project}`);
     this.save();
+    this.checkAfter("deploy");
     return { id, url: deployment.url };
+  }
+
+  async listDeployments(project: string): Promise<CfDeploymentInfo[]> {
+    this.check("listDeployments");
+    const p = this.project(project);
+    if (!p) throw new CloudflareError("Projet Cloudflare introuvable.", 404);
+    return [...p.deployments]
+      .reverse()
+      .map((d) => ({ id: d.id, url: d.url, createdOn: new Date(d.createdAt).toISOString() }));
   }
 
   async deleteDeployment(project: string, id: string): Promise<void> {

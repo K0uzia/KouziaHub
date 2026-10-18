@@ -59,6 +59,49 @@ describe("contrôle des orphelins", () => {
   });
 });
 
+describe("contrôle quotidien du réglage « fail closed » des projets Pages", () => {
+  const audits = () => prisma.auditEvent.findMany({ where: { action: "cloudflare.fail_open.fix" } });
+  const check = async () => (await hub.app.inject({ method: "POST", url: "/api/orphans/check", headers: hub.headers })).json() as OrphanReport;
+
+  it("projet correct : rien n'est fait", async () => {
+    await createPersoSite(hub, "alpha");
+    const report = await check();
+    expect(report.findings).toEqual([]);
+    expect(hub.cf.calls.filter((c) => c.startsWith("setFailClosed:"))).toEqual([]);
+    expect(await audits()).toEqual([]);
+  });
+
+  it("projet en fail_open : recalé et journalisé", async () => {
+    await createPersoSite(hub, "alpha");
+    hub.cf.setFailOpen("kz-alpha", true);
+    const report = await check();
+    expect(report.findings).toEqual([]);
+    expect(hub.cf.calls).toContain("setFailClosed:kz-alpha");
+    expect((await hub.cf.getProject("kz-alpha"))?.failOpen).toEqual({ production: false, preview: false });
+    expect(await audits()).toEqual([expect.objectContaining({ result: "ok", detail: expect.stringMatching(/kz-alpha/) })]);
+  });
+
+  it("recalage en échec : journal en erreur, constat dans le rapport et notice du catalogue", async () => {
+    await createPersoSite(hub, "alpha");
+    hub.cf.setFailOpen("kz-alpha", true);
+    hub.cf.failNext("setFailClosed");
+    const report = await check();
+    expect(report.findings).toEqual([
+      { type: "project", name: "kz-alpha", detail: expect.stringMatching(/^Réglage « fail closed » non appliqué/), deletable: false },
+    ]);
+    expect(await audits()).toEqual([expect.objectContaining({ result: "error" })]);
+    const catalog = (await hub.app.inject({ method: "GET", url: "/api/sites", headers: hub.headers })).json();
+    const notice = catalog.notices.find((n: { code: string }) => n.code === "fail_open");
+    expect(notice?.message).toMatch(/Projet kz-alpha : réglage « fail closed » non appliqué/);
+    // Pas compté comme un orphelin.
+    expect(catalog.notices.map((n: { code: string }) => n.code)).not.toContain("orphans");
+    // Contrôle d'après démarrage (sans le réglage) : le constat reste affiché, rien n'est retenté.
+    await hub.services.orphans.check({ failClosed: false });
+    expect((await hub.services.orphans.latest()).findings).toHaveLength(1);
+    expect(hub.cf.calls.filter((c) => c.startsWith("setFailClosed:"))).toEqual([]);
+  });
+});
+
 describe("système, clients et journal", () => {
   it("état du système", async () => {
     hub.cf.seedProject("x");

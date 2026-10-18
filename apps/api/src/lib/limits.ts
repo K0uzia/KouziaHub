@@ -1,8 +1,6 @@
 /** Plafonds des fichiers d'un site (limites Cloudflare Pages et du tunnel Cloudflare gratuit). */
 export const MAX_FILES = 20_000;
 export const MAX_FILE_BYTES = 25 * 1024 * 1024;
-/** Corps de requête limité à 100 Mo par le tunnel : le zip reste en dessous, marge pour l'enveloppe multipart. */
-export const MAX_ZIP_BYTES = 95 * 1024 * 1024;
 /** Total d'une version de travail, et total décompressé d'un zip. */
 export const MAX_SITE_BYTES = 500 * 1024 * 1024;
 /** Fichiers par requête d'envoi (l'interface découpe un gros dossier en plusieurs envois). */
@@ -16,6 +14,13 @@ export const MAX_PARTS_PER_UPLOAD = MAX_FILES_PER_UPLOAD + 10;
 export const UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024;
 export const MAX_UPLOAD_ZIP_BYTES = 500 * 1024 * 1024;
 export const UPLOAD_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+/** Sessions d'envoi ouvertes à la fois : par site et au total (reprises comprises). */
+export const MAX_UPLOAD_SESSIONS_PER_SITE = 3;
+export const MAX_UPLOAD_SESSIONS = 10;
+/** Octets annoncés par l'ensemble des sessions ouvertes (place réservée sur le disque du hub). */
+export const MAX_UPLOAD_PENDING_BYTES = 1024 * 1024 * 1024;
+/** Place libre gardée sur le disque du hub après un envoi (base, blobs, sauvegardes). */
+export const UPLOAD_DISK_MARGIN_BYTES = 512 * 1024 * 1024;
 export const MAX_PATH_LENGTH = 1024;
 export const MAX_SEGMENT_BYTES = 255;
 export const MAX_DEPTH = 32;

@@ -1,39 +1,24 @@
-import { randomBytes } from "node:crypto";
-import { createWriteStream } from "node:fs";
-import { mkdir, rm } from "node:fs/promises";
-import path from "node:path";
-import { pipeline } from "node:stream/promises";
-import type { Readable } from "node:stream";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import type { RejectedFile, UploadResult } from "@/contract.js";
 import { audit } from "@/lib/audit.js";
 import { requireAuth } from "@/lib/auth.js";
 import { applyWorkingChanges, CASE_CONFLICT, listFiles, type FileRef } from "@/lib/files.js";
 import { HttpError } from "@/lib/http.js";
 import { idParams } from "@/lib/http-input.js";
-import { MAX_FILE_BYTES, MAX_FILES_PER_UPLOAD, MAX_PARTS_PER_UPLOAD, MAX_ZIP_BYTES } from "@/lib/limits.js";
-import { importFiles, importZip } from "@/lib/imports.js";
+import { MAX_FILES_PER_UPLOAD } from "@/lib/limits.js";
 import { prisma } from "@/lib/prisma.js";
 import type { Services } from "@/lib/services.js";
-import { checkSitePath, normalizeDir, normalizeSitePath } from "@/lib/site-paths.js";
+import { checkSitePath, normalizeSitePath } from "@/lib/site-paths.js";
 
 const rawQuery = z.object({ path: z.string().min(1).max(2000) });
 const deleteSchema = z.object({ paths: z.array(z.string().min(1).max(2000)).min(1).max(MAX_FILES_PER_UPLOAD) });
 const moveSchema = z.object({ from: z.string().min(1).max(2000), to: z.string().min(1).max(2000) });
-
-const MIB = 1024 * 1024;
-const TOO_BIG_FILE = `Fichier de plus de ${MAX_FILE_BYTES / MIB} Mio, la limite de Cloudflare Pages par fichier : réduisez-le ou retirez-le.`;
 
 async function loadSite(id: string) {
   const site = await prisma.site.findUnique({ where: { id } });
   if (!site) throw new HttpError(404, "Site introuvable.");
   if (site.state === "DELETING") throw new HttpError(409, "Suppression en cours.");
   return site;
-}
-
-async function drain(stream: Readable): Promise<void> {
-  for await (const chunk of stream) void chunk;
 }
 
 /** Chemin exact, ou dossier (terminé par « / ») ; null si invalide. */
@@ -79,45 +64,8 @@ export function filesRoutes(services: Services): FastifyPluginAsync {
         .send(services.blobs.stream(file.sha256));
     });
 
-    app.post("/api/sites/:id/files", async (request): Promise<UploadResult> => {
-      const { id } = idParams.parse(request.params);
-      const site = await loadSite(id);
-      if (!request.isMultipart()) throw new HttpError(400, "Envoi multipart attendu.");
-      // preservePath : busboy garde les sous-dossiers du nom de fichier (envoi de dossier).
-      const options = {
-        preservePath: true,
-        limits: { fileSize: MAX_FILE_BYTES, files: MAX_FILES_PER_UPLOAD, parts: MAX_PARTS_PER_UPLOAD, fields: 10 },
-        throwFileSizeLimit: false,
-      };
-      const parts = request.parts(options);
-      let dir = "";
-      const rejected: RejectedFile[] = [];
-      const stored = new Map<string, FileRef>();
-      for await (const part of parts) {
-        if (part.type === "field") {
-          if (part.fieldname === "dir") {
-            const parsedDir = normalizeDir(String(part.value ?? ""));
-            if (!parsedDir.ok) throw new HttpError(400, `Dossier cible invalide : ${parsedDir.reason}`);
-            dir = parsedDir.path;
-          }
-          continue;
-        }
-        const relative = part.filename ?? "";
-        const { path: target, verdict } = checkSitePath(dir && relative ? `${dir}/${relative}` : relative);
-        if (verdict.action !== "accept") {
-          rejected.push({ path: target || "(sans nom)", reason: verdict.reason });
-          await drain(part.file);
-          continue;
-        }
-        const blob = await services.blobs.putStream(part.file, MAX_FILE_BYTES);
-        if (part.file.truncated) {
-          rejected.push({ path: target, reason: TOO_BIG_FILE });
-          continue;
-        }
-        stored.set(target, { path: target, ...blob });
-      }
-      return importFiles(site, [...stored.values()], rejected);
-    });
+    // Envoi de fichiers et de zips : uniquement par les sessions (routes/uploads.ts), seul chemin d'entrée.
+    // Les anciennes routes multipart POST /api/sites/:id/files et /zip sont retirées.
 
     app.post("/api/sites/:id/files/delete", async (request) => {
       const { id } = idParams.parse(request.params);
@@ -175,47 +123,5 @@ export function filesRoutes(services: Services): FastifyPluginAsync {
       return listFiles(id);
     });
 
-    app.post("/api/sites/:id/zip", async (request): Promise<UploadResult> => {
-      const { id } = idParams.parse(request.params);
-      const site = await loadSite(id);
-      if (!request.isMultipart()) throw new HttpError(400, "Envoi multipart attendu.");
-      const tmpDir = path.join(services.dataDir, "tmp");
-      await mkdir(tmpDir, { recursive: true });
-      const zipPath = path.join(tmpDir, `${randomBytes(12).toString("hex")}.zip`);
-      let mode: string | null = null;
-      let received = false;
-      let imported = false;
-      try {
-        const options = { limits: { fileSize: MAX_ZIP_BYTES, files: 1, fields: 5 }, throwFileSizeLimit: false };
-        const parts = request.parts(options);
-        for await (const part of parts) {
-          if (part.type === "field") {
-            if (part.fieldname === "mode") mode = String(part.value ?? "");
-            continue;
-          }
-          if (received) {
-            await drain(part.file);
-            continue;
-          }
-          await pipeline(part.file, createWriteStream(zipPath));
-          if (part.file.truncated)
-            throw new HttpError(413, `Archive trop lourde pour un envoi direct : ${MAX_ZIP_BYTES / MIB} Mio au plus. Rechargez la page : l'interface l'envoie par morceaux.`, "body_too_large");
-          received = true;
-        }
-        if (!received) throw new HttpError(400, "Fichier zip attendu.");
-        if (mode !== "replace" && mode !== "merge") throw new HttpError(400, "Champ « mode » attendu : replace ou merge.");
-
-        imported = true;
-        return await importZip(services, site, zipPath, mode);
-      } catch (err) {
-        // Erreurs de l'extraction déjà journalisées par importZip.
-        if (err instanceof HttpError && !imported) {
-          await audit({ action: "files.zip", result: "error", siteId: id, siteSlug: site.slug, detail: err.message });
-        }
-        throw err;
-      } finally {
-        await rm(zipPath, { force: true });
-      }
-    });
   };
 }

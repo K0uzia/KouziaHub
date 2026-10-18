@@ -74,9 +74,13 @@ describe("empreinte des fichiers (comme wrangler)", () => {
 });
 
 describe("adaptateur Cloudflare réel (fetch injecté)", () => {
-  it("crée un projet avec production_branch main, en jeton API", async () => {
+  it("crée un projet avec production_branch main et les Functions en « fail closed », en jeton API", async () => {
     api.on("POST", P, (req) => {
-      expect(req.json).toEqual({ name: "kz-alpha", production_branch: "main" });
+      expect(req.json).toEqual({
+        name: "kz-alpha",
+        production_branch: "main",
+        deployment_configs: { production: { fail_open: false }, preview: { fail_open: false } },
+      });
       return ok({ name: "kz-alpha", subdomain: "kz-alpha-x1y.pages.dev" });
     });
     const project = await cf.createProject("kz-alpha");
@@ -86,9 +90,21 @@ describe("adaptateur Cloudflare réel (fetch injecté)", () => {
   });
 
   it("création idempotente : renvoie le projet existant sans POST", async () => {
-    api.on("GET", `${P}/kz-alpha`, () => ok({ name: "kz-alpha", subdomain: "kz-alpha.pages.dev" }));
+    api.on("GET", `${P}/kz-alpha`, () =>
+      ok({ name: "kz-alpha", subdomain: "kz-alpha.pages.dev", deployment_configs: { production: { fail_open: false }, preview: { fail_open: false } } }),
+    );
     await cf.createProject("kz-alpha");
     expect(api.requests.map((r) => r.method)).toEqual(["GET"]);
+  });
+
+  it("reprise de l'étape projet : un projet existant en « fail open » est recalé en « fail closed »", async () => {
+    api.on("GET", `${P}/kz-alpha`, () => ok({ name: "kz-alpha", subdomain: "kz-alpha.pages.dev", deployment_configs: { production: { fail_open: true } } }));
+    api.on("PATCH", `${P}/kz-alpha`, (req) => {
+      expect(req.json).toEqual({ deployment_configs: { production: { fail_open: false }, preview: { fail_open: false } } });
+      return ok({ name: "kz-alpha" });
+    });
+    await cf.createProject("kz-alpha");
+    expect(api.requests.map((r) => r.method)).toEqual(["GET", "PATCH"]);
   });
 
   it("liste les projets page par page", async () => {

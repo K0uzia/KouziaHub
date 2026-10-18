@@ -87,10 +87,11 @@ export function classifySitePath(sitePath: string): Classification {
   if (lowerSegments.includes("__macosx") || IGNORED_NAMES.has(lowerBase)) {
     return { action: "ignore", reason: "Fichier système écarté." };
   }
-  if (segments.length === 1 && lowerBase === "_worker.js") {
+  // Premier segment, fichier ou dossier : Pages exécute aussi un dossier _worker.js/ (index.js) à la racine.
+  if (lowerSegments[0] === "_worker.js") {
     return { action: "reject", reason: "_worker.js refusé : seul le hub injecte du code exécuté par Cloudflare." };
   }
-  if (segments.length === 1 && lowerBase === "_routes.json") {
+  if (lowerSegments[0] === "_routes.json") {
     return { action: "reject", reason: "_routes.json refusé : seul le hub règle le routage Cloudflare." };
   }
   if (segments.length > 1 && lowerSegments[0] === "functions") {

@@ -43,6 +43,7 @@ const ACTION_LABEL: Record<string, string> = {
   "push.subscribe": "Notifications activées sur un appareil",
   "push.unsubscribe": "Appareil retiré des notifications",
   "push.test": "Notification de test",
+  "cloudflare.fail_open.fix": "Réglage « fail closed » d'un projet recalé",
 };
 
 export function AuditSection() {

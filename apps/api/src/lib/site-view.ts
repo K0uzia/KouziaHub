@@ -6,6 +6,7 @@ import { findWaitingCertificateOp, parseSteps } from "@/lib/operations.js";
 import { hostnameOf } from "@/lib/publish.js";
 import type { Services } from "@/lib/services.js";
 import { HttpError } from "@/lib/http.js";
+import { FAIL_CLOSED_FINDING } from "@/lib/orphans.js";
 import { serverConfigState } from "@/lib/server-config-store.js";
 
 export function toOperation(op: OperationRow): Operation {
@@ -134,8 +135,13 @@ export async function catalog(services: Services): Promise<CatalogResponse> {
   } else if (!erp.available) {
     notices.push({ level: "warning", code: "erp_unavailable", message: "Clients de l'ERP indisponibles." });
   }
-  if (orphans.findings.length > 0) {
-    notices.push({ level: "warning", code: "orphans", message: `${orphans.findings.length} élément(s) orphelin(s) détecté(s) au dernier contrôle.` });
+  const failOpen = orphans.findings.filter((f) => f.type === "project" && f.detail.startsWith(FAIL_CLOSED_FINDING));
+  for (const f of failOpen) {
+    notices.push({ level: "warning", code: "fail_open", message: `Projet ${f.name} : réglage « fail closed » non appliqué (nouvel essai au prochain contrôle).` });
+  }
+  const orphanCount = orphans.findings.length - failOpen.length;
+  if (orphanCount > 0) {
+    notices.push({ level: "warning", code: "orphans", message: `${orphanCount} élément(s) orphelin(s) détecté(s) au dernier contrôle.` });
   }
   if (projectsUsed !== null && projectsUsed >= services.projects.limit - 10) {
     notices.push({

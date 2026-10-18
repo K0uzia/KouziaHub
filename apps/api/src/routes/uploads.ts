@@ -15,7 +15,7 @@ const chunkParams = sessionParams.extend({ n: z.coerce.number().int().min(0).max
 
 const fileDecl = z.object({ path: z.string().min(1).max(2000), size: z.number().int().min(0), sha256: z.string().length(64) });
 const createSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("files"), dir: z.string().max(2000).optional(), files: z.array(fileDecl).max(MAX_FILES) }),
+  z.object({ kind: z.literal("files"), dir: z.string().max(2000).optional(), files: z.array(fileDecl).max(MAX_FILES * 2) }),
   z.object({
     kind: z.literal("zip"),
     mode: z.enum(["replace", "merge"]),

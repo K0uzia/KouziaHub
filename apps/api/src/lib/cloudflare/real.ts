@@ -4,10 +4,12 @@ import {
   CloudflareError,
   HUB_DNS_COMMENT_PREFIX,
   type CfDeployment,
+  type CfDeploymentInfo,
   type CfDnsRecord,
   type CfDomain,
   type CfProject,
   type CloudflareGateway,
+  isFailClosed,
   type DeployInput,
 } from "@/lib/cloudflare/types.js";
 
@@ -48,6 +50,11 @@ const DNS_PAGE = 100;
  * Adaptateur réel : API HTTP de Cloudflare (Pages et DNS), écrit d'après la documentation. Le jeton ne
  * sort jamais de ce module : ni journalisé, ni renvoyé, ni recopié dans un message d'erreur.
  */
+/** Pages Functions en « fail closed » (production et aperçus) : voir createProject. */
+const FAIL_CLOSED = { production: { fail_open: false }, preview: { fail_open: false } };
+
+type RawProject = { name?: string; subdomain?: string; deployment_configs?: { production?: { fail_open?: unknown }; preview?: { fail_open?: unknown } } };
+
 export class RealCloudflare implements CloudflareGateway {
   readonly mode = "real" as const;
   readonly #token: string;
@@ -145,22 +152,41 @@ export class RealCloudflare implements CloudflareGateway {
     }
   }
 
-  private toProject(raw: { name?: string; subdomain?: string } | undefined, fallbackName: string): CfProject {
+  private toProject(raw: RawProject | undefined, fallbackName: string): CfProject {
     const name = raw?.name ?? fallbackName;
-    return { name, subdomain: raw?.subdomain ?? `${name}.pages.dev` };
+    const project: CfProject = { name, subdomain: raw?.subdomain ?? `${name}.pages.dev` };
+    const configs = raw?.deployment_configs;
+    if (configs) {
+      const flag = (v: unknown) => (typeof v === "boolean" ? v : null);
+      project.failOpen = { production: flag(configs.production?.fail_open), preview: flag(configs.preview?.fail_open) };
+    }
+    return project;
   }
 
   async getProject(name: string): Promise<CfProject | null> {
-    const env = await this.orNull(this.call<{ name: string; subdomain: string }>("GET", this.projectPath(name)));
+    const env = await this.orNull(this.call<RawProject>("GET", this.projectPath(name)));
     return env ? this.toProject(env.result, name) : null;
   }
 
+  async setFailClosed(name: string): Promise<void> {
+    await this.call("PATCH", this.projectPath(name), { json: { deployment_configs: FAIL_CLOSED } });
+  }
+
+  /**
+   * Projet créé en « fail closed » : quand le quota gratuit de Pages Functions est épuisé, Cloudflare renvoie
+   * une erreur au lieu de servir les fichiers sans le _worker.js du hub (qui pose noindex, en-têtes et 403).
+   * Champ deployment_configs.{production,preview}.fail_open de l'API Pages (Create project, Edit project).
+   * Projet déjà là (reprise de l'étape) : le réglage est recalé s'il manque.
+   */
   async createProject(name: string): Promise<CfProject> {
     const existing = await this.getProject(name);
-    if (existing) return existing;
+    if (existing) {
+      if (!isFailClosed(existing)) await this.setFailClosed(name);
+      return existing;
+    }
     try {
       const env = await this.call<{ name: string; subdomain: string }>("POST", `/accounts/${this.#account}/pages/projects`, {
-        json: { name, production_branch: "main" },
+        json: { name, production_branch: "main", deployment_configs: FAIL_CLOSED },
       });
       return this.toProject(env.result, name);
     } catch (err) {
@@ -343,6 +369,23 @@ export class RealCloudflare implements CloudflareGateway {
     const env = await this.call<{ id: string; url: string }>("POST", `${this.projectPath(project)}/deployments`, { form });
     if (!env.result?.id) throw new CloudflareError("Réponse illisible de Cloudflare (déploiement).", 200);
     return { id: env.result.id, url: env.result.url ?? "" };
+  }
+
+  /**
+   * GET /accounts/{account_id}/pages/projects/{project_name}/deployments (page, per_page) : du plus récent au
+   * plus ancien. Les 4 premières pages suffisent à retrouver les déploiements d'une tentative récente.
+   */
+  async listDeployments(project: string): Promise<CfDeploymentInfo[]> {
+    const out: CfDeploymentInfo[] = [];
+    for (let page = 1; page <= 4; page++) {
+      const env = await this.call<Array<{ id: string; url?: string; created_on?: string }>>("GET", `${this.projectPath(project)}/deployments`, {
+        query: { page: String(page), per_page: "25" },
+      });
+      const list = env.result ?? [];
+      for (const d of list) if (d.id && d.created_on) out.push({ id: d.id, url: d.url ?? "", createdOn: d.created_on });
+      if (list.length < 25) break;
+    }
+    return out;
   }
 
   async deleteDeployment(project: string, id: string): Promise<void> {

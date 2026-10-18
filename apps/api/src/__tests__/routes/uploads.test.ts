@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FilesResponse, UploadFileDecl, UploadResult, UploadSession } from "@/contract.js";
 import { UPLOAD_CHUNK_BYTES } from "@/lib/limits.js";
 import { resetDb } from "../helpers/db.js";
-import { buildTestHub, createPersoSite, makeZip, multipart, patchName, type TestHub } from "../helpers/hub.js";
+import { buildTestHub, createPersoSite, makeZip, multipart, patchName, uploadFiles, type TestHub } from "../helpers/hub.js";
 
 let hub: TestHub;
 let siteId: string;
@@ -70,21 +70,32 @@ function streamOf(session: UploadSession, files: LocalFile[]): Buffer[] {
 }
 
 describe("cas réel : dossier de projet (portfolio)", () => {
-  it("envoi direct de 1 000 fichiers et du champ « dir » dans une requête : accepté (busboy plafonnait à 1 000 parties)", async () => {
-    const files = Array.from({ length: 1000 }, (_, i) => ({ field: "files", filename: `a/f${i}.txt`, content: `x${i}` }));
-    const body = multipart([["dir", "lot"]], files);
-    const res = await hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/files`, headers: { ...hub.headers, ...body.headers }, payload: body.payload });
+  it("plus de 1 000 fichiers dans un dossier : une session, tous reçus (le plafond de 1 000 parties ne joue plus)", async () => {
+    const files = Array.from({ length: 1500 }, (_, i) => ({ filename: `a/f${i}.txt`, content: `x${i}` }));
+    const res = await uploadFiles(hub, siteId, files, "lot");
     expect(res.statusCode).toBe(200);
-    expect((res.json() as UploadResult).accepted).toHaveLength(1000);
+    expect((res.json() as UploadResult).accepted).toHaveLength(1500);
   });
 
-  it("au-delà de la limite par requête : 413 avec un code et un message précis, jamais « Fichier trop volumineux. » seul", async () => {
-    const files = Array.from({ length: 1011 }, (_, i) => ({ field: "files", filename: `f${i}.txt`, content: "x" }));
-    const body = multipart([["dir", ""]], files);
-    const res = await hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/files`, headers: { ...hub.headers, ...body.headers }, payload: body.payload });
+  it("au-delà du plafond du site : 413 avec un code et un message précis, jamais « Fichier trop volumineux. » seul", async () => {
+    const files = Array.from({ length: 20_001 }, (_, i) => ({ path: `f${i}.txt`, size: 1, sha256: "b".repeat(64) }));
+    const res = await open({ kind: "files", files });
     expect(res.statusCode).toBe(413);
     expect(res.json().code).toBe("too_many_files");
-    expect(res.json().error).toMatch(/1000 au plus par requête/);
+    expect(res.json().error).toMatch(/20000 au plus par site/);
+  });
+
+  it("l'ancienne route d'envoi multipart est retirée", async () => {
+    const body = multipart([], [{ field: "files", filename: "index.html", content: "x" }]);
+    const res = await hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/files`, headers: { ...hub.headers, ...body.headers }, payload: body.payload });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("l'ancienne route d'envoi direct d'un zip est retirée", async () => {
+    const zip = await makeZip([{ name: "index.html", content: "x" }]);
+    const body = multipart([["mode", "merge"]], [{ field: "file", filename: "site.zip", content: zip, type: "application/zip" }]);
+    const res = await hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/zip`, headers: { ...hub.headers, ...body.headers }, payload: body.payload });
+    expect(res.statusCode).toBe(404);
   });
 
   it("dossier complet par session : node_modules, .git, .astro et le fichier de 26 Mio écartés avec leur raison, le reste reçu", async () => {

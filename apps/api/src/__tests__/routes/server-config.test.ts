@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ServerConfigPreview, SiteDetail } from "@/contract.js";
 import { buildHtaccess, GENERATED_MARKER } from "@/lib/server-config.js";
 import { prisma, resetDb } from "../helpers/db.js";
-import { buildTestHub, createPersoSite, makeZip, multipart, settle, type TestHub } from "../helpers/hub.js";
+import { buildTestHub, createPersoSite, makeZip, settle, uploadFiles, uploadZip, type TestHub } from "../helpers/hub.js";
 
 let hub: TestHub;
 let siteId: string;
@@ -24,10 +24,7 @@ const htaccess = async () => {
 const patch = (payload: Record<string, unknown>) => hub.app.inject({ method: "PATCH", url: `/api/sites/${siteId}`, headers: hub.headers, payload });
 const regenerate = (force?: boolean) =>
   hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/server-config/regenerate`, headers: hub.headers, payload: force === undefined ? {} : { force } });
-async function upload(filename: string, content: string) {
-  const body = multipart([], [{ field: "files", filename, content }]);
-  return hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/files`, headers: { ...hub.headers, ...body.headers }, payload: body.payload });
-}
+const upload = (filename: string, content: string) => uploadFiles(hub, siteId, [{ filename, content }]);
 const audits = async (action: string) => prisma.auditEvent.count({ where: { action, siteId } });
 
 describe("profil et .htaccess généré", () => {
@@ -84,8 +81,7 @@ describe("profil et .htaccess généré", () => {
       { name: "index.html", content: "<h1>x</h1>" },
       { name: ".htaccess", content: "# hébergeur\n" },
     ]);
-    const body = multipart([["mode", "merge"]], [{ field: "file", filename: "site.zip", content: zip }]);
-    const res = await hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/zip`, headers: { ...hub.headers, ...body.headers }, payload: body.payload });
+    const res = await uploadZip(hub, siteId, zip, "merge");
     expect(res.json().accepted).toContain(".htaccess");
     expect((await detail()).serverConfig.status).toBe("modified");
     await patch({ notFoundPage: "/erreur.html" });

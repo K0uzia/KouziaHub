@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FilesResponse, SiteDetail, UploadResult, VersionEntry } from "@/contract.js";
 import { prisma, resetDb } from "../helpers/db.js";
-import { buildTestHub, createPersoSite, makeZip, multipart, patchName, patchUncompressedSize, settle, type MultipartFile, type TestHub } from "../helpers/hub.js";
+import { buildTestHub, createPersoSite, uploadFiles, uploadZip, makeZip, patchName, patchUncompressedSize, settle, type MultipartFile, type TestHub } from "../helpers/hub.js";
 
 let hub: TestHub;
 let siteId: string;
@@ -18,16 +18,11 @@ afterEach(async () => {
   await hub.app.close();
 });
 
-async function upload(files: MultipartFile[], dir?: string) {
-  // Champs de l'interface : « dir » d'abord, puis les fichiers sous « files ».
-  const body = multipart(dir !== undefined ? [["dir", dir]] : [], files.map((f) => ({ field: "files", ...f })));
-  return hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/files`, headers: { ...hub.headers, ...body.headers }, payload: body.payload });
-}
+// Envoi comme l'interface : par session (l'ancienne route multipart est retirée).
+const upload = (files: MultipartFile[], dir?: string) => uploadFiles(hub, siteId, files, dir);
 
-async function sendZip(zip: Buffer, mode: string) {
-  const body = multipart([["mode", mode]], [{ field: "file", filename: "site.zip", content: zip, type: "application/zip" }]);
-  return hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/zip`, headers: { ...hub.headers, ...body.headers }, payload: body.payload });
-}
+// Zip envoyé comme l'interface : session zip, morceaux, finalisation (l'ancienne route /zip est retirée).
+const sendZip = (zip: Buffer, mode: string) => uploadZip(hub, siteId, zip, mode);
 
 const files = async () => (await hub.app.inject({ method: "GET", url: `/api/sites/${siteId}/files`, headers: hub.headers })).json() as FilesResponse;
 const paths = async () => (await files()).files.map((f) => f.path);
@@ -87,10 +82,14 @@ describe("explorateur de fichiers", () => {
     ]);
     const body = res.json() as UploadResult;
     expect(body.accepted).toEqual(["page.html"]);
-    expect(body.rejected).toEqual([
-      { path: "Index.html", reason: "Un fichier « index.html » existe déjà avec le même nom à la casse près." },
-      { path: "PAGE.html", reason: "Un fichier « page.html » existe déjà avec le même nom à la casse près." },
-    ]);
+    // PAGE.html : écarté dès l'ouverture de la session (doublon dans l'envoi) ; Index.html : à la finalisation.
+    expect(body.rejected).toEqual(
+      expect.arrayContaining([
+        { path: "Index.html", reason: "Un fichier « index.html » existe déjà avec le même nom à la casse près." },
+        { path: "PAGE.html", reason: expect.stringMatching(/casse/) },
+      ]),
+    );
+    expect(body.rejected).toHaveLength(2);
     expect((await paths()).sort()).toEqual(["index.html", "page.html"]);
     const move = await hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/files/move`, headers: hub.headers, payload: { from: "page.html", to: "INDEX.html" } });
     expect(move.statusCode).toBe(409);
@@ -207,6 +206,60 @@ describe("envoi d'un zip", () => {
   it("exige le champ mode et un vrai zip", async () => {
     expect((await sendZip(await makeZip([{ name: "index.html", content: "a" }]), "tout")).statusCode).toBe(400);
     expect((await sendZip(Buffer.from("pas un zip"), "merge")).statusCode).toBe(400);
+  });
+});
+
+describe("publication : délai dépassé après création du déploiement", () => {
+  async function failedPublish() {
+    await upload([{ filename: "index.html", content: "<h1>v</h1>" }]);
+    const project = (await detail()).pagesProject;
+    const before = hub.cf.deployments(project).length;
+    hub.cf.failAfterNext("deploy");
+    await publish("première tentative");
+    const failed = await detail();
+    expect(failed.operation?.status).toBe("FAILED");
+    // Cloudflare a bien créé le déploiement, le hub ne le sait pas.
+    expect(hub.cf.deployments(project)).toHaveLength(before + 1);
+    return { project, before, failed };
+  }
+  const tracked = async () => (await prisma.version.findMany({ where: { siteId, cfDeploymentId: { not: null } } })).map((v) => v.cfDeploymentId);
+
+  it("la reprise rattache le déploiement créé : un seul déploiement suivi, aucun orphelin", async () => {
+    const { project, failed } = await failedPublish();
+    const created = hub.cf.deployments(project).at(-1)!.id;
+    const deploys = () => hub.cf.calls.filter((c) => c.startsWith("deploy:")).length;
+    const deploysBefore = deploys();
+    const retry = await hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/operations/${failed.operation!.id}/retry`, headers: hub.headers });
+    expect(retry.statusCode).toBe(200);
+    await settle(hub);
+    // Aucun nouveau déploiement : celui de la première tentative est rattaché à la version.
+    expect(deploys()).toBe(deploysBefore);
+    const version = (await prisma.version.findMany({ where: { siteId, note: "première tentative" } }))[0]!;
+    expect(version.cfDeploymentId).toBe(created);
+    expect(version.status).toBe("PUBLISHED");
+    // Plus aucun déploiement inconnu du hub (la page d'attente, elle, est purgée par la rétention).
+    const deployments = hub.cf.deployments(project);
+    const known = await tracked();
+    for (const d of deployments) expect(known).toContain(d.id);
+    const site = await detail();
+    expect(site.operation).toBeNull();
+    expect(site.currentVersion?.number).toBe((await versions()).find((v) => v.note === "première tentative")!.number);
+  });
+
+  it("deux déploiements restés de la tentative : le plus récent est rattaché, l'autre supprimé", async () => {
+    const { project, failed } = await failedPublish();
+    const first = hub.cf.deployments(project).at(-1)!.id;
+    // Appel rejoué par le client HTTP après une coupure : un second déploiement identique.
+    await hub.cf.deploy(project, { files: [], workerJs: "// doublon" });
+    const newest = hub.cf.deployments(project).at(-1)!.id;
+    await hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/operations/${failed.operation!.id}/retry`, headers: hub.headers });
+    await settle(hub);
+    const deployments = hub.cf.deployments(project).map((d) => d.id);
+    expect(deployments).toContain(newest);
+    expect(deployments).not.toContain(first);
+    expect(hub.cf.calls).toContain(`deleteDeployment:${first}`);
+    const known = await tracked();
+    for (const id of deployments) expect(known).toContain(id);
   });
 });
 

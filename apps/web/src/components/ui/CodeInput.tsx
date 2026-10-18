@@ -126,7 +126,7 @@ export function CodeInput({
             ? "border-[var(--danger)]"
             : active
               ? "border-[var(--primary)] shadow-[inset_0_-3px_0_var(--primary)]"
-              : "border-[var(--border-strong)]";
+              : "border-[var(--border-input)]";
           return (
             <span
               key={i}

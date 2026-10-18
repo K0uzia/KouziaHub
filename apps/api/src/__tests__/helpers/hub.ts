@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -63,6 +64,59 @@ export async function createPersoSite(hub: TestHub, slug: string, label = `Site 
   if (res.statusCode !== 201) throw new Error(`création ${res.statusCode} ${res.body}`);
   await settle(hub);
   return res.json().id as string;
+}
+
+/**
+ * Envoi de fichiers comme l'interface : session, morceaux, finalisation. Renvoie la réponse de la finalisation
+ * (UploadResult), ou celle de l'étape refusée (ouverture ou morceau).
+ */
+export async function uploadFiles(hub: TestHub, siteId: string, files: Array<{ filename: string; content: Buffer | string }>, dir?: string) {
+  const bufs = files.map((f) => Buffer.from(f.content));
+  const sha = (b: Buffer) => createHash("sha256").update(b).digest("hex");
+  const open = await hub.app.inject({
+    method: "POST",
+    url: `/api/sites/${siteId}/uploads`,
+    headers: hub.headers,
+    payload: { kind: "files", ...(dir !== undefined ? { dir } : {}), files: files.map((f, i) => ({ path: f.filename, size: bufs[i]!.length, sha256: sha(bufs[i]!) })) },
+  });
+  if (open.statusCode !== 200) return open;
+  const session = open.json() as { id: string; included: number[]; chunkSize: number; chunkCount: number };
+  const stream = Buffer.concat(session.included.map((i) => bufs[i]!));
+  for (let n = 0; n < session.chunkCount; n++) {
+    const chunk = stream.subarray(n * session.chunkSize, (n + 1) * session.chunkSize);
+    const put = await hub.app.inject({
+      method: "PUT",
+      url: `/api/sites/${siteId}/uploads/${session.id}/chunks/${n}`,
+      headers: { ...hub.headers, "content-type": "application/octet-stream", "x-chunk-sha256": sha(chunk) },
+      payload: chunk,
+    });
+    if (put.statusCode !== 200) return put;
+  }
+  return hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/uploads/${session.id}/complete`, headers: hub.headers });
+}
+
+/** Envoi d'un zip comme l'interface : session zip, morceaux, finalisation (réponse de l'étape refusée sinon). */
+export async function uploadZip(hub: TestHub, siteId: string, zip: Buffer, mode: string) {
+  const sha = (b: Buffer) => createHash("sha256").update(b).digest("hex");
+  const open = await hub.app.inject({
+    method: "POST",
+    url: `/api/sites/${siteId}/uploads`,
+    headers: hub.headers,
+    payload: { kind: "zip", mode, name: "site.zip", size: zip.length, sha256: sha(zip) },
+  });
+  if (open.statusCode !== 200) return open;
+  const session = open.json() as { id: string; chunkSize: number; chunkCount: number };
+  for (let n = 0; n < session.chunkCount; n++) {
+    const chunk = zip.subarray(n * session.chunkSize, (n + 1) * session.chunkSize);
+    const put = await hub.app.inject({
+      method: "PUT",
+      url: `/api/sites/${siteId}/uploads/${session.id}/chunks/${n}`,
+      headers: { ...hub.headers, "content-type": "application/octet-stream", "x-chunk-sha256": sha(chunk) },
+      payload: chunk,
+    });
+    if (put.statusCode !== 200) return put;
+  }
+  return hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/uploads/${session.id}/complete`, headers: hub.headers });
 }
 
 export type MultipartFile = { field?: string; filename: string; content: Buffer | string; type?: string };
