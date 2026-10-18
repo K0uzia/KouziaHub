@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import type { FilesResponse, SiteDetail, VersionEntry } from "@hub/contract";
+import type { FilesResponse, Page, SiteDetail, VersionEntry } from "@hub/contract";
 import { api, errorMessage } from "@/lib/api";
 import { formatBytes, formatDateTime, plural } from "@/lib/format";
 import { versionSourceLabel, versionStatusLabel } from "@/lib/sites";
-import type { Resource } from "@/lib/useResource";
+import { useResource } from "@/lib/useResource";
+import { Pagination } from "@/components/ui/Pagination";
 import { Badge, Card, EmptyState } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { MoreMenu } from "@/components/ui/MoreMenu";
@@ -16,24 +17,39 @@ import { faFileZipper } from "@fortawesome/free-solid-svg-icons";
 type Pending = { kind: "publish" | "restore"; version: VersionEntry };
 
 /** Historique des versions : republier (retour arrière) ou restaurer dans les fichiers de travail. */
+const PAGE_SIZE = 20;
+
 export function VersionsTab({
   site,
-  versions,
+  refreshKey,
+  onVersionsChanged,
   onSite,
   onRestored,
   onGoServer,
 }: {
   site: SiteDetail;
-  versions: Resource<VersionEntry[]>;
+  /** Change à la fin d'une opération : la page affichée est relue. */
+  refreshKey: number;
+  /** Une action a changé les versions : le nombre de l'onglet est relu. */
+  onVersionsChanged: () => void;
   onSite: (s: SiteDetail) => void;
   onRestored: (files: FilesResponse) => void;
   onGoServer: () => void;
 }) {
+  // Historique paginé sur le serveur (20 par page, la plus récente d'abord).
+  const [page, setPage] = useState(1);
+  const versions = useResource<Page<VersionEntry>>(`/api/sites/${site.id}/versions?page=${page}&pageSize=${PAGE_SIZE}`, null, { keepData: true });
+  const reloadPage = versions.reload;
+  const topRef = useRef<HTMLOListElement>(null);
+  useEffect(() => {
+    if (refreshKey) void reloadPage();
+  }, [refreshKey, reloadPage]);
   const [pending, setPending] = useState<Pending | null>(null);
   const [exporting, setExporting] = useState<VersionEntry | null>(null);
   const [busy, setBusy] = useState(false);
   const running = site.operation?.status === "RUNNING";
-  const current = versions.data?.find((v) => v.current) ?? null;
+  // La version servie est presque toujours sur la première page (une republication crée une version).
+  const current = versions.data?.items.find((v) => v.current) ?? null;
 
   async function confirm() {
     if (!pending) return;
@@ -51,6 +67,7 @@ export function VersionsTab({
       }
       setPending(null);
       void versions.reload();
+      onVersionsChanged();
     } catch (err) {
       toast.error(errorMessage(err));
     } finally {
@@ -76,8 +93,8 @@ export function VersionsTab({
       </Card>
     );
   }
-  const list = [...(versions.data ?? [])].sort((a, b) => b.number - a.number);
-  if (list.length === 0) {
+  const list = versions.data?.items ?? [];
+  if (versions.data && versions.data.total === 0) {
     return (
       <Card>
         <EmptyState title="Aucune version pour l'instant" hint="Chaque publication des fichiers de travail crée une version, gardée et republiable." />
@@ -103,7 +120,12 @@ export function VersionsTab({
         </div>
       ) : null}
       {/* Liste et non tableau : la note garde toute la largeur (un tableau la réduisait à une lettre par ligne). */}
-      <ol aria-label={`Versions de ${site.hostname}, de la plus récente à la plus ancienne`} className="ui-card divide-y divide-[var(--border)] p-0">
+      <ol
+        ref={topRef}
+        tabIndex={-1}
+        aria-label={`Versions de ${site.hostname}, de la plus récente à la plus ancienne${versions.data && versions.data.total > PAGE_SIZE ? `, page ${versions.data.page}` : ""}`}
+        className="ui-card divide-y divide-[var(--border)] p-0"
+      >
         {list.map((v) => {
           const status = versionStatusLabel(v);
           const hasFiles = v.status === "PUBLISHED";
@@ -153,6 +175,11 @@ export function VersionsTab({
           );
         })}
       </ol>
+      {versions.data ? (
+        <div className="mt-3">
+          <Pagination page={versions.data.page} pageSize={versions.data.pageSize} total={versions.data.total} onChange={setPage} label="Pages des versions" focusRef={topRef} />
+        </div>
+      ) : null}
       <p className="mt-3 text-xs text-[var(--muted)]">
         Une version archivée sans fichiers ne peut plus être republiée. Une opération en cours bloque la republication.
       </p>

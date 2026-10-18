@@ -224,6 +224,18 @@ export type VersionEntry = {
   current: boolean;
 };
 
+/**
+ * Liste longue paginée côté serveur (journal, versions, incidents) : page à partir de 1, pageSize 20 par
+ * défaut, 100 au plus (plafonné). Tri du plus récent au plus ancien. Page au-delà de la dernière : items vide.
+ */
+export type Page<T> = { items: T[]; total: number; page: number; pageSize: number };
+
+/** Filtres du journal (dans l'URL de l'écran, validés par le serveur) ; dates AAAA-MM-JJ incluses. */
+export type AuditFilters = { action?: string; result?: "ok" | "error"; from?: string; to?: string };
+
+/** Filtres des incidents : en cours ou terminés, période sur le début de l'incident. */
+export type IncidentFilters = { state?: "open" | "closed"; from?: string; to?: string };
+
 export type AuditEntry = {
   id: string;
   siteSlug: string | null;
@@ -304,7 +316,7 @@ export type SystemStatus = {
 // GET    /api/orphans                            : OrphanReport
 // POST   /api/orphans/check                      : OrphanReport
 // POST   /api/orphans/dns/delete       { name: string } : OrphanReport
-// GET    /api/audit?siteId=&limit=               : AuditEntry[]
+// GET    /api/audit?page=&pageSize=&siteId=&action=&result=&from=&to= : Page<AuditEntry>
 
 // --- Surveillance (cadrage section 10) ---
 
@@ -380,7 +392,6 @@ export type MonitorOverview = {
     zonesToken: boolean;
     speed: { available: boolean; reason: string | null };
   };
-  recentIncidents: MonitorIncidentEntry[];
 };
 
 export type CreateMonitorTargetInput = {
@@ -395,7 +406,6 @@ export type MonitorHistoryPoint = { hour: string; observer: "hub" | "edge"; chec
 
 export type MonitorTargetDetail = MonitorTargetEntry & {
   history: MonitorHistoryPoint[];
-  incidents: MonitorIncidentEntry[];
   reports: Array<{ id: string; month: string; createdAt: string }>;
 };
 
@@ -408,7 +418,8 @@ export type PushDevice = { id: string; label: string; endpoint: string; createdA
 //
 // GET    /api/monitor                              : MonitorOverview
 // POST   /api/monitor/targets   CreateMonitorTargetInput : MonitorTargetEntry (domaine ajouté à la main)
-// GET    /api/monitor/targets/:id?days=30          : MonitorTargetDetail
+// GET    /api/monitor/targets/:id?days=30          : MonitorTargetDetail (incidents : route paginée ci-dessous)
+// GET    /api/monitor/incidents?page=&pageSize=&targetId=&siteId=&state=&from=&to= : Page<MonitorIncidentEntry>
 // PATCH  /api/monitor/targets/:id  UpdateMonitorTargetInput : MonitorTargetEntry (interrupteur « Surveillé »)
 // DELETE /api/monitor/targets/:id                  : { ok: true } (cibles manuelles ou cloudflare seulement)
 // POST   /api/monitor/targets/:id/check            : MonitorTargetEntry (contrôle HTTP immédiat par le hub)

@@ -2,7 +2,7 @@ import { mkdirSync, utimesSync, writeFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import yauzl from "yauzl";
-import type { CachePurgeResult, ExportSummary, HubCachePurgeResult, SiteDetail, SiteFilesPurgeResult, StorageUsage, VersionEntry } from "@/contract.js";
+import type { Page, CachePurgeResult, ExportSummary, HubCachePurgeResult, SiteDetail, SiteFilesPurgeResult, StorageUsage, VersionEntry } from "@/contract.js";
 import { CloudflareError } from "@/lib/cloudflare/types.js";
 import { prisma, resetDb } from "../helpers/db.js";
 import { buildTestHub, createPersoSite, settle, type MultipartFile, type TestHub, uploadFiles } from "../helpers/hub.js";
@@ -36,7 +36,7 @@ const get = async <T>(url: string) => {
   expect(res.statusCode, res.body).toBe(200);
   return res.json() as T;
 };
-const versions = () => get<VersionEntry[]>(`/api/sites/${siteId}/versions`);
+const versions = async () => (await get<Page<VersionEntry>>(`/api/sites/${siteId}/versions?pageSize=100`)).items;
 
 describe("purge des fichiers d'un site", () => {
   it("confirmation exacte exigée", async () => {

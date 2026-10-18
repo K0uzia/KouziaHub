@@ -3,7 +3,7 @@ import { rm } from "node:fs/promises";
 import path from "node:path";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import type { CloudflareZoneSuggestion, MonitorOverview, MonitorTargetDetail, MonitorTargetEntry } from "@/contract.js";
+import type { CloudflareZoneSuggestion, MonitorIncidentEntry, MonitorOverview, MonitorTargetDetail, MonitorTargetEntry, Page } from "@/contract.js";
 import { audit } from "@/lib/audit.js";
 import { requireAuth } from "@/lib/auth.js";
 import { ERP_CLIENT_ID, ErpUnavailableError } from "@/lib/erp/types.js";
@@ -13,6 +13,7 @@ import { isPrivateHost } from "@/lib/monitor/checks.js";
 import { generateReport, MONTH_RE } from "@/lib/monitor/report.js";
 import type { TargetWithSite } from "@/lib/monitor/service.js";
 import { buildEntries, incidentEntry } from "@/lib/monitor/view.js";
+import { badListQuery, dayParam, dayRange, pageOf, pageQuery, skipTake } from "@/lib/pagination.js";
 import { prisma } from "@/lib/prisma.js";
 import { normalizeFinalDomain } from "@/lib/server-config.js";
 import type { Services } from "@/lib/services.js";
@@ -25,6 +26,13 @@ const updateSchema = z
   .object({ label: label.optional(), enabled: z.boolean().optional(), keyword: keyword.optional(), erpClientId: z.string().regex(ERP_CLIENT_ID).nullable().optional() })
   .strict();
 const detailQuery = z.object({ days: z.coerce.number().int().min(1).max(400).optional() });
+const incidentsQuery = pageQuery.extend({
+  targetId: routeParam.optional(),
+  siteId: routeParam.optional(),
+  state: z.enum(["open", "closed"]).optional(),
+  from: dayParam.optional(),
+  to: dayParam.optional(),
+});
 const reportParams = z.object({ id: routeParam, file: routeParam });
 const zoneParams = z.object({ name: routeParam });
 
@@ -96,7 +104,6 @@ export function monitorRoutes(services: Services): FastifyPluginAsync {
         (e.domainExpiry?.daysLeft != null && e.domainExpiry.daysLeft <= 30) ||
         e.dns?.status === "drift" ||
         e.content?.status === "changed";
-      const recent = await prisma.monitorIncident.findMany({ orderBy: { startedAt: "desc" }, take: 20, include: { target: { select: { label: true } } } });
       return {
         targets: list,
         stats: {
@@ -118,8 +125,34 @@ export function monitorRoutes(services: Services): FastifyPluginAsync {
           zonesToken: services.zones.configured,
           speed: await monitor.speedStatus(),
         },
-        recentIncidents: recent.map((i) => incidentEntry(i, i.target.label)),
       };
+    });
+
+    app.get("/api/monitor/incidents", async (request): Promise<Page<MonitorIncidentEntry>> => {
+      const parsed = incidentsQuery.safeParse(request.query);
+      if (!parsed.success) throw badListQuery();
+      const q = parsed.data;
+      const startedAt = dayRange(q.from, q.to);
+      const where = {
+        ...(q.targetId ? { targetId: q.targetId } : {}),
+        ...(q.siteId ? { target: { siteId: q.siteId } } : {}),
+        ...(q.state === "open" ? { endedAt: null } : q.state === "closed" ? { endedAt: { not: null } } : {}),
+        ...(startedAt ? { startedAt } : {}),
+      };
+      const [total, rows] = await Promise.all([
+        prisma.monitorIncident.count({ where }),
+        prisma.monitorIncident.findMany({
+          where,
+          orderBy: [{ startedAt: "desc" }, { id: "desc" }],
+          include: { target: { select: { label: true } } },
+          ...skipTake(q),
+        }),
+      ]);
+      return pageOf(
+        rows.map((i) => incidentEntry(i, i.target.label)),
+        total,
+        q,
+      );
     });
 
     app.post("/api/monitor/targets", async (request, reply) => {
@@ -141,9 +174,8 @@ export function monitorRoutes(services: Services): FastifyPluginAsync {
       const { days = 30 } = detailQuery.parse(request.query);
       const entry = await entryOf(id);
       const since = new Date(monitor.now() - days * 86_400_000);
-      const [hourly, incidents, reports] = await Promise.all([
+      const [hourly, reports] = await Promise.all([
         prisma.monitorHourly.findMany({ where: { targetId: id, hour: { gte: since } }, orderBy: { hour: "asc" } }),
-        prisma.monitorIncident.findMany({ where: { targetId: id, OR: [{ endedAt: null }, { endedAt: { gte: since } }] }, orderBy: { startedAt: "desc" }, take: 100 }),
         prisma.monitorReport.findMany({ where: { targetId: id }, orderBy: { month: "desc" } }),
       ]);
       return {
@@ -156,7 +188,6 @@ export function monitorRoutes(services: Services): FastifyPluginAsync {
           avgMs: h.avgMs,
           p95Ms: h.p95Ms,
         })),
-        incidents: incidents.map((i) => incidentEntry(i, entry.label)),
         reports: reports.map((r) => ({ id: r.id, month: r.month, createdAt: r.createdAt.toISOString() })),
       };
     });

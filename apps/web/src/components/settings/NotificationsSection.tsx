@@ -4,14 +4,16 @@ import type { PushDevice } from "@hub/contract";
 import { api, errorMessage } from "@/lib/api";
 import { formatDate } from "@/lib/format";
 import { currentSubscription, disablePush, enablePush, pushSupport } from "@/lib/push";
-import { Card } from "@/components/ui/Card";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faChevronRight } from "@fortawesome/free-solid-svg-icons";
+import { Tile } from "@/components/ui/Tile";
+import { notificationsStatus } from "@/lib/settingsStatus";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
-const EVENTS = "site en panne, retour en ligne, certificat ou domaine bientôt expiré, hub ou box hors ligne";
-
 /**
- * Réglages > Notifications : écran, états et textes repris de l'ERP (Réglages > Notifications), adaptés au hub.
+ * Tuile Notifications : états et textes repris de l'ERP (Réglages > Notifications), adaptés au hub ;
+ * liste des appareils dans un dépliant.
  */
 export function NotificationsSection() {
   const support = pushSupport();
@@ -100,101 +102,93 @@ export function NotificationsSection() {
   }
 
   return (
-    <section id="notifications" aria-labelledby="notifications-title" className="scroll-mt-4">
-      <h2 id="notifications-title" className="mb-3 text-lg font-semibold">
-        Notifications
-      </h2>
-      <div className="space-y-4">
-        <Card className="space-y-4 p-5">
-          <div>
-            <h3 className="text-base font-semibold">Notifications push</h3>
-            <p className="mt-1 text-sm text-[var(--muted)]">Une notification sur cet appareil, même hub fermé : {EVENTS}.</p>
+    <Tile
+      id="notifications"
+      className="scroll-mt-4"
+      title="Notifications"
+      level={2}
+      tip="push"
+      status={notificationsStatus({ data: publicKey === undefined ? null : { publicKey, devices: devices.length }, error: loadError })}
+    >
+      {loadError ? (
+        <Button variant="secondary" className="self-start" onClick={() => void load()}>
+          Réessayer
+        </Button>
+      ) : publicKey === undefined ? (
+        <div role="status" aria-busy="true" className="h-11 animate-pulse rounded-[var(--radius)] bg-[var(--surface-raised)]">
+          <span className="sr-only">Chargement des notifications…</span>
+        </div>
+      ) : support === "insecure" ? (
+        <p className="text-sm text-[var(--warning)]">
+          Les notifications push ne fonctionnent qu'en https : ouvrez le hub par https://hub.kouzia.com (ou http://localhost sur
+          l'ordinateur du hub), pas par l'adresse IP du réseau local (make dev-lan).
+        </p>
+      ) : support === "unsupported" ? (
+        <p className="text-sm text-[var(--warning)]">
+          Ce navigateur ne gère pas les notifications push. Sur Android : Chrome ou Samsung Internet ; sur iPhone, ajoutez d'abord le hub
+          à l'écran d'accueil.
+        </p>
+      ) : !publicKey ? (
+        <p className="text-sm text-[var(--muted)]">Une fois les clés posées, activez les notifications ici, sur chaque téléphone.</p>
+      ) : permission === "denied" ? (
+        <p className="text-sm text-[var(--warning)]">
+          Notifications bloquées pour ce site : autorisez-les dans les réglages du navigateur (cadenas, Autorisations, Notifications),
+          puis revenez ici.
+        </p>
+      ) : thisDevice ? (
+        <>
+          <p className="text-sm text-[var(--muted)]">
+            Activées sur cet appareil (<span className="font-medium text-[var(--text)]">{thisDevice.label}</span>).
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={() => void test()} disabled={busy}>
+              Envoyer une notification de test
+            </Button>
+            <Button variant="secondary" onClick={() => void disable()} disabled={busy}>
+              Désactiver sur cet appareil
+            </Button>
           </div>
+        </>
+      ) : (
+        <>
+          <p className="text-xs text-[var(--muted)]">
+            Le navigateur demande l'autorisation. Sur téléphone, ajoutez aussi le hub à l'écran d'accueil pour l'ouvrir comme une
+            application.
+          </p>
+          <Button className="self-start" onClick={() => void enable()} disabled={busy}>
+            {busy ? "Activation…" : "Activer sur cet appareil"}
+          </Button>
+        </>
+      )}
 
-          {loadError ? (
-            <div role="alert" className="flex flex-wrap items-center gap-3 text-sm text-[var(--danger)]">
-              {loadError}
-              <Button variant="secondary" onClick={() => void load()}>
-                Réessayer
-              </Button>
-            </div>
-          ) : publicKey === undefined ? (
-            <div role="status" aria-busy="true" className="h-11 animate-pulse rounded-[var(--radius)] bg-[var(--surface-raised)]">
-              <span className="sr-only">Chargement des notifications…</span>
-            </div>
-          ) : support === "insecure" ? (
-            <p className="text-sm text-[var(--warning)]">
-              Les notifications push ne fonctionnent qu'en https : ouvrez le hub par https://hub.kouzia.com (ou http://localhost sur
-              l'ordinateur du hub), pas par l'adresse IP du réseau local (make dev-lan).
-            </p>
-          ) : support === "unsupported" ? (
-            <p className="text-sm text-[var(--warning)]">
-              Ce navigateur ne gère pas les notifications push. Sur Android : Chrome ou Samsung Internet ; sur iPhone, ajoutez d'abord le
-              hub à l'écran d'accueil.
-            </p>
-          ) : !publicKey ? (
-            <p className="text-sm text-[var(--warning)]">
-              Notifications push désactivées sur le serveur : clés de notification absentes (sur le serveur du hub, lancez « hubctl
-              push-keys »).
-            </p>
-          ) : permission === "denied" ? (
-            <p className="text-sm text-[var(--warning)]">
-              Notifications bloquées pour ce site : autorisez-les dans les réglages du navigateur (cadenas, Autorisations, Notifications),
-              puis revenez ici.
-            </p>
-          ) : thisDevice ? (
-            <div className="space-y-3">
-              <p className="text-sm">
-                Activées sur cet appareil (<span className="font-medium">{thisDevice.label}</span>).
-              </p>
-              <div className="flex flex-wrap gap-2">
-                <Button onClick={() => void test()} disabled={busy}>
-                  Envoyer une notification de test
+      {devices.length > 0 ? (
+        <details className="code-details mt-1">
+          <summary className="code-summary">
+            <FontAwesomeIcon icon={faChevronRight} className="code-chevron h-3 w-3 shrink-0 text-[var(--muted)]" aria-hidden />
+            Appareils ({devices.length})
+          </summary>
+          <ul className="divide-y divide-[var(--border)]">
+            {devices.map((d) => (
+              <li key={d.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">
+                    {d.label}
+                    {d.endpoint === thisEndpoint ? <span className="ml-2 text-xs text-[var(--muted)]">(cet appareil)</span> : null}
+                  </p>
+                  <p className="text-xs text-[var(--muted)]">
+                    Ajouté le {formatDate(d.createdAt)}
+                    {d.lastSuccessAt ? `, dernière notification le ${formatDate(d.lastSuccessAt)}` : ""}
+                    {d.lastError ? `, dernière erreur : ${d.lastError}` : ""}
+                  </p>
+                </div>
+                <Button variant="danger-ghost" onClick={() => setRemoving(d)}>
+                  Retirer
                 </Button>
-                <Button variant="secondary" onClick={() => void disable()} disabled={busy}>
-                  Désactiver sur cet appareil
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              <Button onClick={() => void enable()} disabled={busy}>
-                {busy ? "Activation…" : "Activer sur cet appareil"}
-              </Button>
-              <p className="text-xs text-[var(--muted)]">
-                Le navigateur demande l'autorisation. Sur téléphone, ajoutez aussi le hub à l'écran d'accueil pour l'ouvrir comme une
-                application.
-              </p>
-            </div>
-          )}
-        </Card>
-
-        {devices.length > 0 ? (
-          <Card className="space-y-3 p-5">
-            <h3 className="text-base font-semibold">Appareils qui reçoivent les notifications</h3>
-            <ul className="divide-y divide-[var(--border)]">
-              {devices.map((d) => (
-                <li key={d.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
-                  <div className="min-w-0">
-                    <p className="font-medium">
-                      {d.label}
-                      {d.endpoint === thisEndpoint ? <span className="ml-2 text-xs text-[var(--muted)]">(cet appareil)</span> : null}
-                    </p>
-                    <p className="text-xs text-[var(--muted)]">
-                      Ajouté le {formatDate(d.createdAt)}
-                      {d.lastSuccessAt ? `, dernière notification le ${formatDate(d.lastSuccessAt)}` : ""}
-                      {d.lastError ? `, dernière erreur : ${d.lastError}` : ""}
-                    </p>
-                  </div>
-                  <Button variant="danger-ghost" onClick={() => setRemoving(d)}>
-                    Retirer
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          </Card>
-        ) : null}
-      </div>
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
 
       <ConfirmDialog
         open={Boolean(removing)}
@@ -205,6 +199,6 @@ export function NotificationsSection() {
         onConfirm={() => removing && void remove(removing)}
         onClose={() => setRemoving(null)}
       />
-    </section>
+    </Tile>
   );
 }

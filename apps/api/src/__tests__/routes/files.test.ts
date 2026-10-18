@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { FilesResponse, SiteDetail, UploadResult, VersionEntry } from "@/contract.js";
+import type { FilesResponse, Page, SiteDetail, UploadResult, VersionEntry } from "@/contract.js";
 import { prisma, resetDb } from "../helpers/db.js";
 import { buildTestHub, createPersoSite, uploadFiles, uploadZip, makeZip, patchName, patchUncompressedSize, settle, type MultipartFile, type TestHub } from "../helpers/hub.js";
 
@@ -27,7 +27,7 @@ const sendZip = (zip: Buffer, mode: string) => uploadZip(hub, siteId, zip, mode)
 const files = async () => (await hub.app.inject({ method: "GET", url: `/api/sites/${siteId}/files`, headers: hub.headers })).json() as FilesResponse;
 const paths = async () => (await files()).files.map((f) => f.path);
 const detail = async () => (await hub.app.inject({ method: "GET", url: `/api/sites/${siteId}`, headers: hub.headers })).json() as SiteDetail;
-const versions = async () => (await hub.app.inject({ method: "GET", url: `/api/sites/${siteId}/versions`, headers: hub.headers })).json() as VersionEntry[];
+const versions = async () => ((await hub.app.inject({ method: "GET", url: `/api/sites/${siteId}/versions?pageSize=100`, headers: hub.headers })).json() as Page<VersionEntry>).items;
 
 async function publish(note?: string) {
   const res = await hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/publish`, headers: hub.headers, payload: note ? { note } : {} });

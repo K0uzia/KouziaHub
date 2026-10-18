@@ -3,7 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faArrowUpRightFromSquare } from "@fortawesome/free-solid-svg-icons";
-import type { OperationKind, SiteDetail, VersionEntry } from "@hub/contract";
+import type { OperationKind, Page, SiteDetail, VersionEntry } from "@hub/contract";
 import { useResource } from "@/lib/useResource";
 import { useTitle } from "@/lib/useTitle";
 import { divergence, isSettling, OPERATION_TITLE, waitsForCertificate } from "@/lib/sites";
@@ -30,7 +30,8 @@ export function SitePage() {
   const { id = "" } = useParams();
   const [settling, setSettling] = useState(false);
   const site = useResource<SiteDetail>(`/api/sites/${id}`, settling ? POLL_MS : null);
-  const versions = useResource<VersionEntry[]>(`/api/sites/${id}/versions`);
+  // Dernière version et nombre total seulement : l'onglet Versions lit ses propres pages.
+  const versions = useResource<Page<VersionEntry>>(`/api/sites/${id}/versions?pageSize=1`);
   const [tab, setTab] = useTabParam<TabId>(TAB_IDS, "fichiers");
   const [refreshKey, setRefreshKey] = useState(0);
   const data = site.data;
@@ -93,7 +94,7 @@ export function SitePage() {
   }
 
   const detail = divergence(data);
-  const nextVersion = Math.max(0, ...(versions.data ?? []).map((v) => v.number), data.currentVersion?.number ?? 0) + 1;
+  const nextVersion = Math.max(0, versions.data?.items[0]?.number ?? 0, data.currentVersion?.number ?? 0) + 1;
   const showOperation =
     data.operation && (data.operation.status === "RUNNING" || data.operation.status === "FAILED" || waitsForCertificate(data));
 
@@ -151,7 +152,7 @@ export function SitePage() {
             onChange={setTab}
             tabs={[
               { id: "fichiers", label: "Fichiers", count: data.fileCount },
-              { id: "versions", label: "Versions", count: versions.data?.length ?? null },
+              { id: "versions", label: "Versions", count: versions.data?.total ?? null },
               { id: "surveillance", label: "Surveillance" },
               { id: "vignette", label: "Vignette" },
               { id: "serveur", label: "Serveur" },
@@ -169,7 +170,8 @@ export function SitePage() {
             ) : tab === "versions" ? (
               <VersionsTab
                 site={data}
-                versions={versions}
+                refreshKey={refreshKey}
+                onVersionsChanged={() => void reloadVersions()}
                 onSite={onSite}
                 onRestored={() => {
                   setRefreshKey((k) => k + 1);

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { AuditEntry, OrphanReport, SystemStatus } from "@/contract.js";
+import type { AuditEntry, OrphanReport, Page, SystemStatus } from "@/contract.js";
 import { prisma, resetDb } from "../helpers/db.js";
 import { buildTestHub, createPersoSite, type TestHub } from "../helpers/hub.js";
 
@@ -123,12 +123,12 @@ describe("système, clients et journal", () => {
   it("journal des actions, filtrable par site, sans secret", async () => {
     const id = await createPersoSite(hub, "alpha");
     await createPersoSite(hub, "bravo");
-    const all = (await hub.app.inject({ method: "GET", url: "/api/audit", headers: hub.headers })).json() as AuditEntry[];
-    expect(all.map((e) => e.action)).toEqual(expect.arrayContaining(["auth.login", "site.create"]));
-    const one = (await hub.app.inject({ method: "GET", url: `/api/audit?siteId=${id}&limit=5`, headers: hub.headers })).json() as AuditEntry[];
-    expect(one.length).toBeGreaterThan(0);
-    expect(one.every((e) => e.siteSlug === "alpha")).toBe(true);
-    const bad = await hub.app.inject({ method: "GET", url: "/api/audit?limit=9999", headers: hub.headers });
+    const all = (await hub.app.inject({ method: "GET", url: "/api/audit", headers: hub.headers })).json() as Page<AuditEntry>;
+    expect(all.items.map((e) => e.action)).toEqual(expect.arrayContaining(["auth.login", "site.create"]));
+    const one = (await hub.app.inject({ method: "GET", url: `/api/audit?siteId=${id}&pageSize=5`, headers: hub.headers })).json() as Page<AuditEntry>;
+    expect(one.items.length).toBeGreaterThan(0);
+    expect(one.items.every((e) => e.siteSlug === "alpha")).toBe(true);
+    const bad = await hub.app.inject({ method: "GET", url: "/api/audit?page=0", headers: hub.headers });
     expect(bad.statusCode).toBe(400);
   });
 });

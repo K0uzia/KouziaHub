@@ -4,11 +4,12 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faCopy, faShieldHalved } from "@fortawesome/free-solid-svg-icons";
 import { api, errorMessage } from "@/lib/api";
 import { copyText } from "@/lib/clipboard";
-import { formatDate, plural } from "@/lib/format";
+import { formatDate } from "@/lib/format";
 import { useResource } from "@/lib/useResource";
-import { Badge, Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
-import { Banner } from "@/components/ui/Banner";
+import { Modal } from "@/components/ui/Modal";
+import { Tile } from "@/components/ui/Tile";
+import { securityStatus } from "@/lib/settingsStatus";
 import { CodeInput } from "@/components/ui/CodeInput";
 
 type Status = { enabled: boolean; enabledAt: string | null; recoveryCodesRemaining: number };
@@ -20,6 +21,7 @@ function svgDataUrl(svg: string): string {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
+/** Tuile Compte et sécurité : état de la double authentification ; activation et codes de secours dans une modale. */
 export function SecuritySection() {
   const ids = useId();
   const status = useResource<Status>("/api/auth/2fa/status");
@@ -30,6 +32,9 @@ export function SecuritySection() {
   const [busy, setBusy] = useState(false);
   const [codes, setCodes] = useState<string[] | null>(null);
   const codeRef = useRef<HTMLInputElement>(null);
+  // Bouton de la tuile (Activer ou Régénérer) : il reprend le focus à la fermeture de la modale.
+  const actionsRef = useRef<HTMLDivElement>(null);
+  const refocus = () => requestAnimationFrame(() => actionsRef.current?.querySelector("button")?.focus());
 
   useEffect(() => {
     if (step !== "idle") codeRef.current?.focus();
@@ -82,52 +87,56 @@ export function SecuritySection() {
     setSetup(null);
     setCode("");
     setError(null);
+    refocus();
+  }
+
+  function closeCodes() {
+    setCodes(null);
+    refocus();
   }
 
   const s = status.data;
 
   return (
-    <section id="securite" aria-labelledby={`${ids}-title`} className="scroll-mt-4">
-      <h2 id={`${ids}-title`} className="mb-3 text-lg font-semibold">
-        Sécurité
-      </h2>
-      <Card className="space-y-4 p-4 sm:p-5">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h3 className="flex items-center gap-2 text-base font-semibold">
-              <FontAwesomeIcon icon={faShieldHalved} className="h-4 w-4 text-[var(--primary)]" aria-hidden />
-              Double authentification
-            </h3>
-            <p className="mt-1 text-sm text-[var(--muted)]">
-              Un code à 6 chiffres de votre application (Google Authenticator, Aegis…) en plus du mot de passe.
-            </p>
-          </div>
-          {s ? <Badge tone={s.enabled ? "green" : "amber"}>{s.enabled ? "Activée" : "Non activée"}</Badge> : null}
-        </div>
-
-        {status.loading ? (
-          <p role="status" className="text-sm text-[var(--muted)]">
-            Lecture…
+    <Tile id="securite" className="scroll-mt-4" title="Compte et sécurité" level={2} status={securityStatus({ data: s, error: status.error })}>
+      {status.loading ? (
+        <p role="status" className="text-sm text-[var(--muted)]">
+          Lecture…
+        </p>
+      ) : status.error && !s ? (
+        <Button variant="ghost" className="self-start" onClick={() => void status.reload()}>
+          Réessayer
+        </Button>
+      ) : s ? (
+        <>
+          <p className="text-sm text-[var(--muted)]">
+            Un code à 6 chiffres de votre application (Google Authenticator, Aegis…) en plus du mot de passe.
+            {s.enabled && s.enabledAt ? ` Activée le ${formatDate(s.enabledAt)}.` : ""}
           </p>
-        ) : status.error && !s ? (
-          <Banner level="error" action={<Button variant="ghost" onClick={() => void status.reload()}>Réessayer</Button>}>
-            {status.error}
-          </Banner>
-        ) : s ? (
-          s.enabled ? (
-            <p className="text-sm text-[var(--text)]">
-              {s.enabledAt ? `Activée le ${formatDate(s.enabledAt)}. ` : ""}
-              {plural(s.recoveryCodesRemaining, "code de secours restant", "codes de secours restants")}.
-            </p>
-          ) : (
-            <Banner level="warning">Sans double authentification, la connexion par Internet au hub est refusée.</Banner>
-          )
-        ) : null}
+          <div ref={actionsRef} className="mt-auto flex flex-wrap gap-2 pt-1">
+            {s.enabled ? (
+              <Button variant="secondary" onClick={() => setStep("regenerate")}>
+                Régénérer les codes de secours
+              </Button>
+            ) : (
+              <Button onClick={() => void startSetup()} disabled={busy}>
+                <FontAwesomeIcon icon={faShieldHalved} className="h-3.5 w-3.5" aria-hidden />
+                {busy ? "Préparation…" : "Activer la double authentification"}
+              </Button>
+            )}
+          </div>
+        </>
+      ) : null}
 
+      <Modal
+        open={step !== "idle" || codes !== null}
+        onClose={codes ? closeCodes : cancel}
+        title={codes ? "Codes de secours" : step === "setup" ? "Activer la double authentification" : "Régénérer les codes de secours"}
+      >
         {codes ? (
-          <div className="space-y-3 rounded-[var(--radius)] border border-[var(--warning)]/40 bg-[var(--warning-soft)] p-4" role="status">
+          <div className="space-y-3" role="status">
             <p className="text-sm font-medium text-[var(--text)]">
-              Codes de secours : notez-les en lieu sûr. Chacun ne sert qu'une fois, et ils ne seront plus affichés.
+              Notez-les en lieu sûr. Chacun ne sert qu'une fois, et ils ne seront plus affichés.
             </p>
             <ul className="grid grid-cols-1 gap-2 font-mono text-base text-[var(--text)] min-[22rem]:grid-cols-2">
               {codes.map((c) => (
@@ -141,15 +150,11 @@ export function SecuritySection() {
                 <FontAwesomeIcon icon={faCopy} className="h-3.5 w-3.5" aria-hidden />
                 Copier les codes
               </Button>
-              <Button variant="ghost" onClick={() => setCodes(null)}>
-                J'ai noté les codes
-              </Button>
+              <Button onClick={closeCodes}>J'ai noté les codes</Button>
             </div>
           </div>
-        ) : null}
-
-        {step === "setup" && setup ? (
-          <form onSubmit={onSubmitCode} className="space-y-4 border-t border-[var(--border)] pt-4" noValidate>
+        ) : step === "setup" && setup ? (
+          <form onSubmit={onSubmitCode} className="space-y-4" noValidate>
             <ol className="list-decimal space-y-4 pl-5 text-sm text-[var(--text)]">
               <li>
                 Scannez ce QR code avec l'application.
@@ -202,7 +207,7 @@ export function SecuritySection() {
             </div>
           </form>
         ) : step === "regenerate" ? (
-          <form onSubmit={onSubmitCode} className="space-y-3 border-t border-[var(--border)] pt-4" noValidate>
+          <form onSubmit={onSubmitCode} className="space-y-3" noValidate>
             <label htmlFor={`${ids}-code`} className="block text-sm font-medium text-[var(--text)]">
               Code de l'application, pour confirmer
             </label>
@@ -231,20 +236,8 @@ export function SecuritySection() {
               </Button>
             </div>
           </form>
-        ) : s ? (
-          <div>
-            {s.enabled ? (
-              <Button variant="secondary" onClick={() => setStep("regenerate")}>
-                Régénérer les codes de secours
-              </Button>
-            ) : (
-              <Button onClick={() => void startSetup()} disabled={busy}>
-                {busy ? "Préparation…" : "Activer la double authentification"}
-              </Button>
-            )}
-          </div>
         ) : null}
-      </Card>
-    </section>
+      </Modal>
+    </Tile>
   );
 }

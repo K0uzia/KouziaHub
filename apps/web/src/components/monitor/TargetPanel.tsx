@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faArrowUpRightFromSquare, faFilePdf, faRotateRight } from "@fortawesome/free-solid-svg-icons";
-import type { MonitorTargetDetail, MonitorTargetEntry } from "@hub/contract";
+import type { MonitorIncidentEntry, MonitorTargetDetail, MonitorTargetEntry, Page } from "@hub/contract";
 import { api, errorMessage } from "@/lib/api";
 import { formatAgo, formatBytes, formatDate, formatDateTime, formatDecimal, plural } from "@/lib/format";
 import {
@@ -38,7 +38,7 @@ const VERDICT_TIP: Partial<Record<MonitorTargetEntry["verdict"], GlossaryKey>> =
   edge_only: "edgeOnly",
 };
 
-/** Incidents montrés dans la tuile ; les autres sont comptés et repris dans le rapport mensuel. */
+/** Incidents montrés dans la tuile ; la liste complète est paginée sur /surveillance/incidents. */
 const INCIDENTS_SHOWN = 5;
 
 type LastCheck = MonitorTargetEntry["lastHub"];
@@ -112,6 +112,9 @@ export function TargetPanel({
   const sub = headingLevel === 2 ? 3 : 4;
   const detail = useResource<MonitorTargetDetail>(`/api/monitor/targets/${target.id}?days=30`, null, { keepData: true });
   const reloadDetail = detail.reload;
+  // Derniers incidents de l'adresse ; la liste complète est paginée sur /surveillance/incidents.
+  const incidents = useResource<Page<MonitorIncidentEntry>>(`/api/monitor/incidents?targetId=${target.id}&pageSize=${INCIDENTS_SHOWN}`, null, { keepData: true });
+  const reloadIncidents = incidents.reload;
   const [busy, setBusy] = useState<"switch" | "check" | "accept" | null>(null);
   const [accept, setAccept] = useState<"dns" | "content" | null>(null);
   const t = target;
@@ -121,7 +124,8 @@ export function TargetPanel({
   const signature = `${t.lastHub?.at}|${t.lastEdge?.at}|${t.enabled}|${t.openIncident?.id}|${t.dns?.status}|${t.content?.status}`;
   useEffect(() => {
     void reloadDetail();
-  }, [signature, reloadDetail]);
+    void reloadIncidents();
+  }, [signature, reloadDetail, reloadIncidents]);
 
   async function run(kind: "switch" | "check" | "accept", call: () => Promise<MonitorTargetEntry>, ok: string) {
     setBusy(kind);
@@ -146,7 +150,7 @@ export function TargetPanel({
   const thisMonth = new Date().toISOString().slice(0, 7);
   const listed = detail.data?.reports ?? [];
   const reports = listed.some((r) => r.month === thisMonth) ? listed : [{ id: "current", month: thisMonth, createdAt: "" }, ...listed];
-  const incidents = detail.data?.incidents ?? [];
+
   const verdictTip = VERDICT_TIP[t.verdict];
   const pointTip = basisTip(t.basis);
 
@@ -370,13 +374,18 @@ export function TargetPanel({
         ) : null}
 
         <Tile title="Incidents récents" level={sub} tip="incident">
-          {historyPending ??
-            (incidents.length === 0 ? (
-              <p className="text-sm text-[var(--muted)]">Aucun incident sur 30 jours.</p>
+          {incidents.error && !incidents.data ? (
+            <p className="text-sm text-[var(--muted)]">Incidents indisponibles.</p>
+          ) : !incidents.data ? (
+            <p role="status" className="text-sm text-[var(--muted)]">
+              Lecture des incidents…
+            </p>
+          ) : incidents.data.total === 0 ? (
+              <p className="text-sm text-[var(--muted)]">Aucun incident enregistré.</p>
             ) : (
               <>
                 <ul className="divide-y divide-[var(--border)]">
-                  {incidents.slice(0, INCIDENTS_SHOWN).map((i) => (
+                  {incidents.data.items.map((i) => (
                     <li key={i.id} className="py-1.5 text-sm first:pt-0 last:pb-0">
                       <span className="text-[var(--text)]">
                         {formatDateTime(i.startedAt)}
@@ -388,13 +397,11 @@ export function TargetPanel({
                     </li>
                   ))}
                 </ul>
-                {incidents.length > INCIDENTS_SHOWN ? (
-                  <p className="text-xs text-[var(--muted)]">
-                    Et {incidents.length - INCIDENTS_SHOWN} de plus sur 30 jours, détaillés dans le rapport mensuel.
-                  </p>
-                ) : null}
+                <Link to={`/surveillance/incidents?adresse=${t.id}`} className="link inline-flex min-h-11 items-center self-start text-sm font-medium">
+                  {incidents.data.total > INCIDENTS_SHOWN ? `Tous les incidents (${incidents.data.total})` : "Tous les incidents"}
+                </Link>
               </>
-            ))}
+            )}
         </Tile>
 
         <Tile title="Rapports mensuels" level={sub} tip="report">
