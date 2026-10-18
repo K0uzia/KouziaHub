@@ -14,6 +14,7 @@
 - Polices en tokens définis une fois (`--font-ui`, `--font-mono`), jamais de `font-family` en dur dans un composant.
 - Typo et espacements en `clamp()` ou `rem` via tokens. `px` réservé aux filets de 1 px.
 - 320 px à grand écran sans scroll horizontal. Grilles en `minmax`/`auto-fit`, pas en largeurs d'appareils. Mesure de lecture ~65 caractères.
+- Interface centrée et adaptée jusqu'aux écrans de 27 pouces (2560 × 1440) : conteneur principal centré (`margin-inline: auto`), largeur maximale fluide qui grandit avec l'écran au lieu de figer une colonne étroite, typo, densité et cibles en `clamp()` qui suivent la largeur. Le texte courant garde sa mesure de lecture ; les listes, tableaux et tableaux de bord occupent la largeur utile. Contrôle visuel obligatoire à 360, 800, 1280, 1920 et 2560 px.
 - Header fixe : `scroll-padding-top` égal à sa hauteur réelle.
 - Centrage optique dans une barre asymétrique : `position: absolute; left: 50%; translate: -50%`, hors du flux.
 
