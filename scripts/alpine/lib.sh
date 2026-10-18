@@ -437,3 +437,12 @@ list_backups() {
     [ -d "$_b" ] && [ -f "$_b/manifest.txt" ] && printf '%s\n' "$_b"
   done | sort -r
 }
+
+# Empreinte du code de la veille Cloudflare : « hubctl update » prévient quand il faut la redéployer.
+veille_src_hash() {
+  (
+    cd "$KH_APP_DIR" || exit 0
+    find workers/veille/src workers/veille/schema.sql workers/veille/package.json apps/api/src/lib/monitor/core.ts -type f 2>/dev/null \
+      | LC_ALL=C sort | while IFS= read -r _f; do sha256sum "$_f"; done
+  ) | sha256sum | awk '{print $1}'
+}

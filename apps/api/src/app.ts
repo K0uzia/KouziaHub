@@ -117,7 +117,19 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   await app.register(monitorRoutes(services));
   await app.register(pushRoutes(services));
 
-  app.get("/api/health", async () => ({ ok: true, pendingMigrations: pendingMigrationCount() }));
+  // État minimal de la veille pour hubctl status : seulement hors tunnel (appel local du CT).
+  app.get("/api/health", async (request) => ({
+    ok: true,
+    pendingMigrations: pendingMigrationCount(),
+    ...(request.viaTunnel
+      ? {}
+      : {
+          veille: {
+            configured: services.monitor.veille.configured,
+            lastSeenAt: services.monitor.health.edgeSeenAt ? new Date(services.monitor.health.edgeSeenAt).toISOString() : null,
+          },
+        }),
+  }));
   app.get("/robots.txt", async (_request, reply) => reply.type("text/plain; charset=utf-8").send(ROBOTS_TXT));
 
   let spaServed = false;

@@ -43,9 +43,14 @@ Données
 Réglages (rien n'est affiché à l'écran)
   cloudflare                  jeton du tunnel Cloudflare du hub
   secrets [access|api|erp]    Cloudflare Access (domaine d'équipe, AUD), API Cloudflare (jeton, compte, zone), lien ERP
+  secrets veille              jeton de lecture des zones Cloudflare (détection des domaines à surveiller)
   chromium                    installer Chromium pour les vignettes automatiques
   admin                       créer le compte ou changer le mot de passe, puis double authentification
   2fa-reset                   couper la double authentification (téléphone perdu), puis : hubctl admin
+
+Surveillance
+  push-keys [mailto:adresse]  créer les clés des notifications (une seule fois, jamais remplacées)
+  veille deploy               déployer ou mettre à jour la veille Cloudflare (jeton demandé, jamais gardé)
 EOF
 }
 
@@ -78,6 +83,36 @@ run_cmd() {
       ;;
     secrets)
       sh "${SCRIPT_DIR}/configure.sh" "${1:-secrets}"
+      ;;
+    push-keys)
+      require_root
+      _subject="${1:-mailto:contact@kouzia.com}"
+      case "$_subject" in
+        mailto:*@*|https://*) ;;
+        *) die "Usage : hubctl push-keys [mailto:adresse]" ;;
+      esac
+      case "$_subject" in *[!A-Za-z0-9@.:/_+-]*) die "Adresse refusée : $_subject" ;; esac
+      grep -q "\"push:keys\"" "${KH_APP_DIR}/package.json" \
+        || die "Cette version du hub ne sait pas encore créer les clés : lancer d'abord « hubctl update »."
+      run_as_app "npm run --silent push:keys -- --env-file='${KH_ENV_FILE}' --subject='${_subject}'"
+      env_fix_perms
+      restart_app || true
+      if env_has MONITOR_WORKER_URL; then
+        echo "  La veille Cloudflare envoie aussi les notifications : relancer « hubctl veille deploy » pour lui donner les clés."
+      fi
+      ;;
+    veille)
+      case "${1:-}" in
+        deploy)
+          require_root
+          [ -t 0 ] || die "hubctl veille deploy se lance dans un terminal (le jeton est demandé, invisible)."
+          run_as_app "npm run --silent veille:deploy -- --env-file='${KH_ENV_FILE}'"
+          env_fix_perms
+          state_set veille-src "$(veille_src_hash)"
+          restart_app || true
+          ;;
+        *) die "Usage : hubctl veille deploy" ;;
+      esac
       ;;
     access|api|erp|chromium)
       sh "${SCRIPT_DIR}/configure.sh" "$_cmd"
@@ -161,6 +196,12 @@ show_menu() {
     menu_item 12 "Revenir à la version d'avant" "après une mise à jour"
     menu_item 13 "Couper la double authentification" "téléphone perdu"
     menu_item 14 "Installer ou réparer" "long"
+    printf '
+  %s
+' "${C_BOLD}Surveillance${C_RESET}"
+    menu_item 15 "Clés des notifications" "une seule fois"
+    menu_item 16 "Déployer la veille Cloudflare" "jeton demandé, jamais gardé"
+    menu_item 17 "Jeton de lecture des zones" "détection des domaines"
     menu_item q "Quitter" ""
     printf '\n  Choix : '
     _choice=""
@@ -180,6 +221,9 @@ show_menu() {
       12) menu_run rollback ;;
       13) menu_run 2fa-reset ;;
       14) menu_run install ;;
+      15) menu_run push-keys ;;
+      16) menu_run veille deploy ;;
+      17) menu_run secrets veille ;;
       q|Q|0) exit 0 ;;
       *) warn "Choix inconnu : ${_choice}" ;;
     esac
