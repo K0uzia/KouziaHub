@@ -162,7 +162,7 @@ Bon à savoir :
 
 `hubctl update` fait tout, dans l'ordre : arrêt du hub, **sauvegarde automatique**, récupération du code sur GitHub, dépendances seulement si elles ont changé, base de données, interface, redémarrage et contrôle que le hub répond. Si le hub ne répond plus, il propose de revenir en arrière. Plus tard, `hubctl rollback` remet la version d'avant la dernière mise à jour (code et données d'alors).
 
-**Quand la veille Cloudflare change, `hubctl update` le signale : relancer `hubctl veille deploy` avec un nouveau jeton (chapitre 2 b). C'est le cas de cette version** (signature des réponses de la veille).
+**Quand la veille Cloudflare change, `hubctl update` le signale : relancer `hubctl veille deploy` avec un nouveau jeton (chapitre 2 b). C'est le cas de cette version** (les requêtes du hub vers la veille sont désormais signées avec leurs paramètres et protégées contre le rejeu ; sans redéploiement, le hub décide seul).
 
 ### 4.2 Sauvegardes
 
