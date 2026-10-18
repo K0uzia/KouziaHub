@@ -33,6 +33,16 @@ const ACTION_LABEL: Record<string, string> = {
   "thumbnail.upload": "Vignette envoyée",
   "thumbnail.capture": "Capture de la vignette",
   "orphan.delete": "Suppression d'un enregistrement DNS orphelin",
+  "monitor.target.create": "Adresse ajoutée à la surveillance",
+  "monitor.target.update": "Surveillance modifiée",
+  "monitor.target.delete": "Adresse retirée de la surveillance",
+  "monitor.zone.watch": "Domaine Cloudflare surveillé",
+  "monitor.dns.accept": "DNS accepté comme référence",
+  "monitor.content.accept": "Accueil accepté comme référence",
+  "monitor.report.generate": "Rapport mensuel créé",
+  "push.subscribe": "Notifications activées sur un appareil",
+  "push.unsubscribe": "Appareil retiré des notifications",
+  "push.test": "Notification de test",
 };
 
 export function AuditSection() {

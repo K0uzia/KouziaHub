@@ -10,6 +10,7 @@ import { Card, EmptyState, PageHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { StatStrip, type StatItem } from "@/components/ui/StatStrip";
 import { Segmented } from "@/components/ui/Segmented";
+import { FilterSegment, FilterSelect } from "@/components/ui/ListFilters";
 import { Banner } from "@/components/ui/Banner";
 import { inputClass } from "@/components/ui/Field";
 import { SiteCard } from "@/components/sites/SiteCard";
@@ -20,9 +21,6 @@ type KindFilter = "all" | "client" | "perso";
 const KIND_IDS: readonly KindFilter[] = ["all", "client", "perso"];
 const STATE_IDS: readonly StateFilter[] = ["all", "online", "offline", "creating", "error"];
 const VIEWS = ["cards", "list"] as const;
-/** Rangée « Modifiés récemment » : seulement quand le catalogue dépasse ce nombre (sinon elle répète la grille). */
-const RECENT_MIN_SITES = 5;
-const RECENT_COUNT = 8;
 /** Relecture du catalogue tant qu'un site change d'état (création, mise en ligne, certificat). */
 const POLL_MS = 3000;
 /** Notices du mode démonstration, regroupées en un bandeau ; texte court au téléphone. */
@@ -69,18 +67,15 @@ export function CatalogPage() {
   const q = normalize(query.trim());
   const byKind = sites.filter((s) => (kind === "all" ? true : kind === "client" ? s.kind === "CLIENT" : s.kind === "PERSO"));
   const byQuery = byKind.filter((s) => matchesQuery(s, q));
-  const shown = byQuery.filter((s) => matchesState(s, stateFilter)).sort((a, b) => a.name.localeCompare(b.name, "fr"));
-  const filtering = kind !== "all" || stateFilter !== "all" || q !== "";
-  const recent =
-    !filtering && sites.length >= RECENT_MIN_SITES
-      ? [...sites].sort((a, b) => b.touchedAt.localeCompare(a.touchedAt)).slice(0, RECENT_COUNT)
-      : [];
+  // Tri par défaut : dernière modification d'abord (comme l'API), en cartes comme en liste.
+  const shown = byQuery.filter((s) => matchesState(s, stateFilter)).sort((a, b) => b.touchedAt.localeCompare(a.touchedAt));
 
   const count = (f: (s: SiteSummary) => boolean, list: SiteSummary[]) => list.filter(f).length;
+  // Nombre par valeur, comme les filtres de l'ERP (Tous 12, Clients 9, Perso 3).
   const kindOptions = [
-    { id: "all" as const, label: "Tous" },
-    { id: "client" as const, label: "Clients" },
-    { id: "perso" as const, label: "Perso" },
+    { id: "all" as const, label: "Tous", count: sites.length },
+    { id: "client" as const, label: "Clients", count: count((s) => s.kind === "CLIENT", sites) },
+    { id: "perso" as const, label: "Perso", count: count((s) => s.kind === "PERSO", sites) },
   ];
   const stateOptions = [
     { id: "all" as const, label: "Tous les états", count: byQuery.length },
@@ -209,21 +204,6 @@ export function CatalogPage() {
             </Card>
           ) : (
             <>
-              {recent.length ? (
-                <section aria-labelledby={`${searchId}-recent`} className="min-w-0">
-                  <h2 id={`${searchId}-recent`} className="mb-3 text-lg font-semibold">
-                    Modifiés récemment
-                  </h2>
-                  <ul className="recent-row custom-scrollbar">
-                    {recent.map((s) => (
-                      <li key={s.id} className="recent-item">
-                        <SiteCard site={s} />
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              ) : null}
-
               <section aria-labelledby={`${searchId}-all`} className="min-w-0 space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <h2 id={`${searchId}-all`} className="text-lg font-semibold">
@@ -255,29 +235,15 @@ export function CatalogPage() {
                       />
                     </div>
                   </div>
-                  <div className="min-w-0 space-y-1.5 [grid-area:type]">
-                    <span className="block text-sm font-medium text-[var(--text)] max-sm:sr-only">
-                      Type
-                    </span>
-                    <Segmented options={kindOptions} value={kind} onChange={(v) => setParam("type", v, "all")} label="Type de site" className="w-full" fieldHeight />
-                  </div>
-                  <div className="min-w-0 space-y-1.5 [grid-area:state]">
-                    <label htmlFor={`${searchId}-state`} className="block text-sm font-medium text-[var(--text)]">
-                      État
-                    </label>
-                    <select
-                      id={`${searchId}-state`}
-                      value={stateFilter}
-                      onChange={(e) => setParam("etat", e.target.value, "all")}
-                      className={`${inputClass} cursor-pointer`}
-                    >
-                      {stateOptions.map((o) => (
-                        <option key={o.id} value={o.id}>
-                          {o.label} ({o.count})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                  <FilterSegment
+                    label="Type de site"
+                    options={kindOptions}
+                    value={kind}
+                    onChange={(v) => setParam("type", v, "all")}
+                    compact
+                    className="[grid-area:type]"
+                  />
+                  <FilterSelect label="État" options={stateOptions} value={stateFilter} onChange={(v) => setParam("etat", v, "all")} className="[grid-area:state] sm:w-full" />
                 </div>
 
                 <p role="status" className="text-sm text-[var(--muted)] max-sm:sr-only">

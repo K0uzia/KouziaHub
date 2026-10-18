@@ -3,11 +3,13 @@ import { useLocation } from "react-router-dom";
 import { useTitle } from "@/lib/useTitle";
 import { PageHeader } from "@/components/ui/Card";
 import { SecuritySection } from "@/components/settings/SecuritySection";
+import { NotificationsSection } from "@/components/settings/NotificationsSection";
 import { ControlsSection } from "@/components/settings/ControlsSection";
 import { AuditSection } from "@/components/settings/AuditSection";
 
 const SECTIONS = [
   { id: "securite", label: "Sécurité" },
+  { id: "notifications", label: "Notifications" },
   { id: "controles", label: "Contrôles" },
   { id: "journal", label: "Journal" },
 ];
@@ -25,7 +27,7 @@ export function SettingsPage() {
 
   return (
     <div className="page-narrow">
-      <PageHeader title="Réglages" subtitle="Sécurité du compte, état des services et journal des actions." />
+      <PageHeader title="Réglages" subtitle="Sécurité du compte, notifications, état des services et journal des actions." />
       <nav aria-label="Sections des réglages" className="mb-6">
         <ul className="flex flex-wrap gap-2">
           {SECTIONS.map((s) => (
@@ -42,6 +44,7 @@ export function SettingsPage() {
       </nav>
       <div className="space-y-8">
         <SecuritySection />
+        <NotificationsSection />
         <ControlsSection />
         <AuditSection />
       </div>
