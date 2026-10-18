@@ -116,7 +116,7 @@ export function CodeInput({
       />
       <div
         aria-hidden="true"
-        className="grid grid-cols-6 gap-1.5 rounded-[var(--radius-sm)] peer-focus-visible:outline-2 peer-focus-visible:outline-offset-3 peer-focus-visible:outline-[var(--primary)]"
+        className="grid grid-cols-6 gap-1.5 rounded-[var(--radius-sm)]"
       >
         {Array.from({ length: CODE_LENGTH }, (_, i) => {
           const active = caret.focused && collapsed && i === Math.min(caret.start, CODE_LENGTH - 1);
