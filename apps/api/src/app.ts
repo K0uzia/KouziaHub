@@ -24,6 +24,7 @@ import { maintenanceRoutes } from "@/routes/maintenance.js";
 import { systemRoutes } from "@/routes/system.js";
 import { monitorRoutes } from "@/routes/monitor.js";
 import { pushRoutes } from "@/routes/push.js";
+import { settingsRoutes } from "@/routes/settings.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -122,6 +123,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   await app.register(systemRoutes(services));
   await app.register(monitorRoutes(services));
   await app.register(pushRoutes(services));
+  await app.register(settingsRoutes);
 
   // État minimal de la veille pour hubctl status : seulement hors tunnel (appel local du CT).
   app.get("/api/health", async (request) => ({

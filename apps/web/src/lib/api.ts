@@ -1,5 +1,5 @@
-/** Erreur d'appel : message affichable (jamais le statusText anglais), statut et code éventuel du serveur. */
-export type ApiError = Error & { status?: number; code?: string };
+/** Erreur d'appel : message affichable (jamais le statusText anglais), statut, code et champ en cause éventuels. */
+export type ApiError = Error & { status?: number; code?: string; field?: string };
 
 export type ApiInit = RequestInit & {
   /** Objet sérialisé en JSON (Content-Type posé ici). */
@@ -35,17 +35,19 @@ export async function api<T>(path: string, options: ApiInit = {}): Promise<T> {
 async function errorFrom(res: Response, path: string): Promise<ApiError> {
   let message = statusMessage(res.status);
   let code: string | undefined;
+  let field: string | undefined;
   try {
-    const body = (await res.json()) as { error?: unknown; code?: unknown };
+    const body = (await res.json()) as { error?: unknown; code?: unknown; field?: unknown };
     if (typeof body.error === "string" && body.error) message = body.error;
     if (typeof body.code === "string") code = body.code;
+    if (typeof body.field === "string") field = body.field;
   } catch {
     /* corps absent ou non JSON : message par statut */
   }
   if (res.status === 401 && !path.startsWith("/api/auth/")) {
     window.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT));
   }
-  return makeError(message, res.status, code);
+  return Object.assign(makeError(message, res.status, code), field ? { field } : {});
 }
 
 function makeError(message: string, status: number, code?: string): ApiError {

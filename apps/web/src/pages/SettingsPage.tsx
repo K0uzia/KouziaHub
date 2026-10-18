@@ -10,6 +10,7 @@ import { CloudflareTile, ErpTile } from "@/components/settings/ControlsSection";
 import { StorageSection } from "@/components/settings/StorageSection";
 import { VeilleTile } from "@/components/settings/VeilleTile";
 import { AuditSection } from "@/components/settings/AuditSection";
+import { ReportsSection } from "@/components/settings/ReportsSection";
 
 /**
  * Réglages du hub en grille bento : une tuile par sujet, avec son état (Configuré, À faire, Erreur), ses actions
@@ -29,13 +30,14 @@ export function SettingsPage() {
 
   return (
     <>
-      <PageHeader title="Réglages" subtitle="Sécurité du compte, notifications, services, place utilisée et journal des actions." />
+      <PageHeader title="Réglages" subtitle="Sécurité du compte, notifications, services, coordonnées des rapports, place utilisée et journal des actions." />
       <div className="bento bento-wide">
         <SecuritySection />
         <NotificationsSection />
         <CloudflareTile system={system} />
         <ErpTile system={system} />
         <VeilleTile />
+        <ReportsSection />
         <StorageSection />
         <AuditSection />
       </div>

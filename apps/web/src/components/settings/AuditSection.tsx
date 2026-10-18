@@ -28,7 +28,7 @@ export function AuditSection() {
       className="scroll-mt-4"
       title="Journal"
       level={2}
-      span="full"
+      span={2}
       status={journalStatus({ data: errors.data ? { errorsLastWeek: errors.data.total } : null, error: errors.error })}
     >
       {latest.loading && !latest.data ? (

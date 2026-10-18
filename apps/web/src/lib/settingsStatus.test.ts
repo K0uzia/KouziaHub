@@ -5,6 +5,7 @@ import {
   erpStatus,
   journalStatus,
   notificationsStatus,
+  reportsStatus,
   securityStatus,
   storageStatus,
   veilleStatus,
@@ -81,5 +82,16 @@ describe("état des tuiles des Réglages", () => {
   it("journal : échecs de la semaine", () => {
     expect(journalStatus(read({ errorsLastWeek: 0 }))?.level).toBe("ok");
     expect(journalStatus(read({ errorsLastWeek: 3 }))).toMatchObject({ level: "todo", reason: "3 échecs sur les 7 derniers jours." });
+  });
+
+  it("rapports : nom et au moins un contact", () => {
+    const r = (displayName: string | null, email: string | null, phone: string | null) => reportsStatus(read({ displayName, email, phone }));
+    expect(reportsStatus(read(null))).toBeNull();
+    expect(reportsStatus(read(null, "réseau"))?.level).toBe("error");
+    expect(r(null, null, null)).toMatchObject({ level: "todo", label: "À faire", reason: "Coordonnées absentes du pied de page des rapports." });
+    expect(r("  ", "a@b.fr", null)?.reason).toMatch(/^Nom affiché absent/);
+    expect(r("Kouzia", null, null)?.reason).toMatch(/^Aucun moyen de contact/);
+    expect(r("Kouzia", "a@b.fr", null)?.level).toBe("ok");
+    expect(r("Kouzia", null, "0612345678")).toMatchObject({ level: "ok", label: "Configuré" });
   });
 });

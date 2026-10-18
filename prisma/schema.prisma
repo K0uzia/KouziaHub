@@ -400,3 +400,10 @@ model MonitorReport {
 
   @@unique([targetId, month])
 }
+
+/** Réglages du hub en clé-valeur (ex. coordonnées du pied de page des rapports : report.email). */
+model HubSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}

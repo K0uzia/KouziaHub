@@ -64,6 +64,8 @@ const ROUTES: Array<[string, string]> = [
   ["POST", "/api/storage/purge"],
   ["GET", "/api/sites/s1/export/summary"],
   ["GET", "/api/sites/s1/export?target=hostinger"],
+  ["GET", "/api/settings/reports"],
+  ["PATCH", "/api/settings/reports"],
 ];
 
 describe("routes protégées", () => {

@@ -38,6 +38,7 @@ export const ACTION_LABEL: Record<string, string> = {
   "version.export": "Version de production téléchargée",
   "server-config.generate": "Configuration serveur générée",
   "server-config.skip": "Configuration serveur non générée",
+  "settings.reports": "Coordonnées des rapports modifiées",
 };
 
 /** Libellé d'une action ; null si la table ne la connaît pas (le code est alors affiché tel quel). */

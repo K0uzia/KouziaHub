@@ -559,3 +559,53 @@ export type ExportSummary = {
 // GET    /api/sites/:id/export/summary?version=&target=      : ExportSummary (version : défaut la version servie ;
 //                                                              target : hostinger par défaut, ou pages)
 // GET    /api/sites/:id/export?version=&target=              : zip en pièce jointe (Content-Disposition attachment)
+
+// --- Réglages des rapports (pied de page du rapport mensuel) ---
+
+/** Coordonnées imprimées en pied de page des rapports ; null = non renseigné, rien d'affiché. */
+export type ReportSettings = {
+  displayName: string | null;
+  email: string | null;
+  phone: string | null;
+  website: string | null;
+};
+/** Champ vide ou null : effacé. Erreur 400 code "invalid_field" avec `field` (nom du champ en cause). */
+export type UpdateReportSettingsInput = Partial<Record<keyof ReportSettings, string | null>>;
+
+// GET    /api/settings/reports                   : ReportSettings
+// PATCH  /api/settings/reports  UpdateReportSettingsInput : ReportSettings
+
+/**
+ * Contrôle d'un champ des réglages « Rapports », partagé par l'API (dans son schéma zod) et le formulaire.
+ * Vide : null (la valeur est effacée). Téléphone français enregistré sur 10 chiffres (« 0612345678 »),
+ * site web en https:// seulement.
+ */
+export function checkReportField(field: keyof ReportSettings, raw: string | null | undefined): { ok: true; value: string | null } | { ok: false; error: string } {
+  const value = (raw ?? "").trim();
+  if (!value) return { ok: true, value: null };
+  if (/[\u0000-\u001f\u007f]/.test(value)) return { ok: false, error: "Caractères de contrôle interdits." };
+  if (field === "displayName") {
+    return value.length > 80 ? { ok: false, error: "80 caractères au plus." } : { ok: true, value };
+  }
+  if (field === "email") {
+    return value.length <= 120 && /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)*\.[a-z]{2,}$/i.test(value)
+      ? { ok: true, value: value.toLowerCase() }
+      : { ok: false, error: "Adresse e-mail invalide (exemple : nom@domaine.fr)." };
+  }
+  if (field === "phone") {
+    const compact = value.replace(/[\s.-]/g, "");
+    const m = /^(?:0([1-9]\d{8})|\+33([1-9]\d{8}))$/.exec(compact);
+    return m ? { ok: true, value: `0${m[1] ?? m[2]}` } : { ok: false, error: "Numéro français attendu : 10 chiffres commençant par 0, ou +33 suivi de 9 chiffres." };
+  }
+  if (!/^https:\/\//i.test(value)) return { ok: false, error: "L'adresse doit commencer par https://." };
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return { ok: false, error: "Adresse de site invalide (exemple : https://www.domaine.fr)." };
+  }
+  if (value.length > 200 || url.username || url.password || !/^[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$/i.test(url.hostname)) {
+    return { ok: false, error: "Adresse de site invalide (exemple : https://www.domaine.fr)." };
+  }
+  return { ok: true, value: `https://${url.hostname.toLowerCase()}${url.pathname === "/" ? "" : url.pathname}${url.search}` };
+}

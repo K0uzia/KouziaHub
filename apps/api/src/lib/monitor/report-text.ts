@@ -212,3 +212,47 @@ export function contrastRatio(a: string, b: string): number {
   const [x, y] = [luminance(a), luminance(b)].sort((p, q) => q - p) as [number, number];
   return (x + 0.05) / (y + 0.05);
 }
+
+// --- Typographie française ---
+
+export const NBSP = "\u00a0";
+export const NNBSP = "\u202f";
+
+const UNIT_AFTER_NUMBER =
+  /(\d(?:er)?) (?=(?:s|min|h|j|jours?|heures?|minutes?|janvier|février|mars|avril|mai|juin|juillet|août|septembre|octobre|novembre|décembre)(?![\p{L}\d]))/gu;
+
+/**
+ * Espaces insécables avant « % : ; ? ! » (fines si la police les a), entre les milliers d'un nombre, entre
+ * un nombre et son unité ou son mois (« 1,8 s », « 11 novembre »), et
+ * « 1er » en exposant (« 1ᵉʳ », glyphes présents dans Source Sans 3). Pour une police sans ces glyphes
+ * (Exo 2), narrow et superscript à faux : espace insécable normale, « 1er » laissé tel quel.
+ */
+export function frenchTypography(text: string, options: { narrow?: boolean; superscript?: boolean } = {}): string {
+  const narrow = options.narrow ?? true;
+  const space = narrow ? NNBSP : NBSP;
+  let out = text.replace(/[ \u00a0\u202f]([%:;?!])/g, `${space}$1`);
+  out = out.replace(/(\d)[ \u00a0\u202f](?=\d{3}(?!\d))/g, `$1${space}`);
+  // Nombre et unité ou mois sur la même ligne : « 1,8 s », « 47 min », « 1 h 21 », « 11 novembre ».
+  out = out.replace(UNIT_AFTER_NUMBER, `$1${NBSP}`).replace(/\bh (?=\d)/g, `h${NBSP}`);
+  if (options.superscript ?? true) out = out.replace(/\b1er\b/g, "1\u1d49\u02b3");
+  return out;
+}
+
+/** Durée courte pour un tableau : « 47 min », « 1 h 21 », « 2 j 3 h ». */
+export function frShortDuration(ms: number): string {
+  const minutes = Math.max(1, Math.round(ms / 60_000));
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  if (hours < 24) return rest ? `${hours} h ${String(rest).padStart(2, "0")}` : `${hours} h`;
+  const days = Math.floor(hours / 24);
+  return hours % 24 ? `${days} j ${hours % 24} h` : `${days} j`;
+}
+
+/** Téléphone enregistré « 0612345678 », affiché « 06 12 34 56 78 » (espaces insécables). */
+export function frPhone(stored: string): string {
+  return /^0\d{9}$/.test(stored) ? (stored.match(/\d\d/g) ?? []).join(NBSP) : stored;
+}
+
+/** Site web enregistré « https://www.exemple.fr », affiché sans le protocole. */
+export const frWebsite = (stored: string) => stored.replace(/^https:\/\//i, "");

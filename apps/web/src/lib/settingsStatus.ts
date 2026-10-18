@@ -77,3 +77,15 @@ export function journalStatus({ data, error: err }: Read<{ errorsLastWeek: numbe
   if (data.errorsLastWeek > 0) return todo(`${plural(data.errorsLastWeek, "échec", "échecs")} sur les 7 derniers jours.`);
   return ok("Aucun échec sur les 7 derniers jours.");
 }
+
+/** Rapports : le pied de page du PDF porte un nom et au moins un moyen de contact (e-mail ou téléphone). */
+export function reportsStatus({ data, error: err }: Read<{ displayName: string | null; email: string | null; phone: string | null }>): TileStatus | null {
+  if (err && !data) return error("Coordonnées des rapports illisibles.");
+  if (!data) return null;
+  const name = !!data.displayName?.trim();
+  const contact = !!data.email?.trim() || !!data.phone?.trim();
+  if (!name && !contact) return todo("Coordonnées absentes du pied de page des rapports.");
+  if (!name) return todo("Nom affiché absent du pied de page des rapports.");
+  if (!contact) return todo("Aucun moyen de contact (e-mail ou téléphone) dans le pied de page des rapports.");
+  return ok("Nom et contact imprimés en bas de chaque rapport.");
+}

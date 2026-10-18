@@ -19,6 +19,7 @@ const TABLES = [
   "Session",
   "AdminRecoveryCode",
   "AdminLoginChallenge",
+  "HubSetting",
   "User",
 ] as const;
 
