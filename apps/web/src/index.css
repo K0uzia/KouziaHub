@@ -313,7 +313,8 @@ h3 {
 
 .ui-table td.wrap {
   white-space: normal;
-  word-break: break-word;
+  /* Coupure entre les mots seulement : « word-break » réduisait la colonne à une lettre par ligne (« Aucu n »). */
+  overflow-wrap: break-word;
   overflow: visible;
   text-overflow: unset;
 }
