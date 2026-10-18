@@ -336,7 +336,8 @@ export async function buildReportView(target: MonitorTarget, month: string, now 
  * Couleurs d'impression, tirées de la charte des documents de l'ERP (encre nuit, ambre, vert « réglé » des
  * factures payées). Contrastes vérifiés par un test, en couleur et en niveaux de gris : texte 4,5:1 au
  * moins sur chaque fond, marques d'état de luminances nettement différentes ; `edge` borde la marque
- * quand sa propre couleur ne se détache pas assez du fond (ambre sur crème).
+ * quand sa propre couleur ne se détache pas assez du fond (ambre sur crème). `outline` : contour complet
+ * de 1 px de la tuile du verdict (jamais de bordure gauche épaisse), 3:1 au moins sur le papier.
  */
 export const REPORT_COLORS = {
   paper: "#ffffff",
@@ -346,9 +347,9 @@ export const REPORT_COLORS = {
   soft: "#f5f6fa",
   line: "#e3e6ee",
   accent: "#fe9a00",
-  ok: { tint: "#f0fdf4", mark: "#15803d", glyph: "#ffffff", edge: "#15803d" },
-  watch: { tint: "#fff7e6", mark: "#fe9a00", glyph: "#0b1020", edge: "#0b1020" },
-  resolved: { tint: "#f5f6fa", mark: "#0b1020", glyph: "#fe9a00", edge: "#0b1020" },
+  ok: { tint: "#f0fdf4", mark: "#15803d", glyph: "#ffffff", edge: "#15803d", outline: "#15803d" },
+  watch: { tint: "#fff7e6", mark: "#fe9a00", glyph: "#0b1020", edge: "#0b1020", outline: "#b45309" },
+  resolved: { tint: "#eaedf6", mark: "#0b1020", glyph: "#fe9a00", edge: "#0b1020", outline: "#4b5367" },
   bar: { ok: "#15803d", incident: "#0b1020", nodata: "#7a8194" },
 } as const;
 
@@ -381,7 +382,7 @@ const s = StyleSheet.create({
   big: { fontFamily: TEXT_FONT, fontWeight: 600, fontSize: 26, color: C.ink, lineHeight: 1.1 },
   body: { fontSize: 11, lineHeight: 1.45, color: C.text },
   note: { fontSize: 10, lineHeight: 1.45, color: C.muted, marginTop: 4 },
-  stateWord: { fontFamily: TITLE_FONT, fontWeight: 700, fontSize: 20, color: C.ink },
+  stateWord: { fontFamily: TITLE_FONT, fontWeight: 700, fontSize: 24, color: C.ink },
   verdict: { fontSize: 14, lineHeight: 1.4, marginTop: 4, color: C.ink },
   th: { fontWeight: 600, fontSize: 10, color: C.muted, paddingVertical: 5 },
   td: { fontSize: 11, paddingVertical: 5, color: C.text },
@@ -397,7 +398,7 @@ const s = StyleSheet.create({
 function StateIcon({ state }: { state: ReportState }) {
   const k = C[state];
   return (
-    <Svg width={40} height={40} viewBox="0 0 24 24">
+    <Svg width={48} height={48} viewBox="0 0 24 24">
       {state === "watch" ? (
         <>
           <Path d="M12 2.2 L22.8 21.2 H1.2 Z" fill={k.mark} stroke={k.edge} strokeWidth={1.2} />
@@ -547,7 +548,7 @@ function ReportDocument({ v }: { v: ReportView }) {
         </View>
 
         <View style={[s.grid, dense ? { gap: 10 } : {}]}>
-          <View style={[s.tile, dense ? s.tileDense : {}, s.full, { backgroundColor: C[v.state].tint, borderLeftWidth: 4, borderLeftColor: C[v.state].edge }]} wrap={false}>
+          <View style={[s.tile, dense ? s.tileDense : {}, s.full, { backgroundColor: C[v.state].tint, borderWidth: 1, borderColor: C[v.state].outline }]} wrap={false}>
             <View style={{ flexDirection: "row", gap: 14, alignItems: "center" }}>
               <StateIcon state={v.state} />
               <View style={{ flex: 1 }}>
