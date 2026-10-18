@@ -167,7 +167,7 @@ export function MonitorPage() {
                 <ol className="list-decimal space-y-2 pb-2 pl-5 text-sm text-[var(--text)]">
                   <li>
                     Sur le serveur du hub : <code className="font-mono">hubctl push-keys</code>, puis ici, Réglages, Notifications, « Activer sur
-                    ce téléphone » et la notification de test.
+                    cet appareil » et la notification de test.
                   </li>
                   <li>
                     Créer chez Cloudflare un jeton « Workers Scripts : modifier » et « D1 : modifier », lancer{" "}
