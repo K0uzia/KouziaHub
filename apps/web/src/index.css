@@ -145,6 +145,12 @@ body {
   text-decoration: none;
   transition: color 0.15s ease;
 }
+/* Lien au milieu d'un texte : souligné en permanence (la couleur seule ne suffit pas, WCAG 1.4.1). */
+.link-inline {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .link:hover {
   color: var(--primary-hover);
   text-decoration: underline;

@@ -48,7 +48,7 @@ export function SiteMonitorTab({ site }: { site: SiteDetail }) {
       {!site.finalDomain ? (
         <p className="text-sm text-[var(--muted)]">
           Le domaine final sera surveillé une fois renseigné dans l'onglet{" "}
-          <Link to="?tab=serveur" className="link">
+          <Link to="?tab=serveur" className="link link-inline">
             Serveur
           </Link>
           .

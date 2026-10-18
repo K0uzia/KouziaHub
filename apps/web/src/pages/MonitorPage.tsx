@@ -102,6 +102,20 @@ export function MonitorPage() {
         </Card>
       ) : o ? (
         <div className="space-y-6">
+          {o.health.push.devices === 0 ? (
+            // Rappel tant qu'aucun appareil n'est abonné : sans lui, aucune alerte n'arrive.
+            <Banner
+              level="warning"
+              action={
+                <Link to="/reglages#notifications" className="link inline-flex min-h-11 items-center text-sm font-medium">
+                  Activer les notifications
+                </Link>
+              }
+            >
+              Aucun appareil ne reçoit les alertes : une panne ne vous serait pas signalée. Activez les notifications sur votre téléphone,
+              dans Réglages, Notifications.
+            </Banner>
+          ) : null}
           <StatStrip
             dense
             items={[
@@ -139,7 +153,7 @@ export function MonitorPage() {
                       ? `${plural(o.health.push.devices, "appareil reçoit", "appareils reçoivent")} les alertes. `
                       : "Aucun appareil : activez les notifications sur votre téléphone. "}
                   {o.health.push.configured ? (
-                    <Link to="/reglages#notifications" className="link">
+                    <Link to="/reglages#notifications" className="link link-inline">
                       Réglages des notifications
                     </Link>
                   ) : null}
