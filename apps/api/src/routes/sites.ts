@@ -18,7 +18,7 @@ import { prisma } from "@/lib/prisma.js";
 import { snapshotVersion, snapshotWorking } from "@/lib/publish.js";
 import type { Services } from "@/lib/services.js";
 import { catalog, siteDetail, toOperation } from "@/lib/site-view.js";
-import { checkSlug, projectNameFor, suggestSlug } from "@/lib/slug.js";
+import { checkSlug, hubZoneConflict, projectNameFor, suggestSlug } from "@/lib/slug.js";
 import { toThumbnail } from "@/lib/thumbnails.js";
 
 const label = z.string().trim().min(1, "Libellé vide.").max(120, "120 caractères au plus.");
@@ -126,6 +126,10 @@ export function sitesRoutes(services: Services): FastifyPluginAsync {
         else {
           const normalized = normalizeFinalDomain(parsed.data.finalDomain);
           if (!normalized.ok) throw new HttpError(400, normalized.reason);
+          for (const host of [normalized.value, `www.${normalized.value}`]) {
+            const conflict = await hubZoneConflict(host, services.sitesDomain, id);
+            if (conflict) throw new HttpError(400, `Domaine final refusé : ${conflict}`, "final_domain_conflict");
+          }
           finalDomain = normalized.value;
         }
       }

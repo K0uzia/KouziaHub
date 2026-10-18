@@ -16,6 +16,7 @@ import { veilleFromEnv } from "@/lib/monitor/worker-client.js";
 import { PushService } from "@/lib/push/service.js";
 import { generateReport } from "@/lib/monitor/report.js";
 import { prisma } from "@/lib/prisma.js";
+import { backfillSiteTargets } from "@/lib/monitor/targets.js";
 
 export type Services = {
   cloudflare: CloudflareGateway;
@@ -134,5 +135,11 @@ export async function startBackground(services: Services): Promise<void> {
   const gc = setInterval(() => void services.blobs.gc().catch(() => undefined), DAY_MS);
   for (const t of [first, daily, gc]) t.unref();
   services.timers.push(first, daily, gc);
+  const backfilled = await backfillSiteTargets(services.sitesDomain).catch((err) => {
+    console.error("[surveillance] rattrapage des cibles impossible", err instanceof Error ? err.message : err);
+    return 0;
+  });
+  if (backfilled > 0) console.warn(`[démarrage] cibles de surveillance ajoutées ou mises à jour pour ${backfilled} site(s)`);
+  // start() envoie la configuration au Worker (/sync), cibles rattrapées comprises.
   services.monitor.start();
 }

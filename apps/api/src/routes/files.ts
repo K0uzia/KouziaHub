@@ -80,43 +80,46 @@ export function filesRoutes(services: Services): FastifyPluginAsync {
     });
 
     app.post("/api/sites/:id/files", async (request): Promise<UploadResult> => {
-      const { id } = idParams.parse(request.params);
-      const site = await loadSite(id);
-      if (!request.isMultipart()) throw new HttpError(400, "Envoi multipart attendu.");
-      // preservePath : busboy garde les sous-dossiers du nom de fichier (envoi de dossier).
-      const options = {
-        preservePath: true,
-        limits: { fileSize: MAX_FILE_BYTES, files: MAX_FILES_PER_UPLOAD, parts: MAX_PARTS_PER_UPLOAD, fields: 10 },
-        throwFileSizeLimit: false,
-      };
-      const parts = request.parts(options);
-      let dir = "";
-      const rejected: RejectedFile[] = [];
-      const stored = new Map<string, FileRef>();
-      for await (const part of parts) {
-        if (part.type === "field") {
-          if (part.fieldname === "dir") {
-            const parsedDir = normalizeDir(String(part.value ?? ""));
-            if (!parsedDir.ok) throw new HttpError(400, `Dossier cible invalide : ${parsedDir.reason}`);
-            dir = parsedDir.path;
+      // Blobs de cet envoi protégés des purges jusqu'à l'écriture de leurs lignes.
+      return services.blobs.withPins(async () => {
+        const { id } = idParams.parse(request.params);
+        const site = await loadSite(id);
+        if (!request.isMultipart()) throw new HttpError(400, "Envoi multipart attendu.");
+        // preservePath : busboy garde les sous-dossiers du nom de fichier (envoi de dossier).
+        const options = {
+          preservePath: true,
+          limits: { fileSize: MAX_FILE_BYTES, files: MAX_FILES_PER_UPLOAD, parts: MAX_PARTS_PER_UPLOAD, fields: 10 },
+          throwFileSizeLimit: false,
+        };
+        const parts = request.parts(options);
+        let dir = "";
+        const rejected: RejectedFile[] = [];
+        const stored = new Map<string, FileRef>();
+        for await (const part of parts) {
+          if (part.type === "field") {
+            if (part.fieldname === "dir") {
+              const parsedDir = normalizeDir(String(part.value ?? ""));
+              if (!parsedDir.ok) throw new HttpError(400, `Dossier cible invalide : ${parsedDir.reason}`);
+              dir = parsedDir.path;
+            }
+            continue;
           }
-          continue;
+          const relative = part.filename ?? "";
+          const { path: target, verdict } = checkSitePath(dir && relative ? `${dir}/${relative}` : relative);
+          if (verdict.action !== "accept") {
+            rejected.push({ path: target || "(sans nom)", reason: verdict.reason });
+            await drain(part.file);
+            continue;
+          }
+          const blob = await services.blobs.putStream(part.file, MAX_FILE_BYTES);
+          if (part.file.truncated) {
+            rejected.push({ path: target, reason: TOO_BIG_FILE });
+            continue;
+          }
+          stored.set(target, { path: target, ...blob });
         }
-        const relative = part.filename ?? "";
-        const { path: target, verdict } = checkSitePath(dir && relative ? `${dir}/${relative}` : relative);
-        if (verdict.action !== "accept") {
-          rejected.push({ path: target || "(sans nom)", reason: verdict.reason });
-          await drain(part.file);
-          continue;
-        }
-        const blob = await services.blobs.putStream(part.file, MAX_FILE_BYTES);
-        if (part.file.truncated) {
-          rejected.push({ path: target, reason: TOO_BIG_FILE });
-          continue;
-        }
-        stored.set(target, { path: target, ...blob });
-      }
-      return importFiles(site, [...stored.values()], rejected);
+        return importFiles(site, [...stored.values()], rejected);
+      });
     });
 
     app.post("/api/sites/:id/files/delete", async (request) => {
@@ -176,46 +179,49 @@ export function filesRoutes(services: Services): FastifyPluginAsync {
     });
 
     app.post("/api/sites/:id/zip", async (request): Promise<UploadResult> => {
-      const { id } = idParams.parse(request.params);
-      const site = await loadSite(id);
-      if (!request.isMultipart()) throw new HttpError(400, "Envoi multipart attendu.");
-      const tmpDir = path.join(services.dataDir, "tmp");
-      await mkdir(tmpDir, { recursive: true });
-      const zipPath = path.join(tmpDir, `${randomBytes(12).toString("hex")}.zip`);
-      let mode: string | null = null;
-      let received = false;
-      let imported = false;
-      try {
-        const options = { limits: { fileSize: MAX_ZIP_BYTES, files: 1, fields: 5 }, throwFileSizeLimit: false };
-        const parts = request.parts(options);
-        for await (const part of parts) {
-          if (part.type === "field") {
-            if (part.fieldname === "mode") mode = String(part.value ?? "");
-            continue;
+      // Blobs de cet envoi protégés des purges jusqu'à l'écriture de leurs lignes.
+      return services.blobs.withPins(async () => {
+        const { id } = idParams.parse(request.params);
+        const site = await loadSite(id);
+        if (!request.isMultipart()) throw new HttpError(400, "Envoi multipart attendu.");
+        const tmpDir = path.join(services.dataDir, "tmp");
+        await mkdir(tmpDir, { recursive: true });
+        const zipPath = path.join(tmpDir, `${randomBytes(12).toString("hex")}.zip`);
+        let mode: string | null = null;
+        let received = false;
+        let imported = false;
+        try {
+          const options = { limits: { fileSize: MAX_ZIP_BYTES, files: 1, fields: 5 }, throwFileSizeLimit: false };
+          const parts = request.parts(options);
+          for await (const part of parts) {
+            if (part.type === "field") {
+              if (part.fieldname === "mode") mode = String(part.value ?? "");
+              continue;
+            }
+            if (received) {
+              await drain(part.file);
+              continue;
+            }
+            await pipeline(part.file, createWriteStream(zipPath));
+            if (part.file.truncated)
+              throw new HttpError(413, `Archive trop lourde pour un envoi direct : ${MAX_ZIP_BYTES / MIB} Mio au plus. Rechargez la page : l'interface l'envoie par morceaux.`, "body_too_large");
+            received = true;
           }
-          if (received) {
-            await drain(part.file);
-            continue;
-          }
-          await pipeline(part.file, createWriteStream(zipPath));
-          if (part.file.truncated)
-            throw new HttpError(413, `Archive trop lourde pour un envoi direct : ${MAX_ZIP_BYTES / MIB} Mio au plus. Rechargez la page : l'interface l'envoie par morceaux.`, "body_too_large");
-          received = true;
-        }
-        if (!received) throw new HttpError(400, "Fichier zip attendu.");
-        if (mode !== "replace" && mode !== "merge") throw new HttpError(400, "Champ « mode » attendu : replace ou merge.");
+          if (!received) throw new HttpError(400, "Fichier zip attendu.");
+          if (mode !== "replace" && mode !== "merge") throw new HttpError(400, "Champ « mode » attendu : replace ou merge.");
 
-        imported = true;
-        return await importZip(services, site, zipPath, mode);
-      } catch (err) {
-        // Erreurs de l'extraction déjà journalisées par importZip.
-        if (err instanceof HttpError && !imported) {
-          await audit({ action: "files.zip", result: "error", siteId: id, siteSlug: site.slug, detail: err.message });
+          imported = true;
+          return await importZip(services, site, zipPath, mode);
+        } catch (err) {
+          // Erreurs de l'extraction déjà journalisées par importZip.
+          if (err instanceof HttpError && !imported) {
+            await audit({ action: "files.zip", result: "error", siteId: id, siteSlug: site.slug, detail: err.message });
+          }
+          throw err;
+        } finally {
+          await rm(zipPath, { force: true });
         }
-        throw err;
-      } finally {
-        await rm(zipPath, { force: true });
-      }
+      });
     });
   };
 }

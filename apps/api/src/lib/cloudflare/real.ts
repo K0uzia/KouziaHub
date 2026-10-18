@@ -1,6 +1,8 @@
 import { contentTypeOf } from "@/lib/mime.js";
 import { pagesAssetHash } from "@/lib/cloudflare/hash.js";
 import {
+  CF_PURGE_RATE_LIMITED,
+  CF_PURGE_REFUSED,
   CloudflareError,
   HUB_DNS_COMMENT_PREFIX,
   type CfDeployment,
@@ -36,6 +38,8 @@ type CallOptions = {
   query?: Record<string, string>;
   /** Jeton d'envoi (JWT) des appels /pages/assets à la place du jeton API. */
   bearer?: string;
+  /** Une seule tentative (purge du cache : réessayer gaspillerait le quota de 5 requêtes par minute). */
+  once?: boolean;
 };
 
 /** Lots d'envoi des fichiers, comme wrangler : 40 Mio de contenu brut ou 2 000 fichiers au plus par appel. */
@@ -107,13 +111,14 @@ export class RealCloudflare implements CloudflareGateway {
     }
 
     let lastError: CloudflareError | null = null;
-    for (let attempt = 1; attempt <= this.#maxAttempts; attempt++) {
+    const attempts = options.once ? 1 : this.#maxAttempts;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
       let res: Response;
       try {
         res = await this.#fetch(url, { method, headers, body, signal: AbortSignal.timeout(120_000) });
       } catch {
         lastError = new CloudflareError("Cloudflare injoignable (réseau ou délai dépassé).", null);
-        if (attempt < this.#maxAttempts) await this.#sleep(500 * 2 ** (attempt - 1));
+        if (attempt < attempts) await this.#sleep(500 * 2 ** (attempt - 1));
         continue;
       }
       let envelope: CfEnvelope<T> | null = null;
@@ -124,7 +129,7 @@ export class RealCloudflare implements CloudflareGateway {
       }
       if (res.ok && envelope && envelope.success !== false) return envelope;
       const error = this.translate(res.status, envelope, options.bearer);
-      if ((res.status === 429 || res.status >= 500) && attempt < this.#maxAttempts) {
+      if ((res.status === 429 || res.status >= 500) && attempt < attempts) {
         lastError = error;
         const retryAfter = Number(res.headers.get("retry-after"));
         await this.#sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter, 30) * 1000 : 500 * 2 ** (attempt - 1));
@@ -343,6 +348,24 @@ export class RealCloudflare implements CloudflareGateway {
     const env = await this.call<{ id: string; url: string }>("POST", `${this.projectPath(project)}/deployments`, { form });
     if (!env.result?.id) throw new CloudflareError("Réponse illisible de Cloudflare (déploiement).", 200);
     return { id: env.result.id, url: env.result.url ?? "" };
+  }
+
+  async purgeCache(request: { hosts: string[] } | { files: string[] }): Promise<void> {
+    try {
+      await this.call("POST", `/zones/${this.#zone}/purge_cache`, { json: request, once: true });
+    } catch (err) {
+      if (!(err instanceof CloudflareError)) throw err;
+      if (err.status === 403) {
+        throw new CloudflareError("Le jeton API n'a pas le droit de purger le cache : ajoutez la permission Cache Purge au jeton (hubctl secrets api).", 403, err.cfCode);
+      }
+      if (err.cfCode === CF_PURGE_RATE_LIMITED || err.status === 429) {
+        throw new CloudflareError("Cloudflare limite les purges de cache (5 requêtes par minute sur l'offre gratuite) : réessayez dans une minute.", 429, CF_PURGE_RATE_LIMITED);
+      }
+      if (err.cfCode === CF_PURGE_REFUSED) {
+        throw new CloudflareError("Cloudflare refuse ce type de purge pour cette zone (code 1092).", err.status, CF_PURGE_REFUSED);
+      }
+      throw err;
+    }
   }
 
   async deleteDeployment(project: string, id: string): Promise<void> {

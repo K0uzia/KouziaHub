@@ -61,8 +61,17 @@ export interface CloudflareGateway {
   /** Enregistrements dont le commentaire commence par « kouzia-hub: ». */
   listHubDnsRecords(): Promise<CfDnsRecord[]>;
   deploy(project: string, input: DeployInput): Promise<CfDeployment>;
+  /**
+   * Purge du cache de la zone des sous-domaines : par noms d'hôte (100 au plus) ou par URL (100 au plus).
+   * Permission du jeton : Zone > Cache Purge > Purge.
+   */
+  purgeCache(request: { hosts: string[] } | { files: string[] }): Promise<void>;
   deleteDeployment(project: string, id: string): Promise<void>;
 }
+
+/** Codes Cloudflare de la purge du cache. */
+export const CF_PURGE_RATE_LIMITED = 1134;
+export const CF_PURGE_REFUSED = 1092;
 
 /** Erreur Cloudflare traduite : message français affichable, jamais de secret. */
 export class CloudflareError extends Error {

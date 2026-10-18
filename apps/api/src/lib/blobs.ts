@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomBytes } from "node:crypto";
 import { createReadStream, createWriteStream, type ReadStream } from "node:fs";
 import { mkdir, readdir, readFile, rename, rm, stat, unlink, utimes, writeFile } from "node:fs/promises";
@@ -61,6 +62,7 @@ export class BlobStore {
       await writeFile(tmp, buffer);
       await this.commit(tmp, sha256);
     }
+    this.pin(sha256);
     return { sha256, size: buffer.length };
   }
 
@@ -88,6 +90,7 @@ export class BlobStore {
       throw err;
     }
     const sha256 = hash.digest("hex");
+    this.pin(sha256);
     await this.commit(tmp, sha256);
     return { sha256, size };
   }
@@ -114,23 +117,71 @@ export class BlobStore {
    * Supprime les blobs qu'aucune ligne WorkingFile ou VersionFile ne référence. Un blob plus récent que
    * graceMs est gardé : il peut appartenir à un envoi dont les lignes ne sont pas encore écrites.
    */
-  async gc(graceMs = 10 * 60_000): Promise<number> {
+  /**
+   * Blob réemployé ou écrit depuis moins de ce délai : jamais libéré par une purge ciblée ni par la purge
+   * du cache (un envoi peut l'avoir rangé sans avoir encore écrit ses lignes). Filet en plus des épingles.
+   */
+  recentGraceMs = 10 * 60_000;
+
+  /** Empreintes rangées par un envoi en cours, dont les lignes ne sont pas encore écrites : jamais purgées. */
+  private readonly pins = new Map<string, number>();
+  private readonly pinScope = new AsyncLocalStorage<Set<string>>();
+
+  /**
+   * Exécute un envoi (fichiers, zip, envoi par morceaux) en épinglant chaque blob qu'il range, jusqu'à la fin :
+   * les purges (orphelins, purge ciblée) ne peuvent pas effacer un blob dont la ligne va être écrite.
+   */
+  async withPins<T>(fn: () => Promise<T>): Promise<T> {
+    const held = new Set<string>();
+    try {
+      return await this.pinScope.run(held, fn);
+    } finally {
+      for (const sha of held) {
+        const n = (this.pins.get(sha) ?? 1) - 1;
+        if (n <= 0) this.pins.delete(sha);
+        else this.pins.set(sha, n);
+      }
+    }
+  }
+
+  private pin(sha256: string): void {
+    const held = this.pinScope.getStore();
+    if (!held || held.has(sha256)) return;
+    held.add(sha256);
+    this.pins.set(sha256, (this.pins.get(sha256) ?? 0) + 1);
+  }
+
+  isPinned(sha256: string): boolean {
+    return this.pins.has(sha256);
+  }
+
+  private async usedHashes(): Promise<Set<string>> {
     const [working, versions] = await Promise.all([
       prisma.workingFile.findMany({ select: { sha256: true }, distinct: ["sha256"] }),
       prisma.versionFile.findMany({ select: { sha256: true }, distinct: ["sha256"] }),
     ]);
-    const used = new Set([...working, ...versions].map((r) => r.sha256));
+    return new Set([...working, ...versions].map((r) => r.sha256));
+  }
+
+  /**
+   * Parcours du magasin : taille totale et blobs orphelins (aucune ligne WorkingFile ni VersionFile).
+   * Avec remove, les orphelins plus anciens que graceMs sont supprimés (et les temporaires de plus d'une heure).
+   */
+  async scan(options: { remove?: boolean; graceMs?: number } = {}): Promise<{ totalBytes: number; orphanCount: number; orphanBytes: number }> {
+    const graceMs = options.graceMs ?? 10 * 60_000;
+    const used = await this.usedHashes();
     const now = Date.now();
-    let removed = 0;
+    const out = { totalBytes: 0, orphanCount: 0, orphanBytes: 0 };
     let prefixes: string[] = [];
     try {
       prefixes = await readdir(this.dir);
     } catch {
-      return 0;
+      return out;
     }
     for (const prefix of prefixes) {
       const folder = path.join(this.dir, prefix);
       if (prefix === "tmp") {
+        if (!options.remove) continue;
         for (const name of await readdir(folder).catch(() => [] as string[])) {
           const file = path.join(folder, name);
           const info = await stat(file).catch(() => null);
@@ -140,14 +191,49 @@ export class BlobStore {
       }
       if (!/^[0-9a-f]{2}$/.test(prefix)) continue;
       for (const name of await readdir(folder).catch(() => [] as string[])) {
-        if (!SHA.test(name) || used.has(name)) continue;
+        if (!SHA.test(name)) continue;
         const file = path.join(folder, name);
         const info = await stat(file).catch(() => null);
-        if (!info || (graceMs > 0 && now - info.mtimeMs < graceMs)) continue;
-        await rm(file, { force: true });
-        removed++;
+        if (!info) continue;
+        out.totalBytes += info.size;
+        if (used.has(name) || this.pins.has(name) || (graceMs > 0 && now - info.mtimeMs < graceMs)) continue;
+        if (options.remove) {
+          await rm(file, { force: true });
+          out.totalBytes -= info.size;
+        }
+        out.orphanCount++;
+        out.orphanBytes += info.size;
       }
     }
-    return removed;
+    return out;
   }
+
+  /**
+   * Supprime les blobs qu'aucune ligne WorkingFile ou VersionFile ne référence. Un blob plus récent que
+   * graceMs est gardé : il peut appartenir à un envoi dont les lignes ne sont pas encore écrites.
+   */
+  async gc(graceMs = 10 * 60_000): Promise<number> {
+    return (await this.scan({ remove: true, graceMs })).orphanCount;
+  }
+
+  /** Libère ceux de ces blobs que plus rien ne référence (purge d'un site) : nombre et octets libérés. */
+  async releaseUnused(hashes: Iterable<string>): Promise<{ count: number; bytes: number }> {
+    const candidates = [...new Set(hashes)].filter((h) => SHA.test(h));
+    if (candidates.length === 0) return { count: 0, bytes: 0 };
+    const used = await this.usedHashes();
+    const now = Date.now();
+    let count = 0;
+    let bytes = 0;
+    for (const sha of candidates) {
+      if (used.has(sha) || this.pins.has(sha)) continue;
+      const file = this.pathOf(sha);
+      const info = await stat(file).catch(() => null);
+      if (!info || (this.recentGraceMs > 0 && now - info.mtimeMs < this.recentGraceMs)) continue;
+      await rm(file, { force: true });
+      count++;
+      bytes += info.size;
+    }
+    return { count, bytes };
+  }
+
 }

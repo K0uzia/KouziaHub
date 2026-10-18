@@ -70,3 +70,15 @@ export async function recalibrateContent(siteId: string, readBlob: (sha256: stri
     data: { contentHash: contentHash(html), contentHashAt: new Date() },
   });
 }
+
+/**
+ * Rattrapage au démarrage : les sites créés avant la surveillance (ou dont le profil a changé sans
+ * passer par le hub) reçoivent leurs cibles. Idempotent ; l'interrupteur « Surveillé » d'une cible
+ * existante n'est jamais modifié. Renvoie le nombre de sites mis à jour.
+ */
+export async function backfillSiteTargets(sitesDomain: string): Promise<number> {
+  const sites = await prisma.site.findMany({ where: { state: { not: "DELETING" } }, select: { id: true } });
+  let changed = 0;
+  for (const s of sites) if (await syncSiteTargets(s.id, sitesDomain)) changed++;
+  return changed;
+}

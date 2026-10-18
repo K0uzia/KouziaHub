@@ -49,6 +49,20 @@ export const DEFAULT_CSP =
   "script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; " +
   "connect-src 'self'; upgrade-insecure-requests";
 
+/**
+ * En-têtes de sécurité du site en production (règle web-security), source unique du .htaccess et du
+ * _headers de l'export Cloudflare Pages. Pas de X-Robots-Tag : propre à la version de travail.
+ */
+export const PRODUCTION_SECURITY_HEADERS: ReadonlyArray<readonly [string, string]> = [
+  ["X-Content-Type-Options", "nosniff"],
+  ["X-Frame-Options", "SAMEORIGIN"],
+  ["Referrer-Policy", "strict-origin-when-cross-origin"],
+  ["Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()"],
+  ["Cross-Origin-Opener-Policy", "same-origin"],
+  ["X-Permitted-Cross-Domain-Policies", "none"],
+  ["Content-Security-Policy", DEFAULT_CSP],
+];
+
 const HOSTNAME = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 
 /** Domaine final : nom d'hôte seul, minuscules, « www. » retiré (la forme canonique le rajoute). */
@@ -154,12 +168,7 @@ export function buildHtaccess(profile: ServerProfile): string {
     domain
       ? '    Header always set Strict-Transport-Security "max-age=31536000" env=FINAL_HOST'
       : '    # Header always set Strict-Transport-Security "max-age=31536000"',
-    '    Header always set X-Content-Type-Options "nosniff"',
-    '    Header always set X-Frame-Options "SAMEORIGIN"',
-    '    Header always set Referrer-Policy "strict-origin-when-cross-origin"',
-    '    Header always set Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()"',
-    '    Header always set Cross-Origin-Opener-Policy "same-origin"',
-    '    Header always set X-Permitted-Cross-Domain-Policies "none"',
+    ...PRODUCTION_SECURITY_HEADERS.filter(([name]) => name !== "Content-Security-Policy").map(([name, value]) => `    Header always set ${name} "${value}"`),
     "    # CSP : chaque service externe ajouté (formulaire, mesure d'audience, carte) ouvre seulement sa directive.",
     `    Header always set Content-Security-Policy "${DEFAULT_CSP}"`,
     "</IfModule>",
@@ -213,6 +222,18 @@ export function buildPagesHeaders(userHeaders?: string): string | undefined {
   }
   if (userHeaders?.trim()) blocks.push(`# Règles du site\n${userHeaders.trim()}`);
   return blocks.length ? `${blocks.join("\n\n")}\n` : undefined;
+}
+
+/**
+ * _headers de l'export de production pour Cloudflare Pages : en-têtes de sécurité sur /* (mêmes que le
+ * .htaccess ; HSTS seulement si le domaine final est connu), puis cache du hub et règles du site.
+ */
+export function buildProductionPagesHeaders(userHeaders: string | undefined, finalDomain: string | null): string {
+  const security = ["# Hub Kouzia : en-têtes de sécurité du site en production.", "/*"];
+  for (const [name, value] of PRODUCTION_SECURITY_HEADERS) security.push(`  ${name}: ${value}`);
+  if (finalDomain) security.push("  Strict-Transport-Security: max-age=31536000");
+  const rest = buildPagesHeaders(userHeaders) ?? "";
+  return [security.join("\n"), rest.trimEnd()].filter(Boolean).join("\n\n") + "\n";
 }
 
 /**

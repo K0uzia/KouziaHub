@@ -286,6 +286,38 @@ export class OperationEngine {
     return this.busy.has(siteId);
   }
 
+  /**
+   * Verrou du site hors opération (purge, export) : même verrou que les opérations, une seule action à la
+   * fois. Renvoie la fonction qui le rend ; 409 si le site est déjà occupé.
+   */
+  async acquire(siteId: string): Promise<() => void> {
+    if (this.busy.has(siteId)) throw new HttpError(409, "Une opération est en cours sur ce site : réessayez à la fin.", "operation_running");
+    this.busy.add(siteId);
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      this.busy.delete(siteId);
+    };
+    try {
+      const running = await prisma.operation.findFirst({ where: { siteId, status: "RUNNING" }, select: { id: true } });
+      if (running) throw new HttpError(409, "Une opération est en cours sur ce site : réessayez à la fin.", "operation_running");
+    } catch (err) {
+      release();
+      throw err;
+    }
+    return release;
+  }
+
+  async withLock<T>(siteId: string, fn: () => Promise<T>): Promise<T> {
+    const release = await this.acquire(siteId);
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  }
+
   private async run(opId: string): Promise<void> {
     const op = await prisma.operation.findUniqueOrThrow({ where: { id: opId } });
     const defs = OPERATION_STEPS[op.kind];

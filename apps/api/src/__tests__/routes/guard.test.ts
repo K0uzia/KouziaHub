@@ -54,6 +54,12 @@ const ROUTES: Array<[string, string]> = [
   ["POST", "/api/push/subscribe"],
   ["DELETE", "/api/push/devices/d1"],
   ["POST", "/api/push/test"],
+  ["POST", "/api/sites/s1/files/purge"],
+  ["POST", "/api/sites/s1/cache/purge"],
+  ["GET", "/api/storage"],
+  ["POST", "/api/storage/purge"],
+  ["GET", "/api/sites/s1/export/summary"],
+  ["GET", "/api/sites/s1/export?target=hostinger"],
 ];
 
 describe("routes protégées", () => {

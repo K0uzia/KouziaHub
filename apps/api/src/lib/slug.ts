@@ -62,3 +62,22 @@ export async function checkSlug(slug: string, cloudflare: CloudflareGateway, sit
   }
   return { slug, ok: true, reason: null };
 }
+
+/** Noms de la zone du hub jamais visés par un site (domaine final, purge du cache), même enregistrés. */
+export const HUB_ZONE_FORBIDDEN_LABELS = ["www", "hub", "erp", "api"] as const;
+
+/**
+ * Conflit d'un nom d'hôte avec la zone du hub : la zone elle-même, www, hub, erp, api, ou l'adresse
+ * <slug>.<zone> d'un AUTRE site. null si le nom est hors zone ou sans conflit.
+ */
+export async function hubZoneConflict(hostname: string, sitesDomain: string, ownSiteId: string): Promise<string | null> {
+  const host = hostname.toLowerCase();
+  if (host === sitesDomain || HUB_ZONE_FORBIDDEN_LABELS.some((l) => host === `${l}.${sitesDomain}`)) {
+    return `${host} est réservé au hub et à ses services.`;
+  }
+  if (!host.endsWith(`.${sitesDomain}`)) return null;
+  const label = host.slice(0, -(sitesDomain.length + 1));
+  if (RESERVED_SLUGS.has(label)) return `${host} est un nom réservé de la zone ${sitesDomain}.`;
+  const other = await prisma.site.findFirst({ where: { slug: label, NOT: { id: ownSiteId } }, select: { id: true } });
+  return other ? `${host} est l'adresse d'un autre site du hub.` : null;
+}

@@ -7,7 +7,7 @@ import { importFiles, importZip } from "@/lib/imports.js";
 import { MAX_FILES, UPLOAD_CHUNK_BYTES } from "@/lib/limits.js";
 import { prisma } from "@/lib/prisma.js";
 import type { Services } from "@/lib/services.js";
-import { UploadStore } from "@/lib/uploads.js";
+import { UploadStore, withUploadSessionBusy } from "@/lib/uploads.js";
 
 const siteParams = z.object({ id: z.string().min(1).max(64) });
 const sessionParams = siteParams.extend({ uid: z.string().min(1).max(64) });
@@ -80,18 +80,21 @@ export function uploadsRoutes(services: Services): FastifyPluginAsync {
 
     app.post("/api/sites/:id/uploads/:uid/complete", async (request): Promise<UploadResult> => {
       const { id, uid } = sessionParams.parse(request.params);
-      const site = await loadSite(id);
-      const { session, stored, zipPath, done } = await store.assemble(id, uid, services.blobs);
-      try {
-        const result = zipPath ? await importZip(services, site, zipPath, session.mode ?? "merge") : await importFiles(site, stored, []);
-        await done();
-        // Écartés dès l'ouverture de la session, puis ceux de la finalisation.
-        return { ...result, rejected: [...session.rejected, ...result.rejected] };
-      } catch (err) {
-        // Contenu refusé (zip piégé, plafond du site) : renvoyer les mêmes octets ne changerait rien.
-        if (err instanceof HttpError && err.statusCode < 500) await done();
-        throw err;
-      }
+      // Session occupée (la purge du cache ne la touche pas) et blobs protégés jusqu'à l'écriture de leurs lignes.
+      return withUploadSessionBusy(uid, () => services.blobs.withPins(async () => {
+        const site = await loadSite(id);
+        const { session, stored, zipPath, done } = await store.assemble(id, uid, services.blobs);
+        try {
+          const result = zipPath ? await importZip(services, site, zipPath, session.mode ?? "merge") : await importFiles(site, stored, []);
+          await done();
+          // Écartés dès l'ouverture de la session, puis ceux de la finalisation.
+          return { ...result, rejected: [...session.rejected, ...result.rejected] };
+        } catch (err) {
+          // Contenu refusé (zip piégé, plafond du site) : renvoyer les mêmes octets ne changerait rien.
+          if (err instanceof HttpError && err.statusCode < 500) await done();
+          throw err;
+        }
+      }));
     });
 
     app.delete("/api/sites/:id/uploads/:uid", async (request) => {

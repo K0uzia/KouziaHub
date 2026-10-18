@@ -263,6 +263,17 @@ export class FakeCloudflare implements CloudflareGateway {
     return { id, url: deployment.url };
   }
 
+  /** Purges reçues (les échecs s'injectent par failNext("purgeCache")). */
+  readonly purges: Array<{ hosts: string[] } | { files: string[] }> = [];
+
+  async purgeCache(request: { hosts: string[] } | { files: string[] }): Promise<void> {
+    this.check("purgeCache");
+    const list = "hosts" in request ? request.hosts : request.files;
+    if (list.length === 0 || list.length > 100) throw new CloudflareError("Cloudflare simulé : 1 à 100 éléments par purge.", 400);
+    this.purges.push(request);
+    this.calls.push(`purgeCache:${"hosts" in request ? "hosts" : "files"}:${list.length}`);
+  }
+
   async deleteDeployment(project: string, id: string): Promise<void> {
     this.check("deleteDeployment");
     const p = this.project(project);

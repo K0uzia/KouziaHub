@@ -20,6 +20,7 @@ import { createServices, type Services } from "@/lib/services.js";
 import { sitesRoutes } from "@/routes/sites.js";
 import { filesRoutes } from "@/routes/files.js";
 import { uploadsRoutes } from "@/routes/uploads.js";
+import { maintenanceRoutes } from "@/routes/maintenance.js";
 import { systemRoutes } from "@/routes/system.js";
 import { monitorRoutes } from "@/routes/monitor.js";
 import { pushRoutes } from "@/routes/push.js";
@@ -117,6 +118,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   await app.register(sitesRoutes(services));
   await app.register(filesRoutes(services));
   await app.register(uploadsRoutes(services));
+  await app.register(maintenanceRoutes(services));
   await app.register(systemRoutes(services));
   await app.register(monitorRoutes(services));
   await app.register(pushRoutes(services));

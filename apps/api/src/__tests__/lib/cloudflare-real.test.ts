@@ -237,6 +237,29 @@ describe("adaptateur Cloudflare réel (fetch injecté)", () => {
     expect((await cf.updateCname("r1", "a.kouzia.com", "kz-a.pages.dev", "kouzia-hub:s1")).content).toBe("kz-a.pages.dev");
   });
 
+  it("purge du cache : POST purge_cache par noms d'hôte ou par adresses, une seule tentative", async () => {
+    const bodies: unknown[] = [];
+    api.on("POST", "/zones/zone1/purge_cache", (req) => {
+      bodies.push(req.json);
+      expect(req.auth).toBe(`Bearer ${TOKEN}`);
+      return ok({ id: "p1" });
+    });
+    await cf.purgeCache({ hosts: ["alpha.kouzia.com"] });
+    await cf.purgeCache({ files: ["https://alpha.kouzia.com/"] });
+    expect(bodies).toEqual([{ hosts: ["alpha.kouzia.com"] }, { files: ["https://alpha.kouzia.com/"] }]);
+  });
+
+  it("purge du cache : 1134 traduit sans réessai, 403 avec la permission à ajouter, 1092 signalé", async () => {
+    api.on("POST", "/zones/zone1/purge_cache", () => ({ status: 429, body: { success: false, errors: [{ code: 1134, message: "rate limited" }] } }));
+    await expect(cf.purgeCache({ hosts: ["a.kouzia.com"] })).rejects.toMatchObject({ cfCode: 1134, message: expect.stringMatching(/5 requêtes par minute/) });
+    expect(api.requests).toHaveLength(1);
+    expect(sleeps).toEqual([]);
+    api.on("POST", "/zones/zone1/purge_cache", () => ({ status: 403, body: { success: false, errors: [{ code: 10000, message: "Authentication error" }] } }));
+    await expect(cf.purgeCache({ hosts: ["a.kouzia.com"] })).rejects.toMatchObject({ status: 403, message: expect.stringContaining("Cache Purge au jeton (hubctl secrets api)") });
+    api.on("POST", "/zones/zone1/purge_cache", () => ({ status: 400, body: { success: false, errors: [{ code: 1092, message: "nope" }] } }));
+    await expect(cf.purgeCache({ hosts: ["a.kouzia.com"] })).rejects.toMatchObject({ cfCode: 1092, message: expect.stringMatching(/code 1092/) });
+  });
+
   it("réessaie sur 503 puis réussit, en respectant Retry-After sur 429", async () => {
     let calls = 0;
     api.on("GET", `${P}/kz-a`, () => {
