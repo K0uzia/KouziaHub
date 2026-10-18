@@ -145,6 +145,9 @@ describe("couleurs à l'impression (calcul WCAG, en couleur et en gris)", () => 
       for (const k of states) {
         expect(contrastRatio(f(C[k].glyph), f(C[k].mark)), `pictogramme ${k}`).toBeGreaterThanOrEqual(3);
         expect(contrastRatio(f(C[k].edge), f(C[k].tint)), `contour ${k} sur son fond`).toBeGreaterThanOrEqual(3);
+        // Tuile du verdict délimitée par un contour complet de 1 px (pas de bordure gauche épaisse).
+        expect(contrastRatio(f(C[k].outline), f(C.paper)), `contour de la tuile ${k} sur le papier`).toBeGreaterThanOrEqual(3);
+        expect(C[k].tint, `fond du verdict ${k} distinct des tuiles ordinaires`).not.toBe(C.soft);
       }
       for (const [a, b] of [["ok", "watch"], ["ok", "resolved"], ["watch", "resolved"]] as const) {
         expect(contrastRatio(f(C[a].mark), f(C[b].mark)), `${a} et ${b}`).toBeGreaterThanOrEqual(2);
@@ -391,5 +394,13 @@ describe("rapport mensuel (PDF)", () => {
     await write("rapport-mois-calme.pdf", []);
     await write("rapport-3-incidents.pdf", THREE);
     await write("rapport-a-surveiller.pdf", [], { certificateUntil: "2026-11-11T11:00:00.000Z" });
+  });
+});
+
+describe("règle web-design : pas de bordure gauche épaisse d'accent", () => {
+  it("le rapport ne pose aucune bordure gauche", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(new URL("../../lib/monitor/report.tsx", import.meta.url), "utf8");
+    expect(src).not.toMatch(/borderLeft/);
   });
 });
