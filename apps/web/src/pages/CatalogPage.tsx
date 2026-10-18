@@ -110,7 +110,7 @@ export function CatalogPage() {
         { label: "En création", shortLabel: "Création", value: tally("creating"), tone: tally("creating") ? "warning" : "default" },
         { label: "En erreur", shortLabel: "Erreurs", value: errors, tone: errors ? "danger" : "default" },
         {
-          label: "Projets Cloudflare utilisés",
+          label: "Projets Cloudflare",
           shortLabel: "Projets",
           value: stats.projectsUsed == null ? "Inconnu" : `${stats.projectsUsed} / ${stats.projectsLimit}`,
           hint: stats.projectsUsed == null ? `Limite : ${stats.projectsLimit}` : undefined,
