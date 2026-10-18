@@ -10,7 +10,7 @@ import { ERP_CLIENT_ID, ErpUnavailableError } from "@/lib/erp/types.js";
 import { HttpError } from "@/lib/http.js";
 import { idParams, routeParam } from "@/lib/http-input.js";
 import { isPrivateHost } from "@/lib/monitor/checks.js";
-import { generateReport, MONTH_RE } from "@/lib/monitor/report.js";
+import { generateReport, MONTH_RE, reportContext } from "@/lib/monitor/report.js";
 import type { TargetWithSite } from "@/lib/monitor/service.js";
 import { buildEntries, incidentEntry } from "@/lib/monitor/view.js";
 import { prisma } from "@/lib/prisma.js";
@@ -240,7 +240,7 @@ export function monitorRoutes(services: Services): FastifyPluginAsync {
       let filePath = existing ? path.join(services.dataDir, existing.path) : null;
       // Mois en cours : toujours régénéré (chiffres à jour) ; mois passé : généré s'il manque.
       if (!filePath || !existsSync(filePath) || month === currentMonth) {
-        const generated = await generateReport(services.dataDir, target, month, monitor.now());
+        const generated = await generateReport(services.dataDir, target, month, monitor.now(), await reportContext(services.erp, target));
         filePath = path.join(services.dataDir, generated.path);
         await audit({ action: "monitor.report.generate", result: "ok", siteId: target.siteId, siteSlug: target.site?.slug ?? null, detail: `${target.hostname} ${month}` });
       }

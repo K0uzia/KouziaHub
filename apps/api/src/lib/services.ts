@@ -14,7 +14,7 @@ import { zonesFromEnv, type ZonesDirectory } from "@/lib/cloudflare/zones.js";
 import { MonitorService, type MonitorDeps } from "@/lib/monitor/service.js";
 import { veilleFromEnv } from "@/lib/monitor/worker-client.js";
 import { PushService } from "@/lib/push/service.js";
-import { generateReport } from "@/lib/monitor/report.js";
+import { generateReport, reportContext } from "@/lib/monitor/report.js";
 import { prisma } from "@/lib/prisma.js";
 import { backfillSiteTargets } from "@/lib/monitor/targets.js";
 
@@ -103,7 +103,9 @@ export function createServices(overrides: ServicesOverrides = {}): Services {
   });
   services.monitor.monthlyReports = async (month) => {
     for (const target of await prisma.monitorTarget.findMany({ where: { enabled: true } })) {
-      await generateReport(dataDir, target, month, services.monitor.now()).catch((err) =>
+      await reportContext(services.erp, target)
+        .then((ctx) => generateReport(dataDir, target, month, services.monitor.now(), ctx))
+        .catch((err) =>
         console.error("[surveillance] rapport impossible", err instanceof Error ? err.message : err),
       );
     }
