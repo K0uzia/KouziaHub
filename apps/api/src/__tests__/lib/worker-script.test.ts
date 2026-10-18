@@ -28,6 +28,7 @@ beforeAll(async () => {
 
 const expectSiteHeaders = (res: Response) => {
   for (const [name, value] of Object.entries(SITE_HEADERS)) expect(res.headers.get(name)).toBe(value);
+  expect(res.headers.get("Cross-Origin-Opener-Policy")).toBe("same-origin");
   expect(res.headers.get("Content-Security-Policy")).toBeNull();
 };
 
