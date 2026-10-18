@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AuditEntry, MonitorIncidentEntry, Page, VersionEntry } from "@/contract.js";
+import { parisDayKey } from "@/lib/fr-format.js";
+import { dayRange } from "@/lib/pagination.js";
 import { prisma, resetDb } from "../helpers/db.js";
 import { buildTestHub, createPersoSite, type TestHub } from "../helpers/hub.js";
 
@@ -20,9 +22,8 @@ function daysAgo(n: number): Date {
   d.setHours(12, 0, 0, 0);
   return d;
 }
-function day(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
+/** Jour de Paris, comme les filtres de période. */
+const day = (d: Date) => parisDayKey(d);
 
 async function get<T>(url: string): Promise<{ status: number; body: T }> {
   const res = await hub.app.inject({ method: "GET", url, headers: hub.headers });
@@ -157,5 +158,40 @@ describe("versions paginées (GET /api/sites/:id/versions)", () => {
     const p2 = await get<Page<VersionEntry>>(`/api/sites/${siteId}/versions?page=2`);
     expect(p2.body.items.map((v) => v.number)).toEqual([5, 4, 3, 2, 1]);
     expect((await get(`/api/sites/${siteId}/versions?page=0`)).status).toBe(400);
+  });
+});
+
+describe("filtres de période à l'heure de Paris", () => {
+  const iso = (d?: Date) => d?.toISOString();
+
+  it("bornes : minuit de Paris, journées de 23 h et de 25 h aux changements d'heure", () => {
+    expect(iso(dayRange("2026-07-14", "2026-07-14")?.gte)).toBe("2026-07-13T22:00:00.000Z");
+    expect(iso(dayRange("2026-07-14", "2026-07-14")?.lt)).toBe("2026-07-14T22:00:00.000Z");
+    expect(iso(dayRange("2026-01-15", "2026-01-15")?.gte)).toBe("2026-01-14T23:00:00.000Z");
+    const spring = dayRange("2026-03-29", "2026-03-29")!;
+    expect([iso(spring.gte), iso(spring.lt)]).toEqual(["2026-03-28T23:00:00.000Z", "2026-03-29T22:00:00.000Z"]);
+    expect(spring.lt!.getTime() - spring.gte!.getTime()).toBe(23 * 3_600_000);
+    const autumn = dayRange("2026-10-25", "2026-10-25")!;
+    expect([iso(autumn.gte), iso(autumn.lt)]).toEqual(["2026-10-24T22:00:00.000Z", "2026-10-25T23:00:00.000Z"]);
+    expect(autumn.lt!.getTime() - autumn.gte!.getTime()).toBe(25 * 3_600_000);
+    expect(iso(dayRange(undefined, "2026-12-31")?.lt)).toBe("2026-12-31T23:00:00.000Z");
+  });
+
+  it("journal : une entrée de 23 h 30 UTC compte pour le lendemain à Paris", async () => {
+    await prisma.auditEvent.createMany({
+      data: [
+        { action: "site.update", result: "ok", at: new Date("2026-07-14T21:59:00Z") },
+        { action: "site.update", result: "ok", at: new Date("2026-07-14T22:00:00Z") },
+        { action: "site.update", result: "ok", at: new Date("2026-07-14T23:30:00Z") },
+        { action: "site.update", result: "ok", at: new Date("2026-10-25T22:30:00Z") },
+        { action: "site.update", result: "ok", at: new Date("2026-10-25T23:00:00Z") },
+      ],
+    });
+    const at = async (from: string, to: string) =>
+      (await get<Page<AuditEntry>>(`/api/audit?from=${from}&to=${to}&pageSize=100`)).body.items.map((e) => e.at).sort();
+    expect(await at("2026-07-14", "2026-07-14")).toEqual(["2026-07-14T21:59:00.000Z"]);
+    expect(await at("2026-07-15", "2026-07-15")).toEqual(["2026-07-14T22:00:00.000Z", "2026-07-14T23:30:00.000Z"]);
+    expect(await at("2026-10-25", "2026-10-25")).toEqual(["2026-10-25T22:30:00.000Z"]);
+    expect(await at("2026-10-26", "2026-10-26")).toEqual(["2026-10-25T23:00:00.000Z"]);
   });
 });
