@@ -470,15 +470,23 @@ Android et Chrome reçoivent les notifications sans installer l'application ; su
 
 ### 10.7 Rapport mensuel (PDF)
 
-- Par cible et par mois, généré le 1er du mois et à la demande :
-  - disponibilité en % (les deux points de vue, panne au sens de 10.1) ;
-  - incidents avec début, fin et durée ;
-  - certificat (émetteur, échéance) ;
-  - échéance du domaine ;
-  - vitesse (dernière mesure et tendance) ;
-  - contrôles DNS et contenu sans écart, ou les écarts.
-- Fabriqué par `@react-pdf/renderer`, comme les PDF de l'ERP (pas de dépendance à Chromium, police Exo 2 locale). Dépendance nouvelle, justifiée par la cohérence avec l'ERP.
-- Téléchargé depuis le hub ; Alexandre l'envoie lui-même depuis l'ERP. Le hub n'envoie rien et ne publie aucune page.
+Le rapport est lu par le client (commerçant, association), pas par un technicien : une page A4 (deux au plus), en langage clair, sans aucun terme technique. Code : `apps/api/src/lib/monitor/report-text.ts` (règles et phrases) et `report.tsx` (données et mise en page).
+
+**Références de langage clair** (consultées le 18/10/2026) : GOV.UK, « Use clear language » [GOVUK-CLEAR] (mots courants plutôt que mots longs ou soutenus, phrases de 25 mots au plus) ; Nielsen Norman Group, Hoa Loranger, « Plain Language Is for Everyone, Even Experts » [NNG-PLAIN] (connaître son lecteur, mots familiers, phrases de 15 à 20 mots, l'essentiel en premier). Seuils de vitesse : web.dev [WEBDEV-LCP] [WEBDEV-CLS].
+
+- **Ouverture** : une phrase-verdict (« Votre site a bien fonctionné ce mois-ci : il était accessible 99,9 % du temps. ») et un état écrit en toutes lettres avec son icône (forme vectorielle), jamais la couleur seule.
+- **Règle de l'état**, du plus grave au plus doux :
+  - « À surveiller » : coupure encore en cours à la fin du rapport, ou disponibilité sous 99 %, ou aucune mesure dans le mois, ou cadenas en défaut, ou cadenas qui expire dans 14 jours ou moins, ou nom de domaine qui expire dans 30 jours ou moins, ou site « Lent » ;
+  - « Problème réglé » : au moins une coupure dans le mois, toutes terminées ;
+  - « Tout va bien » : sinon.
+- **Disponibilité** : temps hors panne (au sens de 10.1) sur le temps observé du mois, au fuseau de Paris ; jamais arrondie vers le haut (99,996 % s'écrit 99,99 %).
+- **Coupures en phrases** : « Le 12 octobre, le site a été inaccessible 14 minutes, entre 3 h 02 et 3 h 16. Il est revenu tout seul. » Heures de Paris. « Revenu tout seul » seulement si la cible est un site du hub et qu'aucune action n'a été journalisée sur ce site pendant la coupure ; « Il a été rétabli » s'il y en a eu une ; « Il est de nouveau accessible » quand le hub ne peut pas le savoir (domaine ajouté à la main). Au-delà de 5 coupures, les plus longues sont détaillées et les autres résumées en une ligne (nombre, durée totale, durée la plus longue).
+- **Vitesse** (dernière mesure du mois, profil téléphone), seuils officiels de web.dev : « Rapide » si l'affichage du contenu principal prend 2,5 s ou moins et que la page bouge peu (décalage 0,1 ou moins) ; « Lent » au-delà de 4 s ou de 0,25 ; « Correct » entre les deux. Un seul chiffre affiché : le temps d'ouverture de la page en secondes. Comparaison à la dernière mesure du mois précédent : « comme le mois dernier » si l'écart est sous 0,3 s, sinon « plus rapide » ou « plus lent qu'en septembre » ; « première mesure » sans mesure précédente. Stabilité de l'affichage : bonne, moyenne ou à améliorer, selon les mêmes seuils.
+- **Mots du rapport** : « certificat de sécurité (le cadenas) valable jusqu'au … », « nom de domaine réservé jusqu'au … », « réglages techniques de l'adresse inchangés », « temps d'ouverture de la page », « stabilité de l'affichage ». Aucun sigle ni code d'erreur : un test cherche chaque terme interdit dans le texte du PDF.
+- **« Ce que Kouzia a fait pour vous ce mois-ci »** : seulement des comptes tirés des données (vérifications d'ouverture, du cadenas, du nom de domaine, des réglages de l'adresse, mesures de vitesse, coupures détectées, alertes reçues) ; une ligne à zéro est masquée, une tuile sans donnée aussi.
+- **Détails techniques : supprimés du PDF client.** Alexandre a tout le détail dans le hub (écran Surveillance, fiche de la cible). Une annexe technique rallongerait le rapport sans servir le client, et deux versions à tenir à jour seraient deux sources de vérité.
+- **Mise en page** : grille de tuiles (verdict en grande tuile, puis disponibilité, vitesse, sécurité, nom de domaine, coupures, ce que Kouzia a fait), charte Kouzia de l'ERP (encre nuit #0b1020, bande ambre #fe9a00, monogramme), police Helvetica (l'Exo 2 du hub, en woff2 variable, n'est pas lisible par le moteur de PDF ; les documents de l'ERP utilisent aussi Helvetica). Fond clair pour l'impression ; contrastes calculés par un test : texte 4,5:1 au moins sur chaque fond, icônes 3:1 au moins.
+- Fabriqué par `@react-pdf/renderer`, comme les PDF de l'ERP. Généré le 1er du mois et à la demande ; téléchargé depuis le hub, Alexandre l'envoie lui-même depuis l'ERP. Le hub n'envoie rien et ne publie aucune page.
 
 ### 10.8 Modèle de données (migration à valider, rien n'est écrit)
 
@@ -571,6 +579,10 @@ Cloudflare (documentation officielle) :
 
 Autres :
 
+- [GOVUK-CLEAR] GOV.UK, Use clear language : https://guidance.publishing.service.gov.uk/writing-to-gov-uk-standards/writing-guidelines/clear-language/
+- [NNG-PLAIN] Nielsen Norman Group, Plain Language Is for Everyone, Even Experts (Hoa Loranger, 2017) : https://www.nngroup.com/articles/plain-language-experts/
+- [WEBDEV-LCP] web.dev, Largest Contentful Paint : https://web.dev/articles/lcp
+- [WEBDEV-CLS] web.dev, Cumulative Layout Shift : https://web.dev/articles/cls
 - [DEV-PY] Deploying to Cloudflare Pages from pure Python, no Node, no wrangler (dev.to) : https://dev.to/orix/deploying-to-cloudflare-pages-from-pure-python-no-node-no-wrangler-2ea1
 - [PULUMI-DOM] Pulumi, cloudflare.PagesDomain (DNS non créé par l'API) : https://www.pulumi.com/registry/packages/cloudflare/api-docs/pagesdomain/
 - [SCOUT-DANGLING] ScoutDNS, Dangling DNS records and subdomain takeover : https://www.scoutdns.com/library/dangling-dns-records-how-subdomain-takeover-becomes-possible
