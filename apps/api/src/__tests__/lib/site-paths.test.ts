@@ -67,6 +67,18 @@ describe("fichiers refusés ou écartés", () => {
     expect(verdict("assets/_worker.js")).toBe("accept");
   });
 
+  it("refuse un dossier _worker.js/ ou _routes.json/ à la racine, quelle que soit la casse", () => {
+    expect(verdict("_worker.js/index.js")).toBe("reject");
+    expect(verdict("_Worker.JS/index.js")).toBe("reject");
+    expect(verdict("_WORKER.js")).toBe("reject");
+    expect(verdict("_worker.js/lib/util.js")).toBe("reject");
+    expect(verdict("_routes.json/x")).toBe("reject");
+    expect(verdict("_Routes.JSON")).toBe("reject");
+    expect(classifySitePath("_worker.js/index.js")).toEqual({ action: "reject", reason: expect.stringMatching(/_worker\.js refusé/) });
+    // Plus bas dans l'arborescence : un fichier ordinaire.
+    expect(verdict("docs/_worker.js/index.js")).toBe("accept");
+  });
+
   it("refuse les fichiers de développement et les secrets", () => {
     expect(verdict(".env")).toBe("reject");
     expect(verdict("config/.env.production")).toBe("reject");
