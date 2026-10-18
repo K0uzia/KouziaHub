@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -10,7 +10,6 @@ import {
   faCloud,
   faHeartPulse,
   faPlus,
-  faServer,
   faTriangleExclamation,
 } from "@fortawesome/free-solid-svg-icons";
 import type { CloudflareZoneSuggestion, MonitorOverview, MonitorTargetEntry } from "@hub/contract";
@@ -21,29 +20,35 @@ import { useResource } from "@/lib/useResource";
 import { useTitle } from "@/lib/useTitle";
 import { Badge, Card, EmptyState, PageHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
-import { StatStrip } from "@/components/ui/StatStrip";
 import { Banner } from "@/components/ui/Banner";
+import { Explain } from "@/components/ui/InfoTip";
+import { Tile } from "@/components/ui/Tile";
+import { StatStrip } from "@/components/ui/StatStrip";
 import { AddDomainDialog } from "@/components/monitor/AddDomainDialog";
+import type { GlossaryKey } from "@/lib/glossary";
 
 const OK = { icon: faCircleCheck, ink: "text-[var(--success)]" };
 const WARN = { icon: faTriangleExclamation, ink: "text-[var(--warning)]" };
 const INFO = { icon: faCircleInfo, ink: "text-[var(--info)]" };
 
-function HealthRow({ label, icon, ink, children }: { label: string; icon: IconDefinition; ink: string; children: ReactNode }) {
+/** Incidents montrés dans la tuile ; les autres restent sur la fiche de chaque adresse. */
+const INCIDENTS_SHOWN = 5;
+
+function HealthRow({ label, icon, ink, tip, children }: { label: string; icon: IconDefinition; ink: string; tip?: GlossaryKey; children: ReactNode }) {
   return (
-    <div className="py-3">
-      <dt className="flex items-start gap-3 text-sm font-medium text-[var(--text)]">
-        <FontAwesomeIcon icon={icon} className={`mt-0.5 h-4 w-4 shrink-0 ${ink}`} aria-hidden />
+    <div className="py-1.5 first:pt-0 last:pb-0">
+      <dt className="flex items-center gap-2 text-sm font-medium text-[var(--text)]">
+        <FontAwesomeIcon icon={icon} className={`h-3.5 w-3.5 shrink-0 ${ink}`} aria-hidden />
         {label}
+        {tip ? <Explain k={tip} /> : null}
       </dt>
-      <dd className="mt-0.5 pl-7 text-sm text-[var(--muted)]">{children}</dd>
+      <dd className="pl-5.5 text-sm text-[var(--muted)]">{children}</dd>
     </div>
   );
 }
 
 export function MonitorPage() {
   useTitle("Surveillance");
-  const ids = useId();
   const overview = useResource<MonitorOverview>("/api/monitor");
   const zones = useResource<{ available: boolean; zones: CloudflareZoneSuggestion[] }>("/api/monitor/zones");
   const [addOpen, setAddOpen] = useState(false);
@@ -116,50 +121,33 @@ export function MonitorPage() {
               dans Réglages, Notifications.
             </Banner>
           ) : null}
-          <StatStrip
-            dense
-            items={[
-              { label: "Surveillés", value: o.stats.watched },
-              { label: "En ligne", value: o.stats.up, tone: o.stats.up ? "success" : "default" },
-              { label: "En panne", shortLabel: "Pannes", value: o.stats.down, tone: o.stats.down ? "danger" : "default" },
-              { label: "Avertissements", shortLabel: "Alertes", value: o.stats.warnings, tone: o.stats.warnings ? "warning" : "default" },
-              { label: "Incidents ouverts", shortLabel: "Incidents", value: o.stats.openIncidents, tone: o.stats.openIncidents ? "danger" : "default" },
-            ]}
-          />
+          <div className="bento bento-wide">
+            <StatStrip
+              dense
+              className="tile-full rounded-[var(--radius)] shadow-none"
+              items={[
+                { label: "Surveillés", value: o.stats.watched },
+                { label: "En ligne", value: o.stats.up, tone: o.stats.up ? "success" : "default" },
+                { label: "En panne", shortLabel: "Pannes", value: o.stats.down, tone: o.stats.down ? "danger" : "default" },
+                { label: "Avertissements", shortLabel: "Alertes", value: o.stats.warnings, tone: o.stats.warnings ? "warning" : "default" },
+                { label: "Incidents ouverts", shortLabel: "Incidents", value: o.stats.openIncidents, tone: o.stats.openIncidents ? "danger" : "default" },
+              ]}
+            />
 
-          <section aria-labelledby={`${ids}-health`}>
-            <Card className="p-4 sm:p-5">
-              <h2 id={`${ids}-health`} className="text-base font-semibold">
-                Points de contrôle et notifications
-              </h2>
-              <dl className="mt-1 divide-y divide-[var(--border)]">
-                <HealthRow label="Le hub" {...(o.health.hubChecksRunning ? OK : WARN)}>
+            <Tile title="Points de contrôle" level={2} span={2}>
+              <dl>
+                <HealthRow label="Le hub" tip="hub" {...(o.health.hubChecksRunning ? OK : WARN)}>
                   {o.health.hubChecksRunning ? "Contrôles en cours toutes les 5 minutes." : "Contrôles arrêtés : redémarrez le hub."}
                 </HealthRow>
-                <HealthRow
-                  label="Cloudflare (Worker de veille)"
-                  {...(!o.health.edge.configured ? INFO : o.health.edge.error ? WARN : OK)}
-                >
+                <HealthRow label="Cloudflare (Worker de veille)" tip="worker" {...(!o.health.edge.configured ? INFO : o.health.edge.error ? WARN : OK)}>
                   {!o.health.edge.configured
                     ? "Non configuré : seules les observations du hub comptent, et aucune alerte ne part si la box est coupée."
                     : o.health.edge.error
                       ? `Erreur : ${o.health.edge.error}`
                       : `Dernier passage ${o.health.edge.lastSeenAt ? formatAgo(o.health.edge.lastSeenAt) : "inconnu"}${o.health.edge.lastSyncAt ? `, configuration envoyée ${formatAgo(o.health.edge.lastSyncAt)}` : ""}.`}
                 </HealthRow>
-                <HealthRow label="Notifications" {...(o.health.push.configured && o.health.push.devices > 0 ? OK : WARN)}>
-                  {!o.health.push.configured
-                    ? "Non configurées : les clés de notification manquent sur le hub."
-                    : o.health.push.devices > 0
-                      ? `${plural(o.health.push.devices, "appareil reçoit", "appareils reçoivent")} les alertes. `
-                      : "Aucun appareil : activez les notifications sur votre téléphone. "}
-                  {o.health.push.configured ? (
-                    <Link to="/reglages#notifications" className="link link-inline">
-                      Réglages des notifications
-                    </Link>
-                  ) : null}
-                </HealthRow>
               </dl>
-              <details className="code-details mt-3">
+              <details className="code-details mt-auto">
                 <summary className="code-summary">
                   <FontAwesomeIcon icon={faChevronRight} className="code-chevron h-3 w-3 shrink-0 text-[var(--muted)]" aria-hidden />
                   Marche à suivre
@@ -180,36 +168,58 @@ export function MonitorPage() {
                   <li>Ajouter à la main les domaines hébergés ailleurs (Hostinger).</li>
                 </ol>
               </details>
-            </Card>
-          </section>
+            </Tile>
 
-          <section aria-labelledby={`${ids}-targets`} className="space-y-3">
-            <h2 id={`${ids}-targets`} className="text-lg font-semibold">
-              Adresses surveillées
-            </h2>
-            {targets.length === 0 ? (
-              <Card>
-                <EmptyState
-                  icon={<FontAwesomeIcon icon={faHeartPulse} className="h-5 w-5" aria-hidden />}
-                  title="Aucune adresse surveillée pour l'instant."
-                  hint="Les sites du hub s'ajoutent d'eux-mêmes une fois en ligne. Ajoutez ici les domaines hébergés ailleurs."
-                  action={addButton}
+            <Tile title="Notifications" level={2} tip="push" tone={o.health.push.configured && o.health.push.devices > 0 ? undefined : "warn"}>
+              <p className="flex items-start gap-2 text-sm text-[var(--muted)]">
+                <FontAwesomeIcon
+                  icon={(o.health.push.configured && o.health.push.devices > 0 ? OK : WARN).icon}
+                  className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${(o.health.push.configured && o.health.push.devices > 0 ? OK : WARN).ink}`}
+                  aria-hidden
                 />
-              </Card>
-            ) : (
-              <ul className="ui-card divide-y divide-[var(--border)] overflow-hidden p-0">
-                {targets.map((t) => (
-                  <TargetRow key={t.id} target={t} />
-                ))}
-              </ul>
-            )}
-          </section>
+                <span>
+                  {!o.health.push.configured
+                    ? "Non configurées : les clés de notification manquent sur le hub."
+                    : o.health.push.devices > 0
+                      ? `${plural(o.health.push.devices, "appareil reçoit", "appareils reçoivent")} les alertes.`
+                      : "Aucun appareil : activez les notifications sur votre téléphone."}
+                </span>
+              </p>
+              {o.health.push.configured ? (
+                <Link to="/reglages#notifications" className="link inline-flex min-h-11 items-center self-start text-sm font-medium">
+                  Réglages des notifications
+                </Link>
+              ) : null}
+            </Tile>
 
-          <section aria-labelledby={`${ids}-zones`} className="space-y-3">
-            <h2 id={`${ids}-zones`} className="text-lg font-semibold">
-              Domaines Cloudflare proposés
-            </h2>
-            <Card className="p-4 sm:p-5">
+            <Tile title="Incidents récents" level={2} tip="incident">
+              {o.recentIncidents.length === 0 ? (
+                <p className="text-sm text-[var(--muted)]">Aucun incident récent.</p>
+              ) : (
+                <>
+                  <ul className="divide-y divide-[var(--border)]">
+                    {o.recentIncidents.slice(0, INCIDENTS_SHOWN).map((i) => (
+                      <li key={i.id} className="py-1.5 text-sm first:pt-0 last:pb-0">
+                        <Link to={`/surveillance/${i.targetId}`} className="link inline-flex min-h-6 items-center font-medium break-words">
+                          {i.targetLabel}
+                        </Link>
+                        <span className="block text-xs text-[var(--muted)]">
+                          {i.endedAt ? `${formatDateTime(i.startedAt)}, durée ${formatDuration(i.durationMs ?? 0)}` : `En cours depuis ${formatSince(i.startedAt)}`}
+                          {i.cause ? `, ${i.cause}` : ""}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                  {o.recentIncidents.length > INCIDENTS_SHOWN ? (
+                    <p className="text-xs text-[var(--muted)]">
+                      Et {o.recentIncidents.length - INCIDENTS_SHOWN} de plus, sur la fiche de chaque adresse.
+                    </p>
+                  ) : null}
+                </>
+              )}
+            </Tile>
+
+            <Tile title="Domaines Cloudflare proposés" level={2} tip="zones" span={2}>
               {zones.loading ? (
                 <p role="status" className="text-sm text-[var(--muted)]">
                   Lecture des domaines…
@@ -220,7 +230,7 @@ export function MonitorPage() {
                 </Banner>
               ) : !zones.data?.available ? (
                 <p className="flex items-start gap-2 text-sm text-[var(--muted)]">
-                  <FontAwesomeIcon icon={faCloud} className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+                  <FontAwesomeIcon icon={faCloud} className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
                   Le jeton de lecture des domaines Cloudflare n'est pas posé : rien n'est proposé. Voir « Marche à suivre », étape 3.
                 </p>
               ) : zones.data.zones.length === 0 ? (
@@ -228,7 +238,7 @@ export function MonitorPage() {
               ) : (
                 <ul className="divide-y divide-[var(--border)]">
                   {zones.data.zones.map((z) => (
-                    <li key={z.name} className="flex min-h-11 flex-wrap items-center justify-between gap-2 py-2">
+                    <li key={z.name} className="flex min-h-11 flex-wrap items-center justify-between gap-2 py-1.5">
                       <span className="break-all font-mono text-sm text-[var(--text)]">{z.name}</span>
                       {z.alreadyWatched ? (
                         <span className="inline-flex items-center gap-1.5 text-sm text-[var(--muted)]">
@@ -244,29 +254,26 @@ export function MonitorPage() {
                   ))}
                 </ul>
               )}
-            </Card>
-          </section>
+            </Tile>
+          </div>
 
-          <section aria-labelledby={`${ids}-incidents`} className="space-y-3">
-            <h2 id={`${ids}-incidents`} className="text-lg font-semibold">
-              Incidents récents
+          <section aria-labelledby="adresses-titre" className="space-y-2">
+            <h2 id="adresses-titre" className="text-lg font-semibold">
+              Adresses surveillées
             </h2>
-            {o.recentIncidents.length === 0 ? (
+            {targets.length === 0 ? (
               <Card>
-                <EmptyState title="Aucun incident récent." />
+                <EmptyState
+                  icon={<FontAwesomeIcon icon={faHeartPulse} className="h-5 w-5" aria-hidden />}
+                  title="Aucune adresse surveillée pour l'instant."
+                  hint="Les sites du hub s'ajoutent d'eux-mêmes une fois en ligne. Ajoutez ici les domaines hébergés ailleurs."
+                  action={addButton}
+                />
               </Card>
             ) : (
-              <ul className="ui-card divide-y divide-[var(--border)] overflow-hidden p-0">
-                {o.recentIncidents.map((i) => (
-                  <li key={i.id} className="px-4 py-3 text-sm">
-                    <Link to={`/surveillance/${i.targetId}`} className="link font-medium">
-                      {i.targetLabel}
-                    </Link>
-                    <span className="block text-[var(--text)]">
-                      {i.endedAt ? `${formatDateTime(i.startedAt)}, durée ${formatDuration(i.durationMs ?? 0)}` : `En cours depuis ${formatSince(i.startedAt)}`}
-                    </span>
-                    {i.cause ? <span className="block text-xs text-[var(--muted)]">{i.cause}</span> : null}
-                  </li>
+              <ul className="monitor-list ui-card divide-y divide-[var(--border)] overflow-hidden p-0">
+                {targets.map((t) => (
+                  <TargetRow key={t.id} target={t} />
                 ))}
               </ul>
             )}
@@ -291,7 +298,7 @@ function TargetRow({ target: t }: { target: MonitorTargetEntry }) {
         </Link>
         <span className="block break-all font-mono text-xs text-[var(--muted)]">{t.hostname}</span>
       </div>
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center justify-end gap-1.5">
         {t.enabled ? (
           <Badge tone={look.tone}>
             <FontAwesomeIcon icon={look.icon} className="h-3 w-3" aria-hidden />
@@ -307,16 +314,19 @@ function TargetRow({ target: t }: { target: MonitorTargetEntry }) {
           </Badge>
         ) : null}
       </div>
-      <p className="text-xs text-[var(--muted)] md:text-right">
-        {t.enabled && formatUptime(t.uptime30d) ? `${formatUptime(t.uptime30d)} sur 30 jours` : null}
-        {t.enabled && (t.lastHub || t.lastEdge) ? (
-          <span className="block">
-            <FontAwesomeIcon icon={faServer} className="mr-1 h-3 w-3" aria-hidden />
-            Contrôlé {formatAgo([t.lastHub?.at, t.lastEdge?.at].filter(Boolean).sort().pop() ?? null)}
-          </span>
-        ) : null}
-        {t.enabled && !t.lastHub && !t.lastEdge ? "Pas encore contrôlé" : null}
-      </p>
+      {t.enabled ? (
+        <p className="monitor-row-meta text-xs text-[var(--muted)]">
+          {[
+            formatUptime(t.uptime30d) ? `${formatUptime(t.uptime30d)} sur 30 jours` : null,
+            t.lastHub || t.lastEdge
+              ? `contrôlé ${formatAgo([t.lastHub?.at, t.lastEdge?.at].filter(Boolean).sort().pop() ?? null)}`
+              : "pas encore contrôlé",
+          ]
+            .filter(Boolean)
+            .join(", ")
+            .replace(/^./, (c) => c.toUpperCase())}
+        </p>
+      ) : null}
     </li>
   );
 }

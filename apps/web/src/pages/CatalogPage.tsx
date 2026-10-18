@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/Button";
 import { StatStrip, type StatItem } from "@/components/ui/StatStrip";
 import { Segmented } from "@/components/ui/Segmented";
 import { FilterSegment, FilterSelect } from "@/components/ui/ListFilters";
+import { Explain } from "@/components/ui/InfoTip";
 import { Banner } from "@/components/ui/Banner";
 import { inputClass } from "@/components/ui/Field";
 import { SiteCard } from "@/components/sites/SiteCard";
@@ -182,6 +183,12 @@ export function CatalogPage() {
                   }
                 >
                   {n.message}
+                  {n.code === "fail_open" ? (
+                    <>
+                      {" "}
+                      <Explain k="failClosed" />
+                    </>
+                  ) : null}
                 </Banner>
               ))}
             </div>
