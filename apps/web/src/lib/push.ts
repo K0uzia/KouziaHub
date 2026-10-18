@@ -72,8 +72,11 @@ export async function enablePush(publicKey: string): Promise<{ permission: Notif
   return { permission, device };
 }
 
-/** Coupe les notifications sur cet appareil (côté navigateur ; le hub retire l'abonnement au prochain envoi refusé). */
-export async function disablePushHere(): Promise<void> {
+/** Désabonne cet appareil : navigateur puis hub (appareil reconnu par son adresse d'abonnement). */
+export async function disablePush(devices: PushDevice[]): Promise<void> {
   const sub = await currentSubscription();
-  if (sub) await sub.unsubscribe();
+  if (!sub) return;
+  const mine = devices.find((d) => d.endpoint === sub.endpoint);
+  await sub.unsubscribe();
+  if (mine) await api(`/api/push/devices/${mine.id}`, { method: "DELETE" });
 }
