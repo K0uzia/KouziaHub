@@ -20,9 +20,15 @@ export function toOperation(op: OperationRow): Operation {
   };
 }
 
-/** Opération à montrer : en cours, dernière en échec, ou certificat encore attendu. */
-async function visibleOperation(site: Site): Promise<Operation | null> {
-  const latest = await prisma.operation.findFirst({ where: { siteId: site.id }, orderBy: { startedAt: "desc" } });
+const latestOperation = (siteId: string) => prisma.operation.findFirst({ where: { siteId }, orderBy: { startedAt: "desc" } });
+
+/**
+ * Opération à montrer : en cours, dernière en échec, ou certificat encore attendu. `preloaded` : dernière
+ * opération lue dans la même transaction que le site (sinon une écriture intercalée donnerait un état
+ * incohérent, ex. opération en échec et domaine encore « en attente »).
+ */
+async function visibleOperation(site: Site, preloaded?: OperationRow | null): Promise<Operation | null> {
+  const latest = preloaded !== undefined ? preloaded : await latestOperation(site.id);
   if (!latest) return null;
   if (latest.status === "RUNNING" || latest.status === "FAILED") return toOperation(latest);
   if (site.domainStatus === "PENDING" || site.domainStatus === "ERROR") {
@@ -43,7 +49,13 @@ export async function erpNames(services: Services): Promise<ErpNames> {
   }
 }
 
-export async function toSummary(site: Site, services: Services, erp: ErpNames, monitor: SiteMonitorBadge | null = null): Promise<SiteSummary> {
+export async function toSummary(
+  site: Site,
+  services: Services,
+  erp: ErpNames,
+  monitor: SiteMonitorBadge | null = null,
+  latestOp?: OperationRow | null,
+): Promise<SiteSummary> {
   const hostname = hostnameOf(site.slug, services.sitesDomain);
   const clientName = site.erpClientId ? (erp.names.get(site.erpClientId) ?? null) : null;
   const current = site.currentVersionId
@@ -61,7 +73,7 @@ export async function toSummary(site: Site, services: Services, erp: ErpNames, m
     clientName,
     state: site.state,
     domainStatus: site.domainStatus,
-    operation: await visibleOperation(site),
+    operation: await visibleOperation(site, latestOp),
     workingDirty: site.workingDirty,
     currentVersion: current ? { id: current.id, number: current.number, publishedAt: current.publishedAt?.toISOString() ?? null } : null,
     thumbnailUrl: site.thumbnailPath && site.thumbnailAt ? `/api/sites/${site.id}/thumbnail?v=${site.thumbnailAt.getTime()}` : null,
@@ -82,12 +94,13 @@ export function erpClientUrl(erpClientId: string | null): string | null {
 }
 
 export async function siteDetail(siteId: string, services: Services): Promise<SiteDetail> {
-  const site = await prisma.site.findUnique({ where: { id: siteId } });
+  // Site et dernière opération lus ensemble (même instantané SQLite).
+  const [site, latestOp] = await prisma.$transaction([prisma.site.findUnique({ where: { id: siteId } }), latestOperation(siteId)]);
   if (!site) throw new HttpError(404, "Site introuvable.");
   const erp = site.erpClientId ? await erpNames(services) : { names: new Map<string, string>(), available: true };
   const files = await prisma.workingFile.aggregate({ where: { siteId }, _count: { _all: true }, _sum: { size: true } });
   return {
-    ...(await toSummary(site, services, erp, (await siteBadges(services.monitor, [site.id])).get(site.id) ?? null)),
+    ...(await toSummary(site, services, erp, (await siteBadges(services.monitor, [site.id])).get(site.id) ?? null, latestOp)),
     pagesProject: site.pagesProject,
     pagesSubdomain: site.pagesSubdomain,
     erpClientUrl: erpClientUrl(site.erpClientId),

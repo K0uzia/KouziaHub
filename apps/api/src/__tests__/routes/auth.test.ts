@@ -54,8 +54,9 @@ describe("connexion", () => {
     const cookie = await loginCookie(app);
     const setup = await app.inject({ method: "POST", url: "/api/auth/2fa/setup", headers: authed(cookie) });
     const secret = setup.json().secret as string;
-    const code = () => hotp(base32Decode(secret), totpStep(Date.now()));
-    const enable = await app.inject({ method: "POST", url: "/api/auth/2fa/enable", headers: authed(cookie), payload: { code: code() } });
+    // Un seul code, rejoué tel quel : recalculé, il changerait au passage d'un pas de 30 s et serait valide.
+    const used = hotp(base32Decode(secret), totpStep(Date.now()));
+    const enable = await app.inject({ method: "POST", url: "/api/auth/2fa/enable", headers: authed(cookie), payload: { code: used } });
     expect(enable.json().recoveryCodes).toHaveLength(10);
 
     const login = await app.inject({ method: "POST", url: "/api/auth/login", headers: ORIGIN, payload: { email: TEST_EMAIL, password: TEST_PASSWORD } });
@@ -66,7 +67,7 @@ describe("connexion", () => {
       method: "POST",
       url: "/api/auth/2fa",
       headers: { ...ORIGIN, cookie: `kz_hub_mfa=${challenge.value}` },
-      payload: { code: code() },
+      payload: { code: used },
     });
     expect(replay.statusCode).toBe(401);
     const recovery = await app.inject({
