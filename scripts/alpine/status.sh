@@ -30,6 +30,14 @@ LAST_UPDATE="$(state_get last-update)"
 echo "  Version   : $(current_commit)   dernière mise à jour : ${LAST_UPDATE:-jamais}"
 echo "  Node      : $(node -v 2>/dev/null || echo absent)"
 
+title "Droits des fichiers"
+if ownership_ok; then
+  echo "  Code (sources, .git, node_modules) : à root, lecture seule pour le service"
+else
+  warn "Un fichier du code est modifiable par le compte du service : lancer « hubctl update » (reprise des droits)"
+fi
+echo "  .env                   : $(stat -c '%U:%G %a' "$KH_ENV_FILE" 2>/dev/null || echo absent) (attendu root:${KH_GROUP} 640)"
+
 title "Services"
 echo "  Hub (kouziahub)        : $(svc_state "$KH_SERVICE")"
 echo "  Tunnel (cloudflared)   : $(svc_state "$KH_TUNNEL_SERVICE")"
@@ -49,10 +57,11 @@ else
 fi
 
 # Migrations : selon le hub s'il répond, sinon comparaison des dossiers et de la base.
-DB="$(db_path)"
+DB="$(db_path)" || exit 1
+DATA="$(data_dir)" || exit 1
 if [ -z "$PENDING" ] && [ -f "$DB" ] && command -v sqlite3 >/dev/null 2>&1; then
-  APPLIED="$(sqlite3 -cmd ".timeout 3000" "$DB" "SELECT migration_name FROM _prisma_migrations WHERE finished_at IS NOT NULL;" 2>/dev/null || true)"
-  sqlite_fix_owner "$DB"
+  # Lecture sous le compte du service : root n'ouvre jamais la base.
+  APPLIED="$(sqlite_as_app "SELECT migration_name FROM _prisma_migrations WHERE finished_at IS NOT NULL;" 2>/dev/null || true)"
   PENDING=0
   for _m in "${KH_APP_DIR}"/prisma/migrations/*/; do
     [ -f "${_m}migration.sql" ] || continue
@@ -79,8 +88,15 @@ else
   echo "  Jeton du tunnel        : vide (hubctl cloudflare)"
 fi
 CHROMIUM="$(env_get HUB_CHROMIUM_PATH)"
-if [ -n "$CHROMIUM" ] && [ -x "$CHROMIUM" ]; then
-  echo "  Vignettes              : automatiques (Chromium)"
+if [ -n "$CHROMIUM" ] && [ -x "$CHROMIUM" ] && chromium_installed; then
+  echo "  Vignettes              : automatiques (Chromium sous le compte ${KH_CHROMIUM_USER})"
+  if firewall_active; then
+    echo "  Pare-feu de Chromium   : posé (table nftables inet kouziahub)"
+  else
+    warn "Pare-feu de Chromium : absent (CT qui refuse nftables ?) : règle Proxmox du README à poser"
+  fi
+elif [ -n "$CHROMIUM" ] && [ -x "$CHROMIUM" ]; then
+  warn "Vignettes : Chromium lancé sans compte dédié (ancienne installation) : relancer « hubctl chromium »"
 elif [ -n "$CHROMIUM" ]; then
   warn "Vignettes : HUB_CHROMIUM_PATH indique $CHROMIUM, introuvable (hubctl chromium)"
 else
@@ -106,7 +122,7 @@ echo "  Lecture des zones      : jeton $(yes_no CLOUDFLARE_ZONES_READ_TOKEN) (hu
 title "Disque"
 df -hP "$KH_APP_DIR" "$KH_BACKUP_DIR" 2>/dev/null | awk 'NR==1 || !seen[$1]++' | sed 's/^/  /'
 if [ -f "$DB" ]; then
-  echo "  Base     : $(du -h "$DB" | awk '{print $1}')   Fichiers des sites : $(du -sh "$(data_dir)" 2>/dev/null | awk '{print $1}')"
+  echo "  Base     : $(du -h "$DB" | awk '{print $1}')   Fichiers des sites : $(du -sh "$DATA" 2>/dev/null | awk '{print $1}')"
 fi
 
 title "Sauvegardes"

@@ -3,7 +3,7 @@
 // Le jeton de déploiement est demandé en saisie masquée, gardé en mémoire le temps du déploiement, jamais
 // écrit ni journalisé. Droits : Account > Workers Scripts > Edit et Account > D1 > Edit, rien d'autre.
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { SCHEMA_FILE, bundleWorker } from "../workers/veille/tools/bundle.js";
@@ -51,10 +51,11 @@ async function main() {
       randomSecret: () => randomBytes(32).toString("base64url"),
     },
   );
-  // Écriture en place : le fichier garde son propriétaire ; droits 600.
+  // Écriture en place : le fichier garde son propriétaire et son groupe (CT : root:kouziahub). Droits
+  // jamais élargis : écriture retirée au groupe et aux autres, lecture gardée au seul groupe (640 au plus).
   writeFileSync(envFile, updateEnvText(readFileSync(envFile, "utf8"), result.envUpdates));
   try {
-    chmodSync(envFile, 0o600);
+    chmodSync(envFile, statSync(envFile).mode & 0o640);
   } catch {
     // Windows : sans objet.
   }

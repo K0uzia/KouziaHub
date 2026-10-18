@@ -34,6 +34,18 @@ if [ "$WANT_CHROMIUM" = "ask" ] && [ "$INTERACTIVE" -eq 0 ]; then WANT_CHROMIUM=
 require_root
 require_alpine
 disk_guard / 1500
+ops_lock refuse
+
+# Le hub, s'il tournait, n'est jamais laissé arrêté par une installation interrompue.
+STOPPED=0
+on_exit() {
+  _rc=$?
+  if [ "$_rc" -ne 0 ] && [ "$STOPPED" -eq 1 ] && service_exists "$KH_SERVICE" && access_configured; then
+    rc-service "$KH_SERVICE" start >/dev/null 2>&1 || true
+  fi
+}
+trap on_exit EXIT
+trap_signals
 
 title "Installation du hub Kouzia"
 cat <<EOF
@@ -55,7 +67,7 @@ apk update
 # python3, make, g++ : secours si un module natif (argon2, sharp) doit être compilé.
 apk add --no-cache \
   nodejs npm git sqlite curl openssl ca-certificates tzdata \
-  tar gzip procps logrotate rsync \
+  tar gzip procps logrotate rsync gnupg \
   python3 make g++ linux-headers
 _major="$(node -p "process.versions.node.split('.')[0]" 2>/dev/null || echo 0)"
 if [ "$_major" -lt "$KH_NODE_MIN" ]; then
@@ -69,18 +81,17 @@ ok "Node $(node -v), npm $(npm -v)"
 title "2/6 Compte de service et dossiers"
 if ! id -u "$KH_USER" >/dev/null 2>&1; then
   addgroup -S "$KH_GROUP" 2>/dev/null || true
-  adduser -S -D -H -h "$KH_APP_DIR" -s /sbin/nologin -G "$KH_GROUP" "$KH_USER"
+  adduser -S -D -H -h "$KH_HOME_DIR" -s /sbin/nologin -G "$KH_GROUP" "$KH_USER"
   ok "Compte ${KH_USER} créé."
 fi
-mkdir -p "$KH_APP_DIR" "$KH_LOG_DIR" "$KH_ETC_DIR" "$KH_BACKUP_DIR" "$KH_STATE_DIR"
-chmod 755 "$KH_LOG_DIR"
-chmod 700 "$KH_ETC_DIR" "$KH_BACKUP_DIR"
+mkdir -p "$KH_APP_DIR"
+fix_service_dirs
 
 # --- Code ---
 if [ -n "$FROM_DIR" ]; then
   [ -d "$FROM_DIR" ] || die "Dossier introuvable : $FROM_DIR"
   log "Copie du code depuis $FROM_DIR..."
-  rsync -a --delete --exclude-from="${SCRIPT_DIR}/conf/rsync-exclude.txt" "${FROM_DIR%/}/" "${KH_APP_DIR}/"
+  rsync -a --no-owner --no-group --delete --exclude-from="${SCRIPT_DIR}/conf/rsync-exclude.txt" "${FROM_DIR%/}/" "${KH_APP_DIR}/"
 elif [ ! -f "${KH_APP_DIR}/package.json" ]; then
   log "Téléchargement du code (${KH_REPO_URL})..."
   _tmp="$(mktemp -d)"
@@ -90,7 +101,9 @@ elif [ ! -f "${KH_APP_DIR}/package.json" ]; then
   rm -rf "$_tmp"
 fi
 [ -f "${KH_APP_DIR}/package.json" ] || die "Code du hub absent de ${KH_APP_DIR}."
-chown -R "${KH_USER}:${KH_GROUP}" "$KH_APP_DIR"
+# Code à root (lecture seule pour le service) puis copie root des scripts, avant toute exécution.
+fix_ownership
+install_root_scripts
 ok "Code en place : $(current_commit)"
 
 # --- .env ---
@@ -118,7 +131,7 @@ if [ ! -f "$KH_ENV_FILE" ]; then
   ' "${KH_APP_DIR}/.env.example" > "$KH_ENV_FILE"
   umask 022
   env_fix_perms
-  ok ".env créé (secrets aléatoires, droits 600, lisible par le service seulement)."
+  ok ".env créé (secrets aléatoires ; root:${KH_GROUP} 640 : le service le lit, ne le modifie pas)."
 else
   env_fix_perms
   ok ".env existant gardé."
@@ -126,38 +139,46 @@ else
     env_has "$_k" || die "$_k est vide dans le .env existant : à corriger avant de continuer (ne jamais le changer si la base contient déjà des données)."
   done
 fi
-DATA_DIR="$(data_dir)"
-mkdir -p "$DATA_DIR"
-chown -R "${KH_USER}:${KH_GROUP}" "$DATA_DIR"
-chmod 750 "$DATA_DIR"
+fix_data_perms
 
 # --- Chromium (facultatif) ---
 if [ "$WANT_CHROMIUM" = "ask" ]; then
-  sh "${SCRIPT_DIR}/configure.sh" chromium --no-restart || warn "Chromium non installé (plus tard : hubctl chromium)."
+  sh "${KH_LIB_DIR}/configure.sh" chromium --no-restart || warn "Chromium non installé (plus tard : hubctl chromium)."
 elif [ "$WANT_CHROMIUM" = "1" ]; then
-  KH_ASSUME_YES=1 sh "${SCRIPT_DIR}/configure.sh" chromium --no-restart || warn "Chromium non installé (plus tard : hubctl chromium)."
+  KH_ASSUME_YES=1 sh "${KH_LIB_DIR}/configure.sh" chromium --no-restart || warn "Chromium non installé (plus tard : hubctl chromium)."
 fi
 
 # --- Construction ---
 title "4/6 Construction de l'application"
 stop_app
+STOPPED=1
+# Installation rejouée sur un hub qui a déjà des données : sauvegarde avant migration, comme update.
+_db="$(db_path)" || exit 1
+if [ -f "$_db" ]; then
+  log "Base existante : sauvegarde avant migration..."
+  BAK="$(sh "${KH_LIB_DIR}/backup.sh" --tag avant-installation)" \
+    || die "La sauvegarde a échoué : installation arrêtée avant toute migration (hubctl logs sauvegarde)."
+  ok "Sauvegarde : $BAK"
+fi
 npm_ci || die "npm ci a échoué (voir le message ci-dessus)."
 db_migrate || die "Les migrations de la base ont échoué."
 build_web || die "La construction de l'interface a échoué."
 
 # --- Services ---
 title "5/6 Service, sauvegardes, journaux"
-install -m 755 "${KH_APP_DIR}/scripts/alpine/openrc/kouziahub" "/etc/init.d/${KH_SERVICE}"
+install -o root -g root -m 755 "${KH_LIB_DIR}/openrc/kouziahub" "/etc/init.d/${KH_SERVICE}"
 cat > "/etc/conf.d/${KH_SERVICE}" <<EOF
 KH_APP_DIR="${KH_APP_DIR}"
 KH_USER="${KH_USER}"
 KH_GROUP="${KH_GROUP}"
 KH_LOG_DIR="${KH_LOG_DIR}"
+KH_HOME_DIR="${KH_HOME_DIR}"
 EOF
+chmod 644 "/etc/conf.d/${KH_SERVICE}"
 rc-update add "$KH_SERVICE" default >/dev/null 2>&1 || true
 install_openrc_scripts
-install_hubctl_link
 install_system_conf
+apply_firewall || true
 rc-update add crond default >/dev/null 2>&1 || true
 rc-service crond start >/dev/null 2>&1 || true
 state_set last-update "$(date '+%Y-%m-%d %H:%M') $(current_commit) (installation)"
@@ -169,17 +190,18 @@ if [ "$INTERACTIVE" -eq 1 ]; then
   if [ ! -s "$KH_TUNNEL_TOKEN_FILE" ]; then
     echo "  Le tunnel relie hub.kouzia.com à ce CT (README, étape 3)."
     if confirm "Avez-vous déjà la commande d'installation du tunnel du hub ?" n; then
-      sh "${SCRIPT_DIR}/configure.sh" cloudflare || warn "Tunnel à refaire : hubctl cloudflare"
+      sh "${KH_LIB_DIR}/configure.sh" cloudflare || warn "Tunnel à refaire : hubctl cloudflare"
     fi
   fi
   if ! access_configured; then
     echo "  Le hub ne démarre qu'avec Cloudflare Access renseigné (README, étape 4)."
     if confirm "Avez-vous déjà le domaine d'équipe et l'AUD de l'application Access ?" n; then
-      sh "${SCRIPT_DIR}/configure.sh" access --no-restart || warn "À refaire : hubctl secrets access"
+      sh "${KH_LIB_DIR}/configure.sh" access --no-restart || warn "À refaire : hubctl secrets access"
     fi
   fi
 fi
 
+STOPPED=0
 if [ "$NO_START" -eq 0 ] && access_configured; then
   start_app || { show_app_errors; warn "Le hub ne répond pas encore : hubctl status puis hubctl logs erreurs."; }
 fi

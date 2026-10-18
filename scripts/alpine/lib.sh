@@ -2,6 +2,14 @@
 # Chargé par « . lib.sh » : ne s'exécute pas seul.
 # Réglages des scripts (préfixe KH_, jamais dans le .env de l'application) :
 #   KH_APP_DIR, KH_USER, KH_GROUP, KH_BACKUP_DIR, KH_BACKUP_KEEP, KH_REPO_URL, KH_REPO_BRANCH.
+#
+# Modèle de droits (matrice complète dans le README, « Droits des fichiers ») :
+#   - tout ce que root exécute ou lit pour décider appartient à root et n'est pas modifiable par le
+#     compte du service : sources, .git, node_modules, interface compilée, .env (root:kouziahub 640),
+#     état des mises à jour, copie des scripts dans /usr/local/lib/kouziahub ;
+#   - le compte du service n'écrit que dans le dossier des données (HUB_DATA_DIR), son dossier
+#     personnel /var/lib/kouziahub et ses journaux ;
+#   - root ne lance jamais un fichier modifiable par le compte, et ne suit jamais un lien qu'il a pu poser.
 # shellcheck disable=SC2034
 
 # crond lance les scripts avec un PATH réduit ; GNU tar (/usr/bin) doit passer avant celui de BusyBox.
@@ -11,21 +19,34 @@ export PATH
 KH_APP_DIR="${KH_APP_DIR:-/opt/kouziahub}"
 KH_USER="${KH_USER:-kouziahub}"
 KH_GROUP="${KH_GROUP:-kouziahub}"
+KH_HOME_DIR="/var/lib/kouziahub"
 KH_SERVICE="kouziahub"
 KH_TUNNEL_SERVICE="cloudflared"
+KH_FIREWALL_SERVICE="kouziahub-firewall"
 KH_LOG_DIR="${KH_LOG_DIR:-/var/log/kouziahub}"
 KH_ETC_DIR="${KH_ETC_DIR:-/etc/kouziahub}"
+# Copie des scripts lancés par root (hubctl, sauvegarde, OpenRC) : root, lecture seule.
+KH_LIB_DIR="/usr/local/lib/kouziahub"
 KH_BACKUP_DIR="${KH_BACKUP_DIR:-/var/backup/kouziahub}"
+KH_EXPORT_DIR="${KH_BACKUP_DIR}/export"
 # Nombre de sauvegardes gardées (les plus récentes). Chacune contient tous les fichiers des sites.
 KH_BACKUP_KEEP="${KH_BACKUP_KEEP:-14}"
+KH_PASSPHRASE_FILE="${KH_ETC_DIR}/backup-pass"
 KH_STATE_DIR="${KH_STATE_DIR:-${KH_APP_DIR}/.deploy-state}"
 KH_ENV_FILE="${KH_APP_DIR}/.env"
 KH_TUNNEL_TOKEN_FILE="${KH_ETC_DIR}/tunnel.token"
+KH_LOCK_FILE="${KH_LOCK_FILE:-/run/kouziahub-ops.lock}"
 KH_REPO_URL="${KH_REPO_URL:-https://github.com/K0uzia/KouziaHub.git}"
 KH_REPO_BRANCH="${KH_REPO_BRANCH:-main}"
 KH_DEFAULT_PORT=3000
 KH_NODE_MIN=22
 KH_CLOUDFLARED_BIN=/usr/local/bin/cloudflared
+# Chromium des vignettes et de la mesure de vitesse : compte dédié, sans accès au .env ni aux données.
+KH_CHROMIUM_USER="kouziahub-chromium"
+KH_CHROMIUM_HOME="/var/lib/kouziahub-chromium"
+KH_CHROMIUM_LAUNCH="${KH_LIB_DIR}/chromium-launch"
+KH_DOAS_CONF="/etc/doas.d/kouziahub-chromium.conf"
+KH_NFT_FILE="${KH_ETC_DIR}/nftables.nft"
 
 # Alpine = musl : sans cela, npm peut installer des binaires glibc (Bus error au build).
 if [ -f /etc/alpine-release ]; then
@@ -49,6 +70,11 @@ ok()   { printf '%s\n' "${C_GREEN}OK${C_RESET} $*"; }
 warn() { printf '%s\n' "${C_YELLOW}ATTENTION${C_RESET} $*" >&2; }
 die()  { printf '%s\n' "${C_RED}ERREUR${C_RESET} $*" >&2; exit 1; }
 title() { printf '\n%s\n' "${C_BOLD}== $* ==${C_RESET}"; }
+
+# Sous ash, le piège EXIT n'est pas garanti sur un signal : chaque signal passe par exit, donc par EXIT.
+trap_signals() {
+  trap 'exit 130' INT TERM HUP
+}
 
 require_root() {
   [ "$(id -u)" -eq 0 ] || die "À lancer en root (dans la console du CT)."
@@ -82,6 +108,31 @@ disk_guard() {
   fi
 }
 
+# --- Verrou des opérations (mise à jour, restauration, installation, sauvegarde) ---
+
+# ops_lock refuse|cron : un seul à la fois. « refuse » : refus avec un message. « cron » : la sauvegarde
+# quotidienne saute son tour (ligne au journal, code 0). Le verrou est hérité par les scripts enfants
+# (KH_OPS_LOCKED) et par « exec » (descripteur 9 gardé ouvert).
+ops_lock() {
+  if [ "${KH_OPS_LOCKED:-0}" = "1" ]; then
+    return 0
+  fi
+  # /run appartient à root : un lien posé là par un autre compte est impossible ; on vérifie quand même.
+  if [ -L "$KH_LOCK_FILE" ]; then
+    rm -f "$KH_LOCK_FILE"
+  fi
+  exec 9>>"$KH_LOCK_FILE"
+  chmod 600 "$KH_LOCK_FILE" 2>/dev/null || true
+  if ! flock -n 9; then
+    if [ "${1:-refuse}" = "cron" ]; then
+      return 2
+    fi
+    die "Une autre opération du hub est en cours (mise à jour, restauration ou sauvegarde). Réessayer dans quelques minutes."
+  fi
+  KH_OPS_LOCKED=1
+  export KH_OPS_LOCKED
+}
+
 # --- Questions (français simple, valeurs par défaut sûres) ---
 
 # ask <variable> <question> [défaut]
@@ -103,10 +154,10 @@ ask_secret() {
   _sec=""
   if [ -t 0 ]; then
     stty -echo 2>/dev/null || true
-    trap 'stty echo 2>/dev/null; exit 130' INT TERM
+    trap 'stty echo 2>/dev/null; exit 130' INT TERM HUP
     IFS= read -r _sec || _sec=""
     stty echo 2>/dev/null || true
-    trap - INT TERM
+    trap_signals
     printf '\n'
   else
     IFS= read -r _sec || _sec=""
@@ -177,9 +228,14 @@ env_set() {
   env_fix_perms
 }
 
+# .env : root:kouziahub 640. Le service le lit (groupe) mais ne peut pas le modifier : il ne doit pas
+# pouvoir changer sa propre configuration (NODE_ENV, Access, HUB_DATA_DIR que root utilise). Seuls
+# root, hubctl et les scripts lancés en root par hubctl (push-keys, veille deploy) l'écrivent.
 env_fix_perms() {
-  chown "${KH_USER}:${KH_GROUP}" "$KH_ENV_FILE" 2>/dev/null || true
-  chmod 600 "$KH_ENV_FILE"
+  [ -L "$KH_ENV_FILE" ] && rm -f "$KH_ENV_FILE"
+  [ -f "$KH_ENV_FILE" ] || return 0
+  chown root:"$KH_GROUP" "$KH_ENV_FILE"
+  chmod 640 "$KH_ENV_FILE"
 }
 
 api_port() {
@@ -190,12 +246,27 @@ health_url() {
   printf 'http://127.0.0.1:%s/api/health' "$(api_port)"
 }
 
-# Dossier des fichiers des sites (HUB_DATA_DIR du .env).
+# Dossier des fichiers des sites (HUB_DATA_DIR du .env). Root y change des droits : le chemin est
+# limité à une liste blanche, jamais un lien symbolique, jamais le dossier du code lui-même.
 data_dir() {
-  env_get HUB_DATA_DIR "${KH_APP_DIR}/data"
+  _dd="$(env_get HUB_DATA_DIR "${KH_APP_DIR}/data")"
+  case "$_dd" in
+    *..*|*' '*) die "HUB_DATA_DIR refusé : $_dd" ;;
+    "${KH_APP_DIR}/"?*|/var/lib/kouziahub/?*|/srv/kouziahub/?*) ;;
+    *) die "HUB_DATA_DIR doit être dans ${KH_APP_DIR}/, /var/lib/kouziahub/ ou /srv/kouziahub/ (actuel : $_dd)." ;;
+  esac
+  case "$_dd" in
+    "${KH_APP_DIR}/node_modules"*|"${KH_APP_DIR}/apps"*|"${KH_APP_DIR}/scripts"*|"${KH_APP_DIR}/.git"*|"${KH_APP_DIR}/prisma"*|"$KH_STATE_DIR"*)
+      die "HUB_DATA_DIR ne peut pas être un dossier du code : $_dd" ;;
+  esac
+  if [ -L "$_dd" ]; then
+    die "HUB_DATA_DIR est un lien symbolique : refusé ($_dd)."
+  fi
+  printf '%s' "${_dd%/}"
 }
 
 # Chemin de la base SQLite, tiré de DATABASE_URL (relatif au dossier prisma/, comme Prisma).
+# Elle doit se trouver dans le dossier des données.
 db_path() {
   _url="$(env_get DATABASE_URL "file:../data/hub.db")"
   _p="${_url#file:}"
@@ -206,33 +277,112 @@ db_path() {
   esac
   _d="$(dirname "$_p")"
   if [ -d "$_d" ]; then
-    _d="$(cd "$_d" && pwd)"
+    _d="$(cd -P "$_d" && pwd)"
   fi
-  printf '%s/%s' "$_d" "$(basename "$_p")"
+  _p="${_d}/$(basename "$_p")"
+  _dd="$(data_dir)" || exit 1
+  case "$_p" in
+    "$_dd"/*) ;;
+    *) die "La base ($_p) doit être dans le dossier des données ($_dd)." ;;
+  esac
+  printf '%s' "$_p"
 }
 
-# sqlite3 lancé en root peut créer les fichiers -wal et -shm à son nom : le service ne pourrait
-# plus écrire. On les rend au compte du service après chaque accès.
-sqlite_fix_owner() {
-  for _f in "$1" "$1-wal" "$1-shm" "$1-journal"; do
-    if [ -e "$_f" ]; then
-      chown "${KH_USER}:${KH_GROUP}" "$_f" 2>/dev/null || true
-    fi
-  done
-}
+# --- Exécution : compte du service ou root, jamais du code modifiable par le compte en root ---
 
-# --- Exécution sous le compte du service ---
-
+# Code du dépôt (root:root, lecture seule pour le compte) exécuté SOUS LE COMPTE DU SERVICE :
+# tout ce qui écrit la base (migrations, compte, double authentification).
 run_as_app() {
   if [ "$(id -u)" -eq 0 ]; then
-    su -s /bin/sh "$KH_USER" -c "export npm_config_libc=musl HOME='${KH_APP_DIR}'; cd '${KH_APP_DIR}' && $*"
+    su -s /bin/sh "$KH_USER" -c "export npm_config_libc=musl HOME='${KH_HOME_DIR}'; cd '${KH_APP_DIR}' && $*"
   else
     sh -c "cd '${KH_APP_DIR}' && $*"
   fi
 }
 
+# Code du dépôt exécuté EN ROOT (npm ci, prisma generate, build, scripts qui écrivent le .env) :
+# seulement après fix_ownership, qui garantit que le compte du service n'a pu le modifier.
+run_as_root() {
+  require_root
+  ownership_ok || die "Le code n'appartient pas à root : lancer « hubctl update » (reprise des droits) avant."
+  sh -c "export npm_config_libc=musl; cd '${KH_APP_DIR}' && $*"
+}
+
+# Vrai si aucun fichier du code (hors données et .env) n'est modifiable par le compte du service.
+# Une fois le code à root, le compte ne peut plus le reprendre (seul root change un propriétaire) :
+# le résultat positif est gardé pour la durée du processus.
+ownership_ok() {
+  [ "${KH_OWNERSHIP_OK:-0}" = "1" ] && return 0
+  _data="$(data_dir)" || exit 1
+  [ "$(stat -c %u "$KH_APP_DIR")" = "0" ] || return 1
+  _bad="$(find "$KH_APP_DIR" -path "$_data" -prune -o -path "$KH_ENV_FILE" -prune -o \( ! -user root -o \( ! -type l \( -perm -020 -o -perm -002 \) \) \) -print 2>/dev/null | head -n 1)"
+  [ -z "$_bad" ] || return 1
+  KH_OWNERSHIP_OK=1
+}
+
+# Reprise des droits, idempotente : installation neuve, mise à jour, ancienne installation où le
+# compte du service possédait le code. Liens symboliques jamais suivis (-h, find sans -L).
+fix_ownership() {
+  require_root
+  _data="$(data_dir)" || exit 1
+  log "Droits des fichiers : code à root, données au compte du service..."
+  find "$KH_APP_DIR" -path "$_data" -prune -o -exec chown -h root:root {} + 2>/dev/null
+  # Personne d'autre que root n'écrit dans le code ; aucun bit setuid ou setgid.
+  find "$KH_APP_DIR" -path "$_data" -prune -o ! -type l -exec chmod go-w,ug-s {} + 2>/dev/null
+  chmod 755 "$KH_APP_DIR"
+  # Crochets git d'une ancienne installation : jamais exécutés (core.hooksPath), retirés quand même.
+  if [ -d "${KH_APP_DIR}/.git/hooks" ]; then
+    find "${KH_APP_DIR}/.git/hooks" -mindepth 1 -maxdepth 1 ! -name '*.sample' -exec rm -rf {} + 2>/dev/null || true
+  fi
+  mkdir -p "$KH_STATE_DIR"
+  chown -h root:root "$KH_STATE_DIR"
+  chmod 755 "$KH_STATE_DIR"
+  env_fix_perms
+  fix_data_perms
+  fix_service_dirs
+  KH_OWNERSHIP_OK=0
+  ownership_ok || die "Reprise des droits incomplète : un fichier du code reste modifiable par le compte du service."
+}
+
+fix_data_perms() {
+  _data="$(data_dir)" || exit 1
+  mkdir -p "$_data"
+  chown -hR "${KH_USER}:${KH_GROUP}" "$_data"
+  chmod 750 "$_data"
+}
+
+# Dossiers propres au compte du service et dossiers de root (aucun n'est partagé).
+fix_service_dirs() {
+  mkdir -p "$KH_HOME_DIR" "$KH_LOG_DIR" "$KH_ETC_DIR" "$KH_BACKUP_DIR"
+  chown -h "${KH_USER}:${KH_GROUP}" "$KH_HOME_DIR"
+  chmod 700 "$KH_HOME_DIR"
+  chown -h root:root "$KH_LOG_DIR" "$KH_ETC_DIR" "$KH_BACKUP_DIR"
+  chmod 755 "$KH_LOG_DIR"
+  chmod 700 "$KH_ETC_DIR" "$KH_BACKUP_DIR"
+}
+
+# --- git en root : aucun crochet, aucun programme lancé par la configuration du dépôt ---
+
+# Clés de configuration du dépôt qui lancent un programme : refusées (dépôt d'une ancienne
+# installation possédée par le compte du service, à refaire si l'une d'elles apparaît).
+git_config_guard() {
+  _cfg="${KH_APP_DIR}/.git/config"
+  [ -f "$_cfg" ] || return 0
+  if grep -Eiq '^[[:space:]]*(\[(filter|diff|merge|credential|url|include|includeif)([[:space:]"]|])|(fsmonitor|hookspath|sshcommand|askpass|pager|editor|gitproxy|textconv|external|helper|command|worktree|sparsecheckout|attributesfile|excludesfile)[[:space:]]*=)' "$_cfg"; then
+    die "Configuration git inattendue dans ${_cfg} (peut lancer un programme) : dépôt à refaire (voir le README, « Droits des fichiers »)."
+  fi
+  if [ -s "${KH_APP_DIR}/.git/info/attributes" ]; then
+    die "Fichier ${KH_APP_DIR}/.git/info/attributes inattendu : dépôt à refaire (voir le README)."
+  fi
+}
+
 git_in_app() {
-  git -c "safe.directory=${KH_APP_DIR}" -C "$KH_APP_DIR" "$@"
+  git_config_guard
+  GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 git \
+    -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.pager=cat -c core.editor=true \
+    -c core.sshCommand=false -c core.askPass= -c credential.helper= -c diff.external= \
+    -c protocol.ext.allow=never -c protocol.file.allow=never -c core.gitProxy= \
+    -c "safe.directory=${KH_APP_DIR}" -C "$KH_APP_DIR" "$@"
 }
 
 is_git_install() {
@@ -248,24 +398,16 @@ current_commit() {
 }
 
 # Aligne le code sur GitHub (source de vérité). .env et data/ ne sont pas suivis par git : conservés.
+# L'adresse est celle des scripts (KH_REPO_URL), jamais celle écrite dans la configuration du dépôt.
 git_sync_from_origin() {
   _branch="${1:-$KH_REPO_BRANCH}"
   log "Récupération de la dernière version (GitHub, branche ${_branch})..."
-  git_in_app fetch --depth 1 origin "+${_branch}:refs/remotes/origin/${_branch}" \
+  git_in_app fetch --no-tags --depth 1 "$KH_REPO_URL" "+${_branch}:refs/remotes/origin/${_branch}" \
     || die "Impossible de joindre GitHub (réseau ou droits d'accès au dépôt)."
   git_in_app checkout -f -B "$_branch" "origin/${_branch}" \
     || die "Impossible de placer le code sur origin/${_branch}."
-  chown_sources
+  fix_ownership
   ok "Code à jour : $(current_commit)"
-}
-
-# Droits sur les sources seulement (pas tout node_modules à chaque fois).
-chown_sources() {
-  for _p in .git apps prisma scripts package.json package-lock.json tsconfig.json Makefile; do
-    if [ -e "${KH_APP_DIR}/${_p}" ]; then
-      chown -R "${KH_USER}:${KH_GROUP}" "${KH_APP_DIR}/${_p}" 2>/dev/null || true
-    fi
-  done
 }
 
 file_sha256() {
@@ -276,26 +418,29 @@ file_sha256() {
   fi
 }
 
+# État des mises à jour : dossier root (755), fichiers root ; jamais suivi s'il devient un lien.
 state_get() {
-  if [ -f "${KH_STATE_DIR}/$1" ]; then
+  if [ -f "${KH_STATE_DIR}/$1" ] && [ ! -L "${KH_STATE_DIR}/$1" ]; then
     cat "${KH_STATE_DIR}/$1"
   fi
 }
 
 state_set() {
   mkdir -p "$KH_STATE_DIR"
+  [ ! -L "${KH_STATE_DIR}/$1" ] || rm -f "${KH_STATE_DIR}/$1"
   printf '%s\n' "$2" > "${KH_STATE_DIR}/$1"
 }
 
-# --- Étapes de construction (compte du service) ---
+# --- Étapes de construction ---
 
+# npm ci et build en root, dans un code à root : le compte du service n'a que la lecture.
 npm_ci() {
   log "Installation des dépendances (npm ci, quelques minutes)..."
-  if ! run_as_app "node scripts/check-lockfile.mjs"; then
+  if ! run_as_root "node scripts/check-lockfile.mjs"; then
     warn "package-lock.json incomplet (souvent un npm install sous Windows) : npm ci risque d'échouer, à corriger dans le dépôt."
   fi
   # --include=dev : tsx (lancement de l'API) et vite (build) sont des dépendances de développement.
-  run_as_app "npm ci --include=dev --no-audit --no-fund" || return 1
+  run_as_root "npm ci --include=dev --no-audit --no-fund" || return 1
   state_set package-lock "$(file_sha256 "${KH_APP_DIR}/package-lock.json")"
   ok "Dépendances installées"
 }
@@ -305,18 +450,33 @@ deps_needed() {
   [ "$(file_sha256 "${KH_APP_DIR}/package-lock.json")" != "$(state_get package-lock)" ]
 }
 
+# Migrations : sous le compte du service (la base lui appartient).
+db_deploy() {
+  run_as_app "npm run --silent db:deploy"
+}
+
+# Client Prisma : écrit dans node_modules, donc en root.
+db_generate() {
+  run_as_root "npm run --silent db:generate"
+}
+
 db_migrate() {
   log "Base de données : migrations puis client Prisma..."
-  run_as_app "npm run --silent db:deploy" || return 1
-  run_as_app "npm run --silent db:generate" || return 1
-  sqlite_fix_owner "$(db_path)"
+  db_deploy || return 1
+  db_generate || return 1
   ok "Base de données à jour"
 }
 
 build_web() {
   log "Construction de l'interface (npm run build)..."
-  run_as_app "npm run --silent build" || return 1
+  run_as_root "npm run --silent build" || return 1
   ok "Interface construite"
+}
+
+# Requête SQLite en lecture, sous le compte du service : root n'ouvre jamais la base lui-même.
+sqlite_as_app() {
+  _db="$(db_path)" || exit 1
+  run_as_app "sqlite3 -readonly -cmd '.timeout 3000' '${_db}' \"$1\""
 }
 
 # --- Services OpenRC ---
@@ -400,33 +560,53 @@ show_app_errors() {
   tail -n 25 "${KH_LOG_DIR}/app.err" 2>/dev/null | sed 's/^/    /' || echo "    (vide)"
 }
 
-# Scripts OpenRC réinstallés seulement s'ils diffèrent de ceux du dépôt.
+# --- Copie des scripts lancés par root, hors du code ---
+
+# Copie scripts/alpine (code à root, vérifié) vers /usr/local/lib/kouziahub, remplacée d'un bloc
+# (renommage) : un script en cours d'exécution continue de lire l'ancienne version.
+install_root_scripts() {
+  require_root
+  ownership_ok || die "Le code n'appartient pas à root : copie des scripts refusée."
+  _src="${KH_APP_DIR}/scripts/alpine"
+  _tmp="$(mktemp -d /usr/local/lib/.kouziahub.XXXXXX)"
+  cp -R "${_src}/." "${_tmp}/"
+  chown -hR root:root "$_tmp"
+  find "$_tmp" -type d -exec chmod 755 {} +
+  find "$_tmp" -type f -exec chmod 644 {} +
+  for _x in hubctl chromium-launch chromium-sandboxed; do
+    if [ -f "${_tmp}/${_x}" ]; then chmod 755 "${_tmp}/${_x}"; fi
+  done
+  rm -rf "${KH_LIB_DIR}.old"
+  if [ -d "$KH_LIB_DIR" ]; then mv "$KH_LIB_DIR" "${KH_LIB_DIR}.old"; fi
+  mv "$_tmp" "$KH_LIB_DIR"
+  rm -rf "${KH_LIB_DIR}.old"
+  ln -sfn "${KH_LIB_DIR}/hubctl" /usr/local/bin/hubctl
+}
+
+# Scripts OpenRC réinstallés seulement s'ils diffèrent de la copie root.
 install_openrc_scripts() {
-  for _svc in "$KH_SERVICE" "$KH_TUNNEL_SERVICE"; do
-    _src="${KH_APP_DIR}/scripts/alpine/openrc/${_svc}"
+  for _svc in "$KH_SERVICE" "$KH_TUNNEL_SERVICE" "$KH_FIREWALL_SERVICE"; do
+    _src="${KH_LIB_DIR}/openrc/${_svc}"
     [ -f "$_src" ] || continue
-    if [ "$_svc" = "$KH_TUNNEL_SERVICE" ] && [ ! -f "/etc/init.d/${_svc}" ]; then
-      continue   # posé par « hubctl cloudflare » seulement
+    if [ "$_svc" != "$KH_SERVICE" ] && [ ! -f "/etc/init.d/${_svc}" ]; then
+      continue   # posés par « hubctl cloudflare » et « hubctl chromium » seulement
     fi
     if ! cmp -s "$_src" "/etc/init.d/${_svc}"; then
-      install -m 755 "$_src" "/etc/init.d/${_svc}"
+      install -o root -g root -m 755 "$_src" "/etc/init.d/${_svc}"
       ok "Service OpenRC installé : ${_svc}"
     fi
   done
 }
 
-install_hubctl_link() {
-  chmod 755 "${KH_APP_DIR}/scripts/alpine/hubctl" 2>/dev/null || true
-  ln -sfn "${KH_APP_DIR}/scripts/alpine/hubctl" /usr/local/bin/hubctl
-}
-
 install_system_conf() {
-  install -m 644 "${KH_APP_DIR}/scripts/alpine/conf/logrotate.kouziahub" /etc/logrotate.d/kouziahub
+  install -o root -g root -m 644 "${KH_LIB_DIR}/conf/logrotate.kouziahub" /etc/logrotate.d/kouziahub
   cat > /etc/periodic/daily/kouziahub-backup <<EOF
 #!/bin/sh
 # Sauvegarde quotidienne du hub (crond d'Alpine : /etc/periodic/daily). Journal : ${KH_LOG_DIR}/backup.log
-exec /bin/sh ${KH_APP_DIR}/scripts/alpine/backup.sh --tag quotidienne >/dev/null 2>&1
+# Copie root des scripts : jamais un fichier modifiable par le compte du service.
+exec /bin/sh ${KH_LIB_DIR}/backup.sh --cron --tag quotidienne >/dev/null 2>&1
 EOF
+  chown root:root /etc/periodic/daily/kouziahub-backup
   chmod 755 /etc/periodic/daily/kouziahub-backup
 }
 
@@ -445,4 +625,120 @@ veille_src_hash() {
     find workers/veille/src workers/veille/schema.sql workers/veille/package.json apps/api/src/lib/monitor/core.ts -type f 2>/dev/null \
       | LC_ALL=C sort | while IFS= read -r _f; do sha256sum "$_f"; done
   ) | sha256sum | awk '{print $1}'
+}
+
+# --- Chromium isolé (vignettes, vitesse) ---
+
+chromium_installed() {
+  id -u "$KH_CHROMIUM_USER" >/dev/null 2>&1 && [ -f "$KH_DOAS_CONF" ]
+}
+
+# Compte dédié, règle doas limitée à une seule commande, enrobages root dans KH_LIB_DIR.
+setup_chromium_isolation() {
+  require_root
+  if ! id -u "$KH_CHROMIUM_USER" >/dev/null 2>&1; then
+    addgroup -S "$KH_CHROMIUM_USER" 2>/dev/null || true
+    adduser -S -D -H -h "$KH_CHROMIUM_HOME" -s /sbin/nologin -G "$KH_CHROMIUM_USER" "$KH_CHROMIUM_USER"
+  fi
+  mkdir -p "$KH_CHROMIUM_HOME"
+  chown -h "${KH_CHROMIUM_USER}:${KH_CHROMIUM_USER}" "$KH_CHROMIUM_HOME"
+  chmod 700 "$KH_CHROMIUM_HOME"
+  mkdir -p /etc/doas.d
+  _conf_tmp="$(mktemp /etc/doas.d/.kouziahub.XXXXXX)"
+  cat > "$_conf_tmp" <<EOF
+# Hub Kouzia : le compte du service lance Chromium sous un compte dédié, par cette seule commande.
+permit nopass ${KH_USER} as ${KH_CHROMIUM_USER} cmd ${KH_LIB_DIR}/chromium-sandboxed
+EOF
+  chown root:root "$_conf_tmp"
+  chmod 400 "$_conf_tmp"
+  if ! doas -C "$_conf_tmp" >/dev/null 2>&1; then
+    rm -f "$_conf_tmp"
+    die "Règle doas refusée par « doas -C » : Chromium reste désactivé."
+  fi
+  mv -f "$_conf_tmp" "$KH_DOAS_CONF"
+  env_set HUB_CHROMIUM_PATH "$KH_CHROMIUM_LAUNCH"
+  env_set HUB_CHROMIUM_USER "$KH_CHROMIUM_USER"
+}
+
+# Lancement d'essai, comme le fera le hub : compte du service > doas > compte Chromium.
+chromium_selftest() {
+  su -s /bin/sh "$KH_USER" -c "'${KH_CHROMIUM_LAUNCH}' --headless --no-sandbox --version" >/dev/null 2>&1
+}
+
+# --- Pare-feu de sortie de Chromium (nftables, compte Chromium seulement) ---
+
+# Résolveurs DNS du CT (souvent la box, donc une adresse privée) : seuls autorisés, port 53.
+dns_servers() {
+  awk '$1 == "nameserver" { print $2 }' "${KH_RESOLV_CONF:-/etc/resolv.conf}" 2>/dev/null
+}
+
+# Écrit la règle (table dédiée, recréée d'un bloc à chaque pose).
+write_nft_rules() {
+  _v4=""
+  _v6=""
+  for _ns in $(dns_servers); do
+    case "$_ns" in
+      *:*) _v6="${_v6:+${_v6}, }${_ns}" ;;
+      *.*) _v4="${_v4:+${_v4}, }${_ns}" ;;
+    esac
+  done
+  # Serveur éphémère des vignettes (hub, 127.0.0.1, port choisi par le système) : plage éphémère.
+  _range="$(awk '{ print $1 "-" $2 }' "${KH_PORT_RANGE_FILE:-/proc/sys/net/ipv4/ip_local_port_range}" 2>/dev/null)"
+  [ -n "$_range" ] || _range="32768-60999"
+  _tmp="$(mktemp "${KH_NFT_FILE}.XXXXXX")"
+  {
+    echo "# Hub Kouzia : sortie réseau du compte ${KH_CHROMIUM_USER} (Chromium). Généré par hubctl, ne pas modifier."
+    echo "table inet kouziahub"
+    echo "delete table inet kouziahub"
+    echo "table inet kouziahub {"
+    echo "  chain output {"
+    echo "    type filter hook output priority filter; policy accept;"
+    echo "    meta skuid \"${KH_CHROMIUM_USER}\" jump chromium"
+    echo "  }"
+    echo "  chain chromium {"
+    echo "    ct state established,related accept"
+    echo "    ip daddr 127.0.0.1 tcp dport ${_range} accept"
+    if [ -n "$_v4" ]; then
+      echo "    ip daddr { ${_v4} } udp dport 53 accept"
+      echo "    ip daddr { ${_v4} } tcp dport 53 accept"
+    fi
+    if [ -n "$_v6" ]; then
+      echo "    ip6 daddr { ${_v6} } udp dport 53 accept"
+      echo "    ip6 daddr { ${_v6} } tcp dport 53 accept"
+    fi
+    echo "    ip daddr { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4 } counter drop"
+    echo "    ip6 daddr { ::/128, ::1/128, ::ffff:0:0/96, fc00::/7, fe80::/10, ff00::/8 } counter drop"
+    echo "  }"
+    echo "}"
+  } > "$_tmp"
+  chown root:root "$_tmp"
+  chmod 644 "$_tmp"
+  mv -f "$_tmp" "$KH_NFT_FILE"
+}
+
+# Pose et contrôle (lecture de la table). Code 0 : posée ; 1 : impossible ici (repli Proxmox, README).
+apply_firewall() {
+  chromium_installed || return 0
+  if ! command -v nft >/dev/null 2>&1; then
+    apk add --no-cache nftables >/dev/null 2>&1 || { warn "nftables introuvable : pare-feu de Chromium non posé (README, repli Proxmox)."; return 1; }
+  fi
+  write_nft_rules
+  if nft -f "$KH_NFT_FILE" 2>/dev/null && nft list table inet kouziahub 2>/dev/null | grep -q "skuid"; then
+    # Reposé au démarrage du CT par le service OpenRC dédié.
+    if service_exists "$KH_FIREWALL_SERVICE"; then
+      rc-update add "$KH_FIREWALL_SERVICE" default >/dev/null 2>&1 || true
+    fi
+    ok "Pare-feu de Chromium posé (table inet kouziahub)."
+    return 0
+  fi
+  if service_exists "$KH_FIREWALL_SERVICE"; then
+    rc-update del "$KH_FIREWALL_SERVICE" default >/dev/null 2>&1 || true
+  fi
+  warn "Le CT refuse le pare-feu nftables (CT non privilégié sans droit réseau, ou module absent)."
+  warn "Chromium reste isolé par son compte, mais sa sortie réseau n'est pas filtrée : poser la règle Proxmox (README, « Pare-feu de Chromium »)."
+  return 1
+}
+
+firewall_active() {
+  command -v nft >/dev/null 2>&1 && nft list table inet kouziahub 2>/dev/null | grep -q "skuid"
 }

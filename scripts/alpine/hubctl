@@ -3,14 +3,15 @@
 #
 #   hubctl               menu
 #   hubctl <commande>    commande directe (hubctl help)
-# Dans le PATH : /usr/local/bin/hubctl, lien vers ce fichier (posé par install et update).
+# Dans le PATH : /usr/local/bin/hubctl, lien vers la copie root /usr/local/lib/kouziahub/hubctl (posée par
+# install et update), jamais vers le dépôt : root n'exécute aucun fichier modifiable par le compte du service.
 
 set -eu
 
 SELF="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
 SCRIPT_DIR="$(cd "$(dirname "$SELF")" && pwd)"
-if [ ! -f "${SCRIPT_DIR}/lib.sh" ] && [ -f /opt/kouziahub/scripts/alpine/lib.sh ]; then
-  SCRIPT_DIR=/opt/kouziahub/scripts/alpine
+if [ ! -f "${SCRIPT_DIR}/lib.sh" ] && [ -f /usr/local/lib/kouziahub/lib.sh ]; then
+  SCRIPT_DIR=/usr/local/lib/kouziahub
 fi
 [ -f "${SCRIPT_DIR}/lib.sh" ] || { echo "ERREUR : scripts du hub introuvables." >&2; exit 1; }
 # shellcheck source=lib.sh
@@ -37,8 +38,10 @@ Suivi
 
 Données
   backup                      sauvegarder maintenant
+  backup --export [sauvegarde]  archive chiffrée (GPG) à copier hors du CT
   restore [sauvegarde]        remettre une sauvegarde (liste et choix si rien n'est indiqué)
   restore --check <sauvegarde>  vérifier une sauvegarde sans rien modifier
+  restore <archive.tar.gpg>   remettre une archive exportée (phrase de passe demandée)
 
 Réglages (rien n'est affiché à l'écran)
   cloudflare                  jeton du tunnel Cloudflare du hub
@@ -94,7 +97,8 @@ run_cmd() {
       case "$_subject" in *[!A-Za-z0-9@.:/_+-]*) die "Adresse refusée : $_subject" ;; esac
       grep -q "\"push:keys\"" "${KH_APP_DIR}/package.json" \
         || die "Cette version du hub ne sait pas encore créer les clés : lancer d'abord « hubctl update »."
-      run_as_app "npm run --silent push:keys -- --env-file='${KH_ENV_FILE}' --subject='${_subject}'"
+      # Écrit le .env (root) : lancé en root, sur un code dont run_as_root vérifie qu'il appartient à root.
+      run_as_root "npm run --silent push:keys -- --env-file='${KH_ENV_FILE}' --subject='${_subject}'"
       env_fix_perms
       restart_app || true
       if env_has MONITOR_WORKER_URL; then
@@ -106,7 +110,7 @@ run_cmd() {
         deploy)
           require_root
           [ -t 0 ] || die "hubctl veille deploy se lance dans un terminal (le jeton est demandé, invisible)."
-          run_as_app "npm run --silent veille:deploy -- --env-file='${KH_ENV_FILE}'"
+          run_as_root "npm run --silent veille:deploy -- --env-file='${KH_ENV_FILE}'"
           env_fix_perms
           state_set veille-src "$(veille_src_hash)"
           restart_app || true
@@ -196,12 +200,12 @@ show_menu() {
     menu_item 12 "Revenir à la version d'avant" "après une mise à jour"
     menu_item 13 "Couper la double authentification" "téléphone perdu"
     menu_item 14 "Installer ou réparer" "long"
-    printf '
-  %s
-' "${C_BOLD}Surveillance${C_RESET}"
+    printf '\n  %s\n' "${C_BOLD}Surveillance${C_RESET}"
     menu_item 15 "Clés des notifications" "une seule fois"
     menu_item 16 "Déployer la veille Cloudflare" "jeton demandé, jamais gardé"
     menu_item 17 "Jeton de lecture des zones" "détection des domaines"
+    printf '\n  %s\n' "${C_BOLD}Copie hors du CT${C_RESET}"
+    menu_item 18 "Exporter une sauvegarde chiffrée" "GPG, à copier ailleurs"
     menu_item q "Quitter" ""
     printf '\n  Choix : '
     _choice=""
@@ -221,6 +225,7 @@ show_menu() {
       12) menu_run rollback ;;
       13) menu_run 2fa-reset ;;
       14) menu_run install ;;
+      18) menu_run backup --export ;;
       15) menu_run push-keys ;;
       16) menu_run veille deploy ;;
       17) menu_run secrets veille ;;

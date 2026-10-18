@@ -1,0 +1,31 @@
+#!/bin/sh
+# Chromium sous le compte kouziahub-chromium (via doas, appelé par chromium-launch).
+# Profil jetable dans son propre dossier : tout --user-data-dir reçu (dossier du compte du service,
+# illisible ici) est remplacé. Chemin du navigateur fixé ici, jamais lu dans l'environnement.
+set -eu
+[ "$(id -un)" = "kouziahub-chromium" ] || { echo "chromium-sandboxed : à lancer par doas -u kouziahub-chromium" >&2; exit 126; }
+HOME=/var/lib/kouziahub-chromium
+TMPDIR="${HOME}/tmp"
+export HOME TMPDIR
+umask 077
+mkdir -p "$TMPDIR"
+# Profils de lancements précédents (plus d'un jour) : retirés.
+find "$HOME" -mindepth 1 -maxdepth 1 -name 'profil.*' -mtime +0 -exec rm -rf {} + 2>/dev/null || true
+PROFILE="$(mktemp -d "${HOME}/profil.XXXXXX")"
+_skip=0
+for _a do
+  shift
+  if [ "$_skip" = "1" ]; then _skip=0; continue; fi
+  case "$_a" in
+    --user-data-dir=*) continue ;;
+    --user-data-dir) _skip=1; continue ;;
+  esac
+  set -- "$@" "$_a"
+done
+for _bin in /usr/bin/chromium-browser /usr/bin/chromium; do
+  if [ -x "$_bin" ]; then
+    exec "$_bin" --user-data-dir="$PROFILE" "$@"
+  fi
+done
+echo "chromium-sandboxed : Chromium introuvable (hubctl chromium)" >&2
+exit 127

@@ -58,7 +58,7 @@ install_cloudflared() {
   _tmp="$(mktemp)"
   curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${_arch}" -o "$_tmp" \
     || { rm -f "$_tmp"; die "Téléchargement de cloudflared impossible (réseau)."; }
-  install -m 755 "$_tmp" "$KH_CLOUDFLARED_BIN"
+  install -o root -g root -m 755 "$_tmp" "$KH_CLOUDFLARED_BIN"
   rm -f "$_tmp"
   ok "cloudflared installé : $("$KH_CLOUDFLARED_BIN" --version 2>/dev/null | head -n 1)"
 }
@@ -104,7 +104,7 @@ EOF
   fi
 
   install_cloudflared
-  install -m 755 "${KH_APP_DIR}/scripts/alpine/openrc/cloudflared" /etc/init.d/cloudflared
+  install -o root -g root -m 755 "${KH_LIB_DIR}/openrc/cloudflared" /etc/init.d/cloudflared
   rc-update add cloudflared default >/dev/null 2>&1 || true
   rc-service cloudflared restart >/dev/null 2>&1 || rc-service cloudflared start >/dev/null 2>&1 || true
   sleep 3
@@ -178,7 +178,8 @@ EOF
   fi
   ask_secret V "Secret partagé avec l'ERP (invisible)"
   if [ -n "$V" ]; then
-    printf '%s' "$V" | grep -Eq '^[A-Za-z0-9+/=_-]{32,200}$'       || die "Secret invalide (${#V} caractères reçus, 32 au moins). Rien n'a changé."
+    printf '%s' "$V" | grep -Eq '^[A-Za-z0-9+/=_-]{32,200}$' \
+      || die "Secret invalide (${#V} caractères reçus, 32 au moins). Rien n'a changé."
     env_set HUB_READ_SECRET "$V"
     ok "Secret enregistré."
   fi
@@ -267,12 +268,22 @@ configure_chromium() {
     confirm "Installer Chromium ?" n || { echo "  Pas de Chromium : vignettes envoyées à la main."; return 0; }
   fi
   disk_guard / 600
-  apk add --no-cache chromium nss freetype harfbuzz ca-certificates ttf-freefont
-  _bin=/usr/bin/chromium-browser
-  [ -x "$_bin" ] || _bin="$(command -v chromium-browser || command -v chromium || true)"
-  [ -n "$_bin" ] || die "Chromium installé mais introuvable."
-  env_set HUB_CHROMIUM_PATH "$_bin"
-  ok "Chromium installé (${_bin})."
+  # doas : seul moyen pour un compte non root de passer sous un autre compte, limité à une commande
+  # (su-exec exige root). nftables : filtre de la sortie réseau du compte de Chromium.
+  apk add --no-cache chromium nss freetype harfbuzz ca-certificates ttf-freefont doas nftables
+  if [ ! -x /usr/bin/chromium-browser ] && [ ! -x /usr/bin/chromium ]; then
+    die "Chromium installé mais introuvable."
+  fi
+  [ -x "$KH_CHROMIUM_LAUNCH" ] || die "Lanceur absent : ${KH_CHROMIUM_LAUNCH} (hubctl update)."
+  setup_chromium_isolation
+  if chromium_selftest; then
+    ok "Chromium lancé sous le compte ${KH_CHROMIUM_USER} (essai réussi)."
+  else
+    warn "Essai de lancement par doas en échec : vignettes indisponibles tant que ce n'est pas corrigé (hubctl status)."
+  fi
+  install -o root -g root -m 755 "${KH_LIB_DIR}/openrc/${KH_FIREWALL_SERVICE}" "/etc/init.d/${KH_FIREWALL_SERVICE}"
+  apply_firewall || true
+  ok "Chromium installé : HUB_CHROMIUM_PATH=${KH_CHROMIUM_LAUNCH}, compte ${KH_CHROMIUM_USER}."
 }
 
 restart_if_needed() {

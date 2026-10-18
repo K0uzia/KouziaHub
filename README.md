@@ -147,6 +147,7 @@ Le 1er du mois, le hub prépare le rapport PDF de chaque site surveillé. Le té
 | `hubctl backup` | Sauvegarder maintenant |
 | `hubctl restore` | Remettre une sauvegarde (liste, choix, copie de l'état actuel avant) |
 | `hubctl restore --check <sauvegarde>` | Vérifier une sauvegarde sans rien changer |
+| `hubctl backup --export` | Archive chiffrée d'une sauvegarde, à copier hors du CT |
 | `hubctl logs erreurs` | Dernières erreurs du hub (aussi `app`, `tunnel`, `sauvegarde`) |
 | `hubctl restart` | Redémarrer le hub |
 | `hubctl 2fa-reset` | Téléphone perdu : coupe la double authentification, puis `hubctl admin` |
@@ -154,9 +155,64 @@ Le 1er du mois, le hub prépare le rapport PDF de chaque site surveillé. Le té
 | `hubctl veille deploy` | Déployer ou mettre à jour la veille Cloudflare (jeton demandé, jamais gardé) |
 | `hubctl secrets veille` | Jeton de lecture des zones Cloudflare |
 
-Sauvegardes : chaque nuit dans `/var/backup/kouziahub`, les 14 plus récentes sont gardées. Chacune contient la base, les fichiers des sites et le fichier `.env` : elle contient donc des secrets, ne la copiez pas n'importe où. Pour une copie hors du CT, activer la sauvegarde Proxmox du CT (Datacenter > Backup).
+Sauvegardes : chaque nuit dans `/var/backup/kouziahub`, les 14 plus récentes sont gardées. Chacune contient la base, les fichiers des sites et le fichier `.env` en clair : elle contient donc des secrets et ne sort jamais du CT telle quelle. Si une mise à jour ou une restauration est en cours à l'heure de la sauvegarde, celle-ci saute son tour (une ligne dans `hubctl logs sauvegarde`).
+
+### Copier une sauvegarde hors du CT (chiffrée)
+
+1. Dans le CT : `hubctl backup --export`. La première fois, choisir une phrase de passe (16 caractères au moins) et la noter dans votre gestionnaire de mots de passe : sans elle, l'archive ne s'ouvre pas, et si le CT est perdu, elle n'existe plus nulle part ailleurs.
+2. Le hub crée `/var/backup/kouziahub/export/kouziahub-<date>.tar.gpg`, chiffrée (GPG, AES256). Il en garde les 3 dernières.
+3. Dans le « Shell » du nœud Proxmox : `pct pull <numéro du CT> /var/backup/kouziahub/export/<fichier> /root/<fichier>`, puis copier ce fichier sur le NAS ou le PC.
+4. Pour la remettre (même CT ou CT neuf, après `hubctl install`) : `pct push <numéro du CT> /root/<fichier> /root/<fichier>`, puis dans le CT `hubctl restore /root/<fichier>` ; la phrase de passe est demandée si le CT ne la connaît pas.
+
+En plus, la sauvegarde Proxmox du CT (Datacenter > Backup) garde une copie de tout le CT.
 
 Le service redémarre seul s'il plante (10 fois par minute au plus, ensuite `hubctl status` l'indique : lire `hubctl logs erreurs`, puis `hubctl restart`).
+
+## Sécurité du CT (exploitation)
+
+### Droits des fichiers
+
+Le compte du service (`kouziahub`, celui qui fait tourner le hub et manipule les fichiers envoyés) ne peut modifier ni le code, ni sa configuration, ni rien de ce que root exécute. `hubctl update` remet ces droits à chaque fois (y compris sur une ancienne installation) et `hubctl status` les contrôle.
+
+| Chemin | Propriétaire | Droits | Qui écrit | Qui exécute ou lit |
+|---|---|---|---|---|
+| `/opt/kouziahub` (sources, `prisma`, `package*.json`) | root:root | dossiers 755, fichiers 644 (aucune écriture groupe ou autres) | root (git, `hubctl update`) | service : lit et exécute ; root : `npm ci`, build, `prisma generate` |
+| `/opt/kouziahub/.git` | root:root | 755 / 644, sans crochets | root, avec `core.hooksPath=/dev/null`, `core.fsmonitor=false` et sans programme de la configuration | personne |
+| `/opt/kouziahub/node_modules` | root:root | 755 / 644, exécutables d'origine gardés | root (`npm ci`) | service : lit et exécute |
+| `/opt/kouziahub/apps/web/dist` | root:root | 755 / 644 | root (build) | service : lit (sert l'interface) |
+| `/opt/kouziahub/.deploy-state` | root:root | 755 / 644 | root | root |
+| `/opt/kouziahub/.env` | root:kouziahub | 640 | root (`hubctl`, et `push-keys`, `veille deploy` lancés en root) | service : lit |
+| `/opt/kouziahub/data` (HUB_DATA_DIR) | kouziahub:kouziahub | 750 | service (base, fichiers des sites, vignettes) | service ; sauvegarde et restauration y passent par le compte du service, jamais root |
+| `/var/lib/kouziahub` | kouziahub | 700 | service (dossier personnel, caches) | service |
+| `/var/log/kouziahub` | root:root | 755 ; `app.*` kouziahub 640, `cloudflared.*` nobody 640, `backup.log` root | chaque service le sien | root |
+| `/usr/local/lib/kouziahub` | root:root | 755 / 644 ; `hubctl`, `chromium-*` 755 | root (copie à chaque installation et mise à jour) | root (`hubctl`, sauvegarde, OpenRC) ; service : `chromium-launch` |
+| `/usr/local/bin/hubctl` | root | lien vers la copie ci-dessus | root | root |
+| `/etc/init.d/kouziahub`, `cloudflared`, `kouziahub-firewall`, `/etc/conf.d/kouziahub` | root:root | 755 / 644 | root | OpenRC |
+| `/etc/periodic/daily/kouziahub-backup` | root:root | 755 | root | crond, vers la copie root de `backup.sh` |
+| `/etc/kouziahub` (`tunnel.token`, `backup-pass`, `nftables.nft`) | root:root | 700 ; secrets 600 | root | root |
+| `/var/backup/kouziahub` (et `export/`) | root:root | 700 ; fichiers 600 | root | root |
+| `/etc/doas.d/kouziahub-chromium.conf` | root:root | 400 | root | doas |
+| `/var/lib/kouziahub-chromium` | kouziahub-chromium | 700 | Chromium (profils jetables) | Chromium |
+| `/run/kouziahub-ops.lock` | root | 600 | root (verrou des opérations) | root |
+
+Si `hubctl update` s'arrête sur « configuration git inattendue » : le dépôt a pu être modifié par le compte du service avant cette correction. Le refaire : `mv /opt/kouziahub/.git /root/git-suspect`, puis `git clone --depth 1 https://github.com/K0uzia/KouziaHub.git /root/hub-neuf && mv /root/hub-neuf/.git /opt/kouziahub/.git`, puis `hubctl update`.
+
+### Chromium isolé et son pare-feu
+
+Chromium (vignettes, mesure de vitesse) ne tourne pas sous le compte du service mais sous un compte à lui, `kouziahub-chromium`, sans accès au `.env` ni aux données. Le hub le lance par `/usr/local/lib/kouziahub/chromium-launch`, qui passe par `doas` avec une seule règle autorisée (cette commande, vers ce compte, rien d'autre).
+
+Sa sortie réseau est filtrée par nftables (table `inet kouziahub`, posée par `hubctl chromium`, `hubctl install`, `hubctl update` et au démarrage) : il ne peut joindre ni la box, ni le réseau local, ni l'ERP, ni les autres services du CT. Seuls le serveur local des vignettes et les DNS du CT lui restent ouverts. Le hub, lui, joint toujours l'ERP (port 3100) et Cloudflare. `hubctl status` indique si la règle est posée.
+
+Un CT non privilégié peut refuser nftables. Dans ce cas, `hubctl chromium` le dit et il faut poser la règle dans Proxmox. Elle s'applique alors à tout le CT, d'où les deux exceptions :
+
+1. Datacenter > Firewall > Options : vérifier « Input Policy » avant d'activer « Firewall » (le laisser à ACCEPT si vous n'êtes pas sûr), puis Firewall : Yes.
+2. CT `kouziahub` > Network > `net0` > Edit : cocher « Firewall ».
+3. CT `kouziahub` > Firewall > Add, dans cet ordre (direction « out ») :
+   - ACCEPT, protocole tcp, destination l'IP du CT de l'ERP, port de destination 3100 ;
+   - ACCEPT, protocole udp, destination l'IP de la box (ses DNS), port 53 ; puis la même en tcp ;
+   - DROP, destination `10.0.0.0/8` ; puis `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`, `169.254.0.0/16` (une règle chacune).
+4. CT `kouziahub` > Firewall > Options : Firewall : Yes. Laisser « Output Policy » à ACCEPT (Cloudflare et Internet restent joignables).
+5. Vérifier : `hubctl status` (le hub répond) et, dans le hub, une vignette se crée.
 
 ## Développement (PC)
 
