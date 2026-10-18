@@ -99,7 +99,10 @@ export function TargetPanel({
 
   const certTone = t.certificate && (!t.certificate.ok ? "bad" : t.certificate.daysLeft <= EXPIRY_WARN_DAYS ? "warn" : undefined);
   const domainTone = t.domainExpiry?.daysLeft != null && t.domainExpiry.daysLeft <= EXPIRY_WARN_DAYS ? "warn" : undefined;
-  const reports = detail.data?.reports ?? [];
+  // Mois en cours : rapport fabriqué à la demande par le hub (le rapport complet est créé le 1er du mois suivant).
+  const thisMonth = new Date().toISOString().slice(0, 7);
+  const listed = detail.data?.reports ?? [];
+  const reports = listed.some((r) => r.month === thisMonth) ? listed : [{ id: "current", month: thisMonth, createdAt: "" }, ...listed];
   const incidents = detail.data?.incidents ?? [];
 
   return (
@@ -181,7 +184,9 @@ export function TargetPanel({
                   : "Échéance inconnue (le registre ne la publie pas)."}
             </Fact>
             <Fact label="Vitesse (téléphone)">
-              {t.speed
+              {t.speed && t.speed.ttfbMs == null && t.speed.lcpMs == null
+                ? `Mesure impossible (accueil injoignable), essai ${formatAgo(t.speed.measuredAt)}.`
+                : t.speed
                 ? `Premier octet ${formatMs(t.speed.ttfbMs)}, affichage principal ${formatMs(t.speed.lcpMs)}${t.speed.cls != null ? `, stabilité ${formatDecimal(t.speed.cls, 2)}` : ""}${t.speed.requests != null ? `, ${t.speed.requests} requêtes` : ""}. Mesurée ${formatAgo(t.speed.measuredAt)}.`
                 : "Pas encore mesurée (une mesure par semaine)."}
             </Fact>
@@ -195,7 +200,7 @@ export function TargetPanel({
                     : t.dns.status === "no_reference"
                       ? "Pas encore de référence."
                       : `Contrôle impossible${t.dns.detail ? ` : ${t.dns.detail}` : ""}.`}
-              {t.dns?.status === "drift" || t.dns?.status === "no_reference" ? (
+              {!t.dns || t.dns.status === "drift" || t.dns.status === "no_reference" ? (
                 <span className="mt-2 block">
                   <Button variant="secondary" onClick={() => setAccept("dns")} disabled={busy !== null}>
                     Accepter comme nouvelle référence
@@ -213,7 +218,7 @@ export function TargetPanel({
                     : t.content.status === "no_reference"
                       ? "Pas encore de référence."
                       : "Contrôle impossible."}
-              {t.content?.status === "changed" || t.content?.status === "no_reference" ? (
+              {!t.content || t.content.status === "changed" || t.content.status === "no_reference" ? (
                 <span className="mt-2 block">
                   <Button variant="secondary" onClick={() => setAccept("content")} disabled={busy !== null}>
                     Accepter comme nouvelle référence
@@ -275,9 +280,7 @@ export function TargetPanel({
             </div>
             <div>
               <p className="text-sm font-medium text-[var(--text)]">Rapports mensuels</p>
-              {reports.length === 0 ? (
-                <p className="mt-1 text-sm text-[var(--muted)]">Pas encore de rapport : le premier est créé le 1er du mois.</p>
-              ) : (
+              {reports.length === 0 ? null : (
                 <ul className="mt-2 flex flex-wrap gap-2">
                   {reports.map((r) => (
                     <li key={r.id}>
@@ -288,6 +291,7 @@ export function TargetPanel({
                       >
                         <FontAwesomeIcon icon={faFilePdf} className="h-3.5 w-3.5 text-[var(--danger)]" aria-hidden />
                         {monthLabel(r.month)}
+                        {r.id === "current" ? " (en cours)" : ""}
                         <span className="sr-only">(PDF)</span>
                       </a>
                     </li>

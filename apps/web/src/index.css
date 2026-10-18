@@ -702,7 +702,7 @@ option:hover {
 @media (min-width: 48rem) {
   .catalog-tools {
     grid-template-areas: "search type state";
-    grid-template-columns: minmax(12rem, 26rem) auto minmax(11rem, 14rem);
+    grid-template-columns: minmax(10rem, 26rem) max-content minmax(11rem, 14rem);
     justify-content: start;
   }
 }

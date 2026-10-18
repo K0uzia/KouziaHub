@@ -22,12 +22,17 @@ export function NotificationsSection() {
     typeof Notification === "undefined" ? null : Notification.permission,
   );
   const [subscribedHere, setSubscribedHere] = useState<boolean | null>(null);
+  /** Adresse d'abonnement de ce navigateur : repère « Cet appareil » dans la liste. */
+  const [hereEndpoint, setHereEndpoint] = useState<string | null>(null);
   const [busy, setBusy] = useState<"enable" | "disable" | "test" | "remove" | null>(null);
   const [removing, setRemoving] = useState<PushDevice | null>(null);
 
   useEffect(() => {
     void currentSubscription()
-      .then((s) => setSubscribedHere(Boolean(s)))
+      .then((s) => {
+        setSubscribedHere(Boolean(s));
+        setHereEndpoint(s?.endpoint ?? null);
+      })
       .catch(() => setSubscribedHere(false));
   }, []);
 
@@ -40,6 +45,7 @@ export function NotificationsSection() {
       setPermission(res.permission);
       if (res.device) {
         setSubscribedHere(true);
+        setHereEndpoint(res.device.endpoint);
         devices.setData((prev) => [...(prev ?? []).filter((d) => d.id !== res.device!.id), res.device!]);
         toast.success("Notifications activées sur cet appareil");
       } else if (res.permission === "denied") toast.error("Notifications refusées par le navigateur");
@@ -54,7 +60,11 @@ export function NotificationsSection() {
     setBusy("disable");
     try {
       await disablePushHere();
+      // L'abonnement de cet appareil est aussi retiré du hub (sinon il reste dans la liste jusqu'au prochain refus).
+      const mine = devices.data?.find((d) => d.endpoint === hereEndpoint);
+      if (mine) await api(`/api/push/devices/${mine.id}`, { method: "DELETE" }).catch(() => undefined);
       setSubscribedHere(false);
+      setHereEndpoint(null);
       toast.success("Notifications coupées sur cet appareil");
       void devices.reload();
     } catch (err) {
@@ -171,7 +181,10 @@ export function NotificationsSection() {
               {list.map((d) => (
                 <li key={d.id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
                   <div className="min-w-0 text-sm">
-                    <p className="text-[var(--text)]">{d.label}</p>
+                    <p className="flex flex-wrap items-center gap-2 text-[var(--text)]">
+                      {d.label}
+                      {hereEndpoint && d.endpoint === hereEndpoint ? <Badge tone="primary">Cet appareil</Badge> : null}
+                    </p>
                     <p className="text-xs text-[var(--muted)]">
                       Ajouté le {formatDate(d.createdAt)}
                       {d.lastSuccessAt ? `, dernière réception ${formatAgo(d.lastSuccessAt)}` : ""}

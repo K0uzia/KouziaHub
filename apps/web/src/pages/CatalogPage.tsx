@@ -10,6 +10,7 @@ import { Card, EmptyState, PageHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { StatStrip, type StatItem } from "@/components/ui/StatStrip";
 import { Segmented } from "@/components/ui/Segmented";
+import { FilterSegment, FilterSelect } from "@/components/ui/ListFilters";
 import { Banner } from "@/components/ui/Banner";
 import { inputClass } from "@/components/ui/Field";
 import { SiteCard } from "@/components/sites/SiteCard";
@@ -77,10 +78,11 @@ export function CatalogPage() {
       : [];
 
   const count = (f: (s: SiteSummary) => boolean, list: SiteSummary[]) => list.filter(f).length;
+  // Nombre par valeur, comme les filtres de l'ERP (Tous 12, Clients 9, Perso 3).
   const kindOptions = [
-    { id: "all" as const, label: "Tous" },
-    { id: "client" as const, label: "Clients" },
-    { id: "perso" as const, label: "Perso" },
+    { id: "all" as const, label: "Tous", count: sites.length },
+    { id: "client" as const, label: "Clients", count: count((s) => s.kind === "CLIENT", sites) },
+    { id: "perso" as const, label: "Perso", count: count((s) => s.kind === "PERSO", sites) },
   ];
   const stateOptions = [
     { id: "all" as const, label: "Tous les états", count: byQuery.length },
@@ -255,29 +257,15 @@ export function CatalogPage() {
                       />
                     </div>
                   </div>
-                  <div className="min-w-0 space-y-1.5 [grid-area:type]">
-                    <span className="block text-sm font-medium text-[var(--text)] max-sm:sr-only">
-                      Type
-                    </span>
-                    <Segmented options={kindOptions} value={kind} onChange={(v) => setParam("type", v, "all")} label="Type de site" className="w-full" fieldHeight />
-                  </div>
-                  <div className="min-w-0 space-y-1.5 [grid-area:state]">
-                    <label htmlFor={`${searchId}-state`} className="block text-sm font-medium text-[var(--text)]">
-                      État
-                    </label>
-                    <select
-                      id={`${searchId}-state`}
-                      value={stateFilter}
-                      onChange={(e) => setParam("etat", e.target.value, "all")}
-                      className={`${inputClass} cursor-pointer`}
-                    >
-                      {stateOptions.map((o) => (
-                        <option key={o.id} value={o.id}>
-                          {o.label} ({o.count})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                  <FilterSegment
+                    label="Type de site"
+                    options={kindOptions}
+                    value={kind}
+                    onChange={(v) => setParam("type", v, "all")}
+                    compact
+                    className="[grid-area:type]"
+                  />
+                  <FilterSelect label="État" options={stateOptions} value={stateFilter} onChange={(v) => setParam("etat", v, "all")} className="[grid-area:state] sm:w-full" />
                 </div>
 
                 <p role="status" className="text-sm text-[var(--muted)] max-sm:sr-only">
