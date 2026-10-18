@@ -96,6 +96,8 @@
   --tile-min: 16rem;
   --tile-min-wide: 21rem;
   --bento-gap: 0.5rem;
+  /* Tuile chiffrée courte : 150 px au moins, deux côte à côte dès 360 px de large. */
+  --tile-compact: 9.375rem;
   /* Bulle d'explication : largeur de lecture. */
   --tip-max: 20rem;
   /* Fond du QR code de la double authentification (les applications lisent mal un QR sur fond sombre). */
@@ -786,11 +788,13 @@ option:hover {
   }
 }
 
-/* Tuile élargie seulement quand la grille a exactement 2 colonnes (3 colonnes dès 49rem) : équilibre les lignes. */
-@container (min-width: 32.5rem) and (max-width: 48.99rem) {
-  .bento:not(.bento-wide) > .tile-span-2-pair {
-    grid-column: span 2;
-  }
+/* Rangée de tuiles chiffrées courtes (N1) : toute la ligne de la grille, deux tuiles côte à côte au téléphone
+   si chacune garde --tile-compact, quatre au plus sur grand écran. */
+.bento-compact {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: var(--bento-gap);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, max(var(--tile-compact), (100% - 3 * var(--bento-gap)) / 4)), 1fr));
 }
 
 @container (min-width: 42.5rem) {

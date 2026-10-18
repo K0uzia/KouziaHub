@@ -2,19 +2,20 @@ import type { IconDefinition } from "@fortawesome/fontawesome-svg-core";
 import {
   faArrowsRotate,
   faCircleCheck,
+  faCircleExclamation,
   faCircleMinus,
   faHourglassHalf,
   faTrashCan,
-  faTriangleExclamation,
 } from "@fortawesome/free-solid-svg-icons";
 import type { OperationKind, SiteSummary, VersionEntry } from "@hub/contract";
 import type { BadgeTone } from "@/components/ui/Card";
+import { formatSince, VERDICT } from "@/lib/monitor";
 
-/** Filtre d'état du catalogue. */
-export type StateFilter = "all" | "online" | "offline" | "creating" | "error";
+/** Filtre d'état du catalogue : un filtre par état affiché (« En panne » a le sien, comme son badge). */
+export type StateFilter = "all" | "down" | "error" | "creating" | "offline" | "online";
 
 export type DisplayState = {
-  key: "online" | "offline" | "creating" | "error" | "deleting" | "busy";
+  key: "down" | "online" | "offline" | "creating" | "error" | "deleting" | "busy";
   label: string;
   icon: IconDefinition;
   tone: BadgeTone;
@@ -37,12 +38,32 @@ export function waitsForCertificate(site: Pick<SiteSummary, "operation">): boole
   return !!op && op.status === "DONE" && op.steps.some((s) => s.key === "certificate" && s.status === "waiting");
 }
 
-/** État affiché d'un site : texte + icône + teinte (la teinte n'est jamais seule à porter l'information). */
-export function displayState(site: Pick<SiteSummary, "state" | "operation" | "domainStatus">): DisplayState {
+type StatusInput = Pick<SiteSummary, "state" | "operation" | "domainStatus"> & Partial<Pick<SiteSummary, "monitor">>;
+
+/** Une cible surveillée du site est en panne (« Problème local » et « vu par Cloudflare seul » n'en sont pas). */
+export function isDown(site: Partial<Pick<SiteSummary, "monitor">>): boolean {
+  return !!site.monitor && site.monitor.watched > 0 && site.monitor.verdict === "down";
+}
+
+/**
+ * État UNIQUE affiché d'un site (carte, liste, fiche), par priorité :
+ * 1. panne (surveillance) ; 2. suppression, erreur, création et opérations en cours ; 3. hors ligne ; 4. en ligne.
+ * Texte + icône + teinte (la teinte n'est jamais seule à porter l'information).
+ */
+export function displayState(site: StatusInput, now = new Date()): DisplayState {
+  if (isDown(site)) {
+    const since = site.monitor!.openIncidentSince;
+    return { key: "down", label: since ? `Panne depuis ${formatSince(since, now)}` : "En panne", icon: VERDICT.down.icon, tone: "red" };
+  }
+  return siteState(site);
+}
+
+/** État du site seul (interrupteur, opérations), sans la surveillance : base de l'état détaillé de la fiche. */
+export function siteState(site: Pick<SiteSummary, "state" | "operation" | "domainStatus">): DisplayState {
   const op = site.operation;
   if (site.state === "DELETING") return { key: "deleting", label: "Suppression en cours", icon: faTrashCan, tone: "neutral" };
   if (op?.status === "FAILED" || site.domainStatus === "ERROR")
-    return { key: "error", label: "Erreur", icon: faTriangleExclamation, tone: "red" };
+    return { key: "error", label: "Erreur", icon: faCircleExclamation, tone: "red" };
   if (waitsForCertificate(site))
     return { key: "busy", label: "Certificat en cours", icon: faHourglassHalf, tone: "blue" };
   if (site.state === "CREATING") return { key: "creating", label: "En création", icon: faHourglassHalf, tone: "amber" };
@@ -55,13 +76,38 @@ export function displayState(site: Pick<SiteSummary, "state" | "operation" | "do
   return { key: "offline", label: "Hors ligne", icon: faCircleMinus, tone: "neutral" };
 }
 
-export function matchesState(site: SiteSummary, filter: StateFilter): boolean {
-  if (filter === "all") return true;
+/**
+ * Filtre où range le badge affiché : chaque site sous un seul filtre, celui de son état. Une opération en
+ * cours (publication, certificat) reste sous l'état de l'interrupteur ; une suppression n'est que sous « Tous ».
+ */
+export function stateBucket(site: StatusInput): Exclude<StateFilter, "all"> | null {
   const key = displayState(site).key;
-  if (filter === "online") return site.state === "ONLINE" && key !== "error";
-  if (filter === "offline") return site.state === "OFFLINE" && key !== "error";
-  if (filter === "creating") return key !== "error" && site.state === "CREATING";
-  return key === "error";
+  if (key === "down" || key === "error" || key === "creating" || key === "online" || key === "offline") return key;
+  if (key === "deleting") return null;
+  return site.state === "ONLINE" ? "online" : site.state === "OFFLINE" ? "offline" : "creating";
+}
+
+export function matchesState(site: StatusInput, filter: StateFilter): boolean {
+  return filter === "all" || stateBucket(site) === filter;
+}
+
+/**
+ * État détaillé de la fiche quand le site et sa surveillance divergent (« En ligne, mais en panne vue de
+ * l'extérieur depuis 18 h 26 ») ; null quand le badge dit déjà tout.
+ */
+export function divergence(site: StatusInput, now = new Date()): string | null {
+  const m = site.monitor;
+  // Heure insécable : « 19 h 12 » ne se coupe pas en fin de ligne.
+  const since = (iso: string) => formatSince(iso, now).replace(/ /g, " ");
+  if (!m || m.watched === 0) return null;
+  const base = siteState(site).label;
+  if (m.verdict === "down")
+    return m.openIncidentSince
+      ? `${base}, mais en panne vue de l'extérieur depuis ${since(m.openIncidentSince)}.`
+      : `${base}, mais en panne vue de l'extérieur.`;
+  if (m.verdict === "local_only") return `${base} ; surveillance : problème local (le hub ne joint pas le site, Cloudflare oui).`;
+  if (m.verdict === "edge_only") return `${base} ; surveillance : vu en échec par Cloudflare seulement.`;
+  return null;
 }
 
 /** Une opération en cours ou un certificat en attente : la fiche s'actualise d'elle-même. */

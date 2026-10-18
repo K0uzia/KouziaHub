@@ -3,8 +3,14 @@ import type { SiteSummary } from "@hub/contract";
 import { Badge } from "@/components/ui/Card";
 import { displayState } from "@/lib/sites";
 
-/** État d'un site en texte + icône (la couleur ne porte jamais seule l'information). */
-export function StateBadge({ site, className = "" }: { site: Pick<SiteSummary, "state" | "operation" | "domainStatus">; className?: string }) {
+/** État unique d'un site (priorité de displayState) en texte + icône (la couleur ne porte jamais seule l'information). */
+export function StateBadge({
+  site,
+  className = "",
+}: {
+  site: Pick<SiteSummary, "state" | "operation" | "domainStatus"> & Partial<Pick<SiteSummary, "monitor">>;
+  className?: string;
+}) {
   const s = displayState(site);
   return (
     <Badge tone={s.tone} className={className}>

@@ -5,7 +5,7 @@ import { faGlobe, faMagnifyingGlass, faPlus } from "@fortawesome/free-solid-svg-
 import type { CatalogResponse, Notice, SiteSummary } from "@hub/contract";
 import { useResource, useStoredChoice } from "@/lib/useResource";
 import { useTitle } from "@/lib/useTitle";
-import { isSettling, matchesState, type StateFilter } from "@/lib/sites";
+import { isSettling, matchesState, stateBucket, type StateFilter } from "@/lib/sites";
 import { Card, EmptyState, PageHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { StatStrip, type StatItem } from "@/components/ui/StatStrip";
@@ -20,7 +20,7 @@ import { NewSiteDialog } from "@/components/sites/NewSiteDialog";
 
 type KindFilter = "all" | "client" | "perso";
 const KIND_IDS: readonly KindFilter[] = ["all", "client", "perso"];
-const STATE_IDS: readonly StateFilter[] = ["all", "online", "offline", "creating", "error"];
+const STATE_IDS: readonly StateFilter[] = ["all", "down", "error", "creating", "offline", "online"];
 const VIEWS = ["cards", "list"] as const;
 /** Relecture du catalogue tant qu'un site change d'état (création, mise en ligne, certificat). */
 const POLL_MS = 3000;
@@ -84,6 +84,7 @@ export function CatalogPage() {
     { id: "offline" as const, label: "Hors ligne", count: count((s) => matchesState(s, "offline"), byQuery) },
     { id: "creating" as const, label: "En création", count: count((s) => matchesState(s, "creating"), byQuery) },
     { id: "error" as const, label: "Erreur", count: count((s) => matchesState(s, "error"), byQuery) },
+    { id: "down" as const, label: "En panne", count: count((s) => matchesState(s, "down"), byQuery) },
   ];
 
   function errorParams() {
@@ -98,12 +99,16 @@ export function CatalogPage() {
   const demoNotices = notices.filter((n) => n.code in DEMO_SHORT);
   const otherNotices = notices.filter((n) => !(n.code in DEMO_SHORT));
   const stats = catalog.data?.stats;
+  // Compteurs tirés du même état unique que les badges et les filtres (une panne compte en panne, pas en ligne).
+  const tally = (f: Exclude<StateFilter, "all">) => count((s) => stateBucket(s) === f, sites);
+  const errors = tally("error");
   const statItems: StatItem[] = stats
     ? [
-        { label: "En ligne", value: stats.online, tone: stats.online ? "success" : "default" },
-        { label: "Hors ligne", value: stats.offline },
-        { label: "En création", shortLabel: "Création", value: stats.creating, tone: stats.creating ? "warning" : "default" },
-        { label: "En erreur", shortLabel: "Erreurs", value: stats.errors, tone: stats.errors ? "danger" : "default" },
+        { label: "En ligne", value: tally("online"), tone: tally("online") ? "success" : "default" },
+        { label: "En panne", shortLabel: "Pannes", value: tally("down"), tone: tally("down") ? "danger" : "default" },
+        { label: "Hors ligne", value: tally("offline") },
+        { label: "En création", shortLabel: "Création", value: tally("creating"), tone: tally("creating") ? "warning" : "default" },
+        { label: "En erreur", shortLabel: "Erreurs", value: errors, tone: errors ? "danger" : "default" },
         {
           label: "Projets Cloudflare utilisés",
           shortLabel: "Projets",
@@ -143,21 +148,21 @@ export function CatalogPage() {
         </p>
       ) : (
         <div className="space-y-4 sm:space-y-6">
-          {statItems.length ? <StatStrip items={statItems} dense /> : null}
+          {statItems.length ? <StatStrip items={statItems} dense className="lg:grid-cols-6" /> : null}
 
-          {stats?.errors ? (
+          {errors ? (
             // Sites en erreur remontés en tête, avec un lien qui filtre la liste (au lieu d'un filtre à deviner).
             <Banner
               level="error"
               action={
                 stateFilter === "error" ? undefined : (
                   <Link to={`?${errorParams()}`} replace className="link inline-flex min-h-11 items-center text-sm font-medium">
-                    Afficher {stats.errors > 1 ? "ces sites" : "ce site"}
+                    Afficher {errors > 1 ? "ces sites" : "ce site"}
                   </Link>
                 )
               }
             >
-              {stats.errors > 1 ? `${stats.errors} sites en erreur` : "1 site en erreur"} : une opération a échoué, elle peut être reprise depuis la fiche.
+              {errors > 1 ? `${errors} sites en erreur` : "1 site en erreur"} : une opération a échoué, elle peut être reprise depuis la fiche.
             </Banner>
           ) : null}
           {demoNotices.length ? (

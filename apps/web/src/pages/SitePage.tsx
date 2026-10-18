@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faArrowUpRightFromSquare } from "@fortawesome/free-solid-svg-icons";
 import type { OperationKind, SiteDetail, VersionEntry } from "@hub/contract";
 import { useResource } from "@/lib/useResource";
 import { useTitle } from "@/lib/useTitle";
-import { isSettling, OPERATION_TITLE, waitsForCertificate } from "@/lib/sites";
+import { divergence, isSettling, OPERATION_TITLE, waitsForCertificate } from "@/lib/sites";
 import { Card, EmptyState, PageHeader } from "@/components/ui/Card";
 import { Button, ButtonLink, buttonClass } from "@/components/ui/Button";
 import { Tabs, useTabParam } from "@/components/ui/Tabs";
@@ -92,6 +92,7 @@ export function SitePage() {
     );
   }
 
+  const detail = divergence(data);
   const nextVersion = Math.max(0, ...(versions.data ?? []).map((v) => v.number), data.currentVersion?.number ?? 0) + 1;
   const showOperation =
     data.operation && (data.operation.status === "RUNNING" || data.operation.status === "FAILED" || waitsForCertificate(data));
@@ -102,10 +103,23 @@ export function SitePage() {
         back={{ to: "/", label: "Sites" }}
         title={data.name}
         subtitle={
-          <span className="flex flex-wrap items-center gap-2">
-            <StateBadge site={data} />
-            <span className="break-all font-mono">{data.hostname}</span>
-          </span>
+          <>
+            <span className="flex flex-wrap items-center gap-2">
+              <StateBadge site={data} />
+              <span className="break-all font-mono">{data.hostname}</span>
+            </span>
+            {detail ? (
+              // État détaillé quand le site et sa surveillance divergent (le badge ne montre que le plus grave).
+              <span className="mt-1.5 block text-[var(--text)]">
+                {detail}{" "}
+                {tab === "surveillance" ? null : (
+                  <Link to="?tab=surveillance" className="link link-inline">
+                    Voir la surveillance
+                  </Link>
+                )}
+              </span>
+            ) : null}
+          </>
         }
         actions={
           data.state === "ONLINE" ? (
