@@ -28,7 +28,7 @@ export const SITE_HEADERS: Record<string, string> = {
  */
 export type WorkerOptions = {
   cacheRules?: boolean;
-  /** Exceptions du site aux fichiers d'outillage (onglet Serveur) : chemins exacts ou dossiers terminés par « / ». */
+  /** Exceptions du site aux fichiers d'outillage (onglet Serveur) : chemins exacts seulement. */
   allow?: readonly string[];
   /** CSP du site (onglet Serveur), ajoutée à la CSP minimale sans l'affaiblir. */
   csp?: string | null;
