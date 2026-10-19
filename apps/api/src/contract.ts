@@ -86,6 +86,11 @@ export type ServerConfigState = {
   generatedAt: string | null;
   /** La page 404 du profil existe dans la version de travail. */
   notFoundPagePresent: boolean;
+  /**
+   * Le .htaccess que le hub générerait aujourd'hui (profil et fichiers actuels) diffère du dernier écrit :
+   * généré, il sera mis à jour à la prochaine publication ; modifié à la main, « régénérer ? ».
+   */
+  outdated: boolean;
 };
 
 /** Aperçu de ce que le hub génère depuis le profil (rien n'est écrit). */

@@ -2,7 +2,16 @@ import { useEffect, useId, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type { IconDefinition } from "@fortawesome/fontawesome-svg-core";
-import { faChevronRight, faCircleCheck, faCircleMinus, faCopy, faPenToSquare, faRotateRight } from "@fortawesome/free-solid-svg-icons";
+import {
+  faBoxArchive,
+  faChevronRight,
+  faCircleCheck,
+  faCircleMinus,
+  faCopy,
+  faPenToSquare,
+  faRotateRight,
+  faShieldHalved,
+} from "@fortawesome/free-solid-svg-icons";
 import type { CanonicalHost, ServerConfigPreview, SiteDetail, UpdateSiteInput } from "@hub/contract";
 import { api, errorMessage, type ApiError } from "@/lib/api";
 import { copyText } from "@/lib/clipboard";
@@ -41,7 +50,7 @@ export function ServerTab({ site, onSite }: { site: SiteDetail; onSite: (s: Site
   const reloadPreview = preview.reload;
 
   // Profil ou fichier changés (enregistrement, régénération, envoi dans l'explorateur) : aperçu relu.
-  const signature = `${site.finalDomain}|${site.canonicalHost}|${site.notFoundPage}|${site.serverConfig.status}|${site.serverConfig.generatedAt}`;
+  const signature = `${site.finalDomain}|${site.canonicalHost}|${site.notFoundPage}|${site.serverConfig.status}|${site.serverConfig.generatedAt}|${site.serverConfig.outdated}|${site.serverConfig.notFoundPagePresent}`;
   useEffect(() => {
     void reloadPreview();
   }, [signature, reloadPreview]);
@@ -163,6 +172,31 @@ export function ServerTab({ site, onSite }: { site: SiteDetail; onSite: (s: Site
 
       <Card className="space-y-4 p-4 sm:p-5">
         <h2 className="text-base font-semibold">Fichier .htaccess</h2>
+        <ul className="space-y-2 text-sm">
+          <li className="flex items-start gap-2">
+            <FontAwesomeIcon icon={faShieldHalved} className="mt-0.5 h-4 w-4 shrink-0 text-[var(--success)]" aria-hidden />
+            <span>
+              <span className="font-medium text-[var(--text)]">Version de travail : protections actives.</span>{" "}
+              <span className="text-[var(--muted)]">
+                Sur {site.hostname}, Cloudflare Pages ignore le .htaccess : le hub protège la version de travail par son _worker.js et
+                son _headers (noindex, en-têtes de sécurité, 403 sur les fichiers cachés et de développement, redirection des adresses
+                pages.dev).
+              </span>
+            </span>
+          </li>
+          <li className="flex items-start gap-2">
+            <FontAwesomeIcon icon={faBoxArchive} className="mt-0.5 h-4 w-4 shrink-0 text-[var(--info)]" aria-hidden />
+            <span>
+              <span className="font-medium text-[var(--text)]">
+                {state.status === "modified" ? "Production : votre .htaccess modifié sera exporté tel quel." : "Production : .htaccess prêt pour l'export."}
+              </span>{" "}
+              <span className="text-[var(--muted)]">
+                Il sert à l'hébergement final chez Hostinger, dans la version de production (onglet Versions, « Télécharger la version de
+                production »). Généré, il suit le contenu publié : page 404, dossiers de fichiers hashés, sitemap.
+              </span>
+            </span>
+          </li>
+        </ul>
         <p className="flex items-start gap-2 text-sm text-[var(--text)]">
           <FontAwesomeIcon icon={look.icon} className={`mt-0.5 h-4 w-4 shrink-0 ${look.ink}`} aria-hidden />
           <span>
@@ -173,6 +207,24 @@ export function ServerTab({ site, onSite }: { site: SiteDetail; onSite: (s: Site
             ) : null}
           </span>
         </p>
+        {state.outdated && state.status === "generated" ? (
+          <Banner level="info">
+            Le contenu du site a changé (page 404, dossiers hashés ou sitemap) : le .htaccess généré sera mis à jour à la prochaine
+            publication.
+          </Banner>
+        ) : null}
+        {state.outdated && state.status === "modified" ? (
+          <Banner
+            level="warning"
+            action={
+              <Button variant="secondary" onClick={() => void regenerate(false)} disabled={regenerating}>
+                Régénérer…
+              </Button>
+            }
+          >
+            La configuration générée a changé : régénérer ? Votre .htaccess modifié à la main n'est jamais remplacé sans confirmation.
+          </Banner>
+        ) : null}
         {!state.notFoundPagePresent ? (
           <Banner level="warning">
             La page 404 <span className="font-mono">{site.notFoundPage}</span> n'existe pas dans les fichiers de travail : ajoutez-la, ou
@@ -188,7 +240,7 @@ export function ServerTab({ site, onSite }: { site: SiteDetail; onSite: (s: Site
       <Card className="space-y-3 p-4 sm:p-5">
         <div>
           <h2 className="text-base font-semibold">Aperçu</h2>
-          <p className="mt-1 text-sm text-[var(--muted)]">Lecture seule : ce que le hub génère depuis le profil.</p>
+          <p className="mt-1 text-sm text-[var(--muted)]">Lecture seule : ce que le hub génère depuis le profil et les fichiers de travail.</p>
         </div>
         {preview.error && !preview.data ? (
           <Banner level="error" action={<Button variant="ghost" onClick={() => void preview.reload()}>Réessayer</Button>}>

@@ -316,7 +316,7 @@ describe("export de production", () => {
     const { files } = await exportZip();
     expect(files.has("sitemap.xml")).toBe(false);
     expect(files.get("robots.txt")).toBe("User-agent: *\nAllow: /\n");
-    expect(files.get(".htaccess")).toContain("Domaine final pas encore renseigné");
+    expect(files.get(".htaccess")).toContain("# À compléter : domaine final non renseigné dans l'onglet Serveur");
   });
 
   it("cas d'une sortie d'Astro : sitemap-index et enfant gardés, pages en dossier, 404, fichiers hachés", async () => {

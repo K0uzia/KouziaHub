@@ -13,6 +13,31 @@ export type ServerProfile = {
   notFoundPage: string;
 };
 
+/**
+ * Ce que le .htaccess lit dans les fichiers du site (version de travail ou version exportée) : il suit le
+ * contenu réel, jamais une supposition.
+ */
+export type SiteContent = {
+  /** Dossiers de fichiers au nom hashé réellement présents (« _astro », « assets », « _next/static »...). */
+  hashedDirs: string[];
+  /** La page 404 du profil existe. */
+  notFoundPresent: boolean;
+  /** Sitemaps présents à la racine (« sitemap-index.xml », « sitemap.xml »...). */
+  sitemaps: string[];
+};
+
+/** Dossiers de build aux noms hashés, connus des générateurs : Vite, Astro, Next.js, SvelteKit, Nuxt. */
+export const HASHED_DIRS = ["assets", "_astro", "_next/static", "_app/immutable", "_nuxt"] as const;
+
+export function siteContentOf(paths: Iterable<string>, notFoundPage: string): SiteContent {
+  const list = [...paths];
+  return {
+    hashedDirs: HASHED_DIRS.filter((d) => list.some((p) => p.startsWith(`${d}/`))),
+    notFoundPresent: list.includes(notFoundPage.slice(1)),
+    sitemaps: list.filter((p) => /^sitemap[^/]*\.xml$/i.test(p)).sort(),
+  };
+}
+
 export const HTACCESS_PATH = ".htaccess";
 export const DEFAULT_NOT_FOUND = "/404.html";
 export const GENERATED_MARKER = "# Généré par le hub Kouzia.";
@@ -84,20 +109,32 @@ export function notFoundPageError(value: string): string | null {
 
 const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** .htaccess complet. Tout est sous IfModule : un module absent n'empêche jamais le site de répondre. */
-export function buildHtaccess(profile: ServerProfile): string {
+/**
+ * .htaccess complet. Tout est sous IfModule : un module absent n'empêche jamais le site de répondre.
+ * Protections toujours présentes (en-têtes, 403 sur les fichiers cachés et de développement, -Indexes,
+ * ServerSignature Off, méthodes, cache par type, compression, HTTPS 301) ; ce qui dépend d'une donnée absente
+ * (domaine final, page 404) est commenté « À compléter », jamais écrit faux.
+ */
+export function buildHtaccess(profile: ServerProfile, content: SiteContent): string {
   const lines: string[] = [];
   const add = (...l: string[]) => lines.push(...l);
   add(
     `${GENERATED_MARKER} Modifiable : le hub ne l'écrase plus s'il est modifié à la main`,
     "# (régénération seulement sur confirmation, depuis la fiche du site).",
-    "# Source : profil du site (domaine final, forme canonique, page 404) dans le hub.",
+    "# Source : profil du site (domaine final, forme canonique, page 404) et fichiers de la version, dans le hub.",
+    "# Régénéré à chaque publication tant qu'il n'est pas modifié à la main.",
+    "# Sert à l'hébergement final (Hostinger) : Cloudflare Pages, qui sert la version de travail, l'ignore.",
     "",
     "# Listing des dossiers coupé (AllowOverride Options requis, autorisé chez Hostinger).",
     "Options -Indexes -MultiViews",
     "ServerSignature Off",
     "DirectoryIndex index.html",
-    `ErrorDocument 404 ${profile.notFoundPage}`,
+    ...(content.notFoundPresent
+      ? [`ErrorDocument 404 ${profile.notFoundPage}`]
+      : [
+          `# À compléter : page 404 absente des fichiers (${profile.notFoundPage}) : ajoutez-la, ou changez la page 404 dans l'onglet Serveur.`,
+          `# ErrorDocument 404 ${profile.notFoundPage}`,
+        ]),
     "",
     "<IfModule mod_rewrite.c>",
     "    RewriteEngine On",
@@ -121,7 +158,7 @@ export function buildHtaccess(profile: ServerProfile): string {
     );
   } else {
     add(
-      "    # Domaine final pas encore renseigné dans le hub : aucune redirection d'hôte (www ou non).",
+      "    # À compléter : domaine final non renseigné dans l'onglet Serveur (redirection www ou sans www, HSTS).",
       "    # HTTPS (X-Forwarded-Proto : derrière un proxy en HTTP, pas de boucle)",
       "    RewriteCond %{HTTPS} !=on",
       "    RewriteCond %{HTTP:X-Forwarded-Proto} !=https",
@@ -164,7 +201,7 @@ export function buildHtaccess(profile: ServerProfile): string {
     "<IfModule mod_headers.c>",
     domain
       ? "    # HSTS seulement sur le domaine final (certificat public valide). Derrière Cloudflare, le réglage HSTS de Cloudflare prime."
-      : "    # HSTS : à activer seulement sur le domaine final au certificat valide (renseigner le domaine final dans le hub).",
+      : "    # À compléter : domaine final non renseigné dans l'onglet Serveur (HSTS seulement sur le domaine final au certificat valide).",
     domain
       ? '    Header always set Strict-Transport-Security "max-age=31536000" env=FINAL_HOST'
       : '    # Header always set Strict-Transport-Security "max-age=31536000"',
@@ -185,20 +222,34 @@ export function buildHtaccess(profile: ServerProfile): string {
   );
   // Les règles par dossier passent par une variable d'environnement (FilesMatch ne voit que le nom du
   // fichier) ; les règles par type l'excluent, car les FilesMatch s'appliquent après et l'écraseraient.
-  const byPath = CACHE_RULES.filter((r) => r.byPath);
-  const guard = byPath.length > 0 ? " env=!HUB_PATH_CACHE" : "";
+  // Dossiers hashés : seulement ceux présents dans les fichiers (un an d'immuabilité sur un dossier absent ne sert à rien).
+  const immutable = CACHE_RULES.find((r) => r.byPath)!;
+  const dirs = content.hashedDirs;
+  const guard = dirs.length > 0 ? " env=!HUB_PATH_CACHE" : "";
   for (const rule of [...CACHE_RULES].reverse()) {
     if (rule.byPath) continue;
     add(`    # ${rule.label}`, `    <FilesMatch "${rule.pattern}">`, `        Header set Cache-Control "${rule.cacheControl}"${guard}`, "    </FilesMatch>");
   }
-  for (const rule of byPath) {
+  if (dirs.length > 0) {
     add(
-      `    # ${rule.label}`,
+      `    # Fichiers au nom hashé (${dirs.map((d) => `/${d}/`).join(", ")}, présents dans les fichiers) : 1 an, immuables`,
       "    <IfModule mod_setenvif.c>",
-      `        SetEnvIf Request_URI "${rule.pattern}" HUB_PATH_CACHE`,
+      `        SetEnvIf Request_URI "^/(?:${dirs.map(escapeRegex).join("|")})/" HUB_PATH_CACHE`,
       "    </IfModule>",
-      `    Header set Cache-Control "${rule.cacheControl}" env=HUB_PATH_CACHE`,
+      `    Header set Cache-Control "${immutable.cacheControl}" env=HUB_PATH_CACHE`,
     );
+  } else {
+    add("    # Aucun dossier de fichiers hashés dans les fichiers (assets/, _astro/, _next/static/...) : pas de cache d'un an.");
+  }
+  if (content.sitemaps.length > 0) {
+    add(
+      `    # Sitemap présent (${content.sitemaps.map((p) => `/${p}`).join(", ")}) et robots.txt : revalidés chaque heure`,
+      '    <FilesMatch "^(?:sitemap[^/]*\\.xml|robots\\.txt)$">',
+      '        Header set Cache-Control "public, max-age=3600"',
+      "    </FilesMatch>",
+    );
+  } else {
+    add("    # Pas de sitemap dans les fichiers (sitemap.xml ou sitemap-index.xml à la racine).");
   }
   add("</IfModule>", "");
   return lines.join("\n");

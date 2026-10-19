@@ -274,6 +274,8 @@ Chaque publication crée une version, gardée et republiable (les 10 dernières 
 - **Vignette** : capture automatique de l'accueil à chaque publication (si Chromium est installé), « Reprendre la capture », ou « Envoyer une image » (PNG, JPEG ou WebP, 10 Mo au plus).
 - **Serveur** : le **profil** du site, qui prépare l'hébergement final : domaine final (celui acheté pour le client), adresse principale avec ou sans `www`, page 404. Le hub en tire :
   - le fichier `.htaccess` (HTTPS obligatoire, une seule adresse, sécurité, cache, page 404) ; s'il a été **modifié à la main**, le hub ne l'écrase plus, et « Régénérer » le remplace après confirmation ;
+  - **le `.htaccess` ne s'applique pas sur la version de travail** : Cloudflare Pages l'ignore. `<client>.kouzia.com` est protégé par le `_worker.js` et le `_headers` du hub (noindex, en-têtes de sécurité, 403 sur les fichiers cachés et de développement, redirection des adresses `pages.dev`). Le `.htaccess` sert à l'hébergement final chez Hostinger, dans la version de production (onglet Versions) ;
+  - généré par le hub, il **suit le contenu publié** : il est régénéré à chaque publication d'après les fichiers présents (page 404, dossiers de fichiers hashés comme `_astro/` ou `assets/`, sitemap). Ce qui dépend d'une donnée absente (domaine final, page 404) y est commenté « À compléter », jamais écrit faux. Modifié à la main, il n'est pas touché, et l'onglet signale « la configuration générée a changé : régénérer ? » ;
   - la configuration de Cloudflare Pages (aperçu en lecture seule) ;
   - **« Vider le cache Cloudflare »** : en temps normal inutile (une publication sert déjà les nouveaux fichiers). Utile si un ancien fichier reste affiché. Limite Cloudflare : 5 vidages par minute.
 
