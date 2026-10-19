@@ -44,7 +44,7 @@ export function filesRoutes(services: Services): FastifyPluginAsync {
       const { id } = idParams.parse(request.params);
       const site = await prisma.site.findUnique({ where: { id }, select: { id: true } });
       if (!site) throw new HttpError(404, "Site introuvable.");
-      return listFiles(id);
+      return listFiles(id, services.blobs);
     });
 
     // Téléchargement seulement : jamais servi en ligne sur l'origine du hub (un HTML envoyé y exécuterait du script).
@@ -83,7 +83,7 @@ export function filesRoutes(services: Services): FastifyPluginAsync {
       await applyWorkingChanges(id, { deletePaths, deletePrefixes });
       await audit({ action: "files.delete", result: "ok", siteId: id, siteSlug: site.slug, detail: `${parsed.data.paths.length} élément(s)` });
       void services.blobs.gc().catch(() => undefined);
-      return listFiles(id);
+      return listFiles(id, services.blobs);
     });
 
     app.post("/api/sites/:id/files/move", async (request) => {
@@ -96,7 +96,7 @@ export function filesRoutes(services: Services): FastifyPluginAsync {
       const toRaw = from.kind === "dir" ? parsed.data.to.replace(/\/+$/, "") : parsed.data.to;
       const to = normalizeSitePath(toRaw);
       if (!to.ok) throw new HttpError(400, `Destination invalide : ${to.reason}`);
-      if (to.path === from.path) return listFiles(id);
+      if (to.path === from.path) return listFiles(id, services.blobs);
 
       const all = await prisma.workingFile.findMany({ where: { siteId: id }, select: { path: true, sha256: true, size: true } });
       const moving =
@@ -120,7 +120,7 @@ export function filesRoutes(services: Services): FastifyPluginAsync {
       }
       await applyWorkingChanges(id, { deletePaths: [...movingPaths], upserts });
       await audit({ action: "files.move", result: "ok", siteId: id, siteSlug: site.slug, detail: `${moving.length} fichier(s)` });
-      return listFiles(id);
+      return listFiles(id, services.blobs);
     });
 
   };

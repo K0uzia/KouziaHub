@@ -156,11 +156,30 @@ export type UpdateSiteInput = {
 
 export type WorkingFileEntry = { path: string; size: number; updatedAt: string; sha256: string };
 
+/**
+ * Contrôle de la version de travail avant publication (lib/version-check.ts) : projet non construit, site
+ * construit envoyé avec ses sources, ou index.html absent de la racine. Publication refusée sans « force ».
+ */
+export type VersionCheck = {
+  code: "unbuilt" | "output_folder" | "no_index";
+  /** Framework reconnu (« Astro », « Next.js »...), null s'il est inconnu. */
+  framework: string | null;
+  /** Commande à lancer sur le PC (unbuilt). */
+  command: string | null;
+  /** Dossier à envoyer (« dist/ »). */
+  outDir: string | null;
+  /** Script build de package.json, tel qu'écrit (« astro build »). */
+  buildScript: string | null;
+  message: string;
+};
+
 export type FilesResponse = {
   files: WorkingFileEntry[];
   totalBytes: number;
-  /** Présence de index.html à la racine (sinon la publication est refusée). */
+  /** Présence de index.html à la racine. */
   hasIndex: boolean;
+  /** Contrôle de la version, null si elle est publiable telle quelle. */
+  versionCheck: VersionCheck | null;
   workingDirty: boolean;
   limits: { maxFiles: number; maxFileBytes: number; maxZipBytes: number };
 };

@@ -259,6 +259,7 @@ Les **fichiers de travail** sont votre brouillon, comme sur un FTP : rien ne cha
 - **Dossier de projet reconnu** : si vous déposez les sources d'un site avec son résultat construit (`dist/`, `build/` ou `out/`), le hub propose « Envoyer seulement dist/ ».
 - **Envoi par morceaux** : les gros envois partent en morceaux de 8 Mio. Si la connexion coupe, un bandeau propose « Reprendre cet envoi » : choisir à nouveau exactement les mêmes fichiers, seuls les morceaux manquants repartent.
 - **Publier** : la barre « Modifications non publiées » propose une note de version puis « Publier la version N ». Il faut un `index.html` à la racine.
+- **Envoyer le site construit, pas le projet** : pour un site Astro, Vite, Next.js, Hugo... le hub n'envoie que des fichiers et ne construit rien. Lancez la construction sur votre PC (`npm run build` le plus souvent) et envoyez le **contenu** du dossier produit (`dist/` pour Astro et Vite, `out/` pour Next.js, `public/` pour Hugo). Si vous envoyez le projet entier, le hub le reconnaît, affiche la commande et le dossier à envoyer, et bloque la publication. « Publier quand même » reste possible après confirmation, pour un site statique dont l'accueil n'est volontairement pas à la racine.
 
 ### 5.5 Onglet Versions
 

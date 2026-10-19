@@ -61,9 +61,8 @@ export async function workingSource(siteId: string): Promise<"files" | "zip"> {
 /** Instantané de la version de travail, au moment du clic (les modifications suivantes n'y entrent pas). */
 export async function snapshotWorking(siteId: string, note: string | null): Promise<Version> {
   const files = await prisma.workingFile.findMany({ where: { siteId }, select: { path: true, sha256: true, size: true } });
-  if (!files.some((f) => f.path === "index.html")) {
-    throw new HttpError(400, "Publication impossible : il manque index.html à la racine.", "no_index");
-  }
+  // index.html absent ou projet non construit : refusé avant, par le contrôle de la version (sauf « Publier quand même »).
+  if (files.length === 0) throw new HttpError(400, "Publication impossible : aucun fichier de travail.", "no_files");
   return createVersion(siteId, await workingSource(siteId), files, { note });
 }
 

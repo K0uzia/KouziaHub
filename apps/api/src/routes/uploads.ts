@@ -85,7 +85,7 @@ export function uploadsRoutes(services: Services): FastifyPluginAsync {
         const site = await loadSite(id);
         const { session, stored, zipPath, done } = await store.assemble(id, uid, services.blobs);
         try {
-          const result = zipPath ? await importZip(services, site, zipPath, session.mode ?? "merge") : await importFiles(site, stored, []);
+          const result = zipPath ? await importZip(services, site, zipPath, session.mode ?? "merge") : await importFiles(services.blobs, site, stored, []);
           await done();
           // Écartés dès l'ouverture de la session, puis ceux de la finalisation.
           return { ...result, rejected: [...session.rejected, ...result.rejected] };

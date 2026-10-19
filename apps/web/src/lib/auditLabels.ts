@@ -14,6 +14,7 @@ export const ACTION_LABEL: Record<string, string> = {
   "site.certificate": "Certificat de l'adresse",
   "version.publish": "Publication",
   "version.republish": "Republication d'une version",
+  "version.force": "Publication malgré le contrôle de la version",
   "files.upload": "Envoi de fichiers",
   "files.delete": "Suppression de fichiers",
   "files.move": "Renommage",

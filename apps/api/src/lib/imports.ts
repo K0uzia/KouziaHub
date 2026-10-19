@@ -1,4 +1,5 @@
 import type { RejectedFile, UploadResult } from "@/contract.js";
+import type { BlobStore } from "@/lib/blobs.js";
 import { audit } from "@/lib/audit.js";
 import { applyWorkingChanges, listFiles, splitCaseConflicts, workingPaths, type FileRef } from "@/lib/files.js";
 import { HttpError } from "@/lib/http.js";
@@ -10,6 +11,7 @@ import { extractZip } from "@/lib/zip.js";
  * l'envoi par morceaux (conflits de casse, plafonds du site, tout ou rien).
  */
 export async function importFiles(
+  blobs: BlobStore,
   site: { id: string; slug: string },
   stored: FileRef[],
   rejected: RejectedFile[],
@@ -20,7 +22,7 @@ export async function importFiles(
     await applyWorkingChanges(site.id, { upserts: kept });
     await audit({ action: "files.upload", result: "ok", siteId: site.id, siteSlug: site.slug, detail: `${kept.length} fichier(s)` });
   }
-  return { accepted: kept.map((f) => f.path), rejected: allRejected, files: await listFiles(site.id) };
+  return { accepted: kept.map((f) => f.path), rejected: allRejected, files: await listFiles(site.id, blobs) };
 }
 
 /** Zip déjà écrit sur le disque : extraction contrôlée (chemins, bombes, interdits) puis écriture, tout ou rien. */
@@ -52,7 +54,7 @@ export async function importZip(
       accepted: extraction.accepted.map((f) => f.path),
       rejected: extraction.rejected,
       strippedRoot: extraction.strippedRoot,
-      files: await listFiles(site.id),
+      files: await listFiles(site.id, services.blobs),
     };
   } catch (err) {
     if (err instanceof HttpError) {

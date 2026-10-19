@@ -11,7 +11,7 @@ import { syncSiteTargets } from "@/lib/monitor/targets.js";
 import { audit } from "@/lib/audit.js";
 import { requireAuth } from "@/lib/auth.js";
 import { ERP_CLIENT_ID, ErpUnavailableError } from "@/lib/erp/types.js";
-import { applyWorkingChanges, listFiles } from "@/lib/files.js";
+import { applyWorkingChanges, listFiles, workingVersionCheck } from "@/lib/files.js";
 import { HttpError } from "@/lib/http.js";
 import { idParams, routeParam } from "@/lib/http-input.js";
 import { MAX_THUMBNAIL_UPLOAD_BYTES } from "@/lib/limits.js";
@@ -45,7 +45,13 @@ const slugQuery = z.object({ slug: z.string().max(64).optional(), name: z.string
 const opParams = z.object({ id: routeParam, opId: routeParam });
 const versionParams = z.object({ id: routeParam, vid: routeParam });
 const deleteSchema = z.object({ confirm: z.string().max(64) });
-const publishSchema = z.object({ note: z.string().trim().max(500).optional() }).nullish();
+const publishSchema = z
+  .object({
+    note: z.string().trim().max(500).optional(),
+    /** Publier malgré le contrôle de la version (projet non construit, index.html absent), après confirmation. */
+    force: z.boolean().optional(),
+  })
+  .nullish();
 
 async function loadSite(id: string) {
   const site = await prisma.site.findUnique({ where: { id } });
@@ -205,6 +211,10 @@ export function sitesRoutes(services: Services): FastifyPluginAsync {
       if (site.state === "DELETING") throw new HttpError(409, "Suppression en cours.");
       if (!site.pagesSubdomain) throw new HttpError(409, "Le projet Cloudflare n'est pas encore créé : reprendre la création.");
       await ensureIdle(services, id);
+      // Contrôle de la version : refus sans confirmation explicite (« Publier quand même »). Rien n'est construit ici.
+      const check = await workingVersionCheck(await prisma.workingFile.findMany({ where: { siteId: id }, select: { path: true, sha256: true } }), services.blobs);
+      if (check && !parsed.data?.force) throw new HttpError(409, check.message, "version_check");
+      if (check) await audit({ action: "version.force", result: "ok", siteId: id, siteSlug: site.slug, detail: check.message });
       const version = await snapshotWorking(id, parsed.data?.note || null);
       try {
         await services.engine.start(id, "PUBLISH", { versionId: version.id, versionNumber: version.number });
@@ -272,7 +282,7 @@ export function sitesRoutes(services: Services): FastifyPluginAsync {
       await applyWorkingChanges(id, { replaceAll: true, upserts: version.files.map((f) => ({ path: f.path, sha256: f.sha256, size: f.size })) });
       await audit({ action: "files.restore", result: "ok", siteId: id, siteSlug: site.slug, detail: `version ${version.number}` });
       void services.blobs.gc().catch(() => undefined);
-      return listFiles(id);
+      return listFiles(id, services.blobs);
     });
 
     // --- Configuration serveur (.htaccess de l'hébergement final, _headers et _redirects de Pages) ---
