@@ -4,7 +4,8 @@ import { refreshDirty } from "@/lib/files.js";
 import { HttpError } from "@/lib/http.js";
 import { KEPT_VERSIONS } from "@/lib/limits.js";
 import { prisma } from "@/lib/prisma.js";
-import { CONFIG_FILES } from "@/lib/site-paths.js";
+import { classifySitePath, CONFIG_FILES } from "@/lib/site-paths.js";
+import { siteExtras } from "@/lib/site-extras.js";
 import { buildWorkerScript } from "@/lib/worker-script.js";
 import { HTACCESS_PATH, pagesDeployConfig } from "@/lib/server-config.js";
 import { profileOf } from "@/lib/server-config-store.js";
@@ -144,7 +145,10 @@ export async function deployVersion(services: Services, siteId: string, versionI
 
   const files: DeployFile[] = [];
   const user: { headers?: string; redirects?: string } = {};
+  const extras = await siteExtras(siteId);
   for (const f of version.files) {
+    // Fichier de développement resté dans une version (envoi d'avant la règle) : jamais déployé.
+    if (!CONFIG_FILES.has(f.path) && f.path !== HTACCESS_PATH && classifySitePath(f.path, { allow: extras.devFilesAllowed }).action !== "accept") continue;
     if (CONFIG_FILES.has(f.path)) {
       const text = (await services.blobs.read(f.sha256)).toString("utf8");
       if (f.path === "_headers") user.headers = text;
@@ -162,7 +166,12 @@ export async function deployVersion(services: Services, siteId: string, versionI
   try {
     const deployment = await services.cloudflare.deploy(site.pagesProject, {
       files,
-      workerJs: buildWorkerScript(hostnameOf(site.slug, services.sitesDomain), { cacheRules: config.cacheRules }),
+      workerJs: buildWorkerScript(hostnameOf(site.slug, services.sitesDomain), {
+        cacheRules: config.cacheRules,
+        allow: extras.devFilesAllowed,
+        csp: extras.siteCsp,
+        has404: files.some((f) => f.path === "404.html"),
+      }),
       ...(config.headersFile !== undefined ? { headersFile: config.headersFile } : {}),
       ...(config.redirectsFile !== undefined ? { redirectsFile: config.redirectsFile } : {}),
     });

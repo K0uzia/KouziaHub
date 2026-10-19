@@ -11,7 +11,8 @@ import {
   faHouse,
   faTrashCan,
 } from "@fortawesome/free-solid-svg-icons";
-import type { FilesResponse, SiteDetail, UploadSession } from "@hub/contract";
+import type { FilesResponse, SiteDetail, UploadSession, VersionCheck } from "@hub/contract";
+import { checkVersion } from "@hub/version-check";
 import { api, errorMessage, isAbort } from "@/lib/api";
 import { cancelSession, openSessions, sendFiles } from "@/lib/uploadSession";
 import { formatBytes, formatDate, formatDateTime, plural } from "@/lib/format";
@@ -73,6 +74,11 @@ export function FilesTab({
   const [progress, setProgress] = useState<Progress | null>(null);
   const [rejected, setRejected] = useState<Rejected | null>(null);
   const [preparing, setPreparing] = useState<{ prepared: PreparedSelection; skipped: SkippedItem[] } | null>(null);
+  /** Projet non construit reconnu sur le dernier envoi (fichiers écartés compris). */
+  const [projectCheck, setProjectCheck] = useState<VersionCheck | null>(null);
+  const [confirmClean, setConfirmClean] = useState(false);
+  /** Sources d'un projet non construit choisies : prévenu avant l'envoi. */
+  const [unbuilt, setUnbuilt] = useState<{ check: VersionCheck; picked: PickedFile[] } | null>(null);
   /** Site complet envoyé sur des fichiers existants : choix « Remplacer tout » ou « Ajouter ». */
   const [askMode, setAskMode] = useState<{ toSend: PickedFile[]; skipped: SkippedItem[]; label?: string } | null>(null);
   /** Envois interrompus (sessions ouvertes du serveur) et celui que l'utilisateur reprend. */
@@ -125,9 +131,9 @@ export function FilesTab({
   }
 
   /** Choix d'abord : écartés avant l'envoi, dossier de projet reconnu (proposition « seulement dist/ »). */
-  function send(picked: PickedFile[]) {
+  async function send(picked: PickedFile[], confirmedUnbuilt = false) {
     if (!picked.length || progress) return;
-    const prepared = prepareSelection(picked, files.data?.limits.maxFileBytes ?? null);
+    const prepared = prepareSelection(picked, files.data?.limits.maxFileBytes ?? null, site.devFilesAllowed);
     const skipped = prepared.excluded.map((e) => ({ path: (dir ? `${dir}/` : "") + e.path, reason: e.reason, size: e.size }));
     // Reprise d'un envoi « seulement dist/ » : même choix, sans redemander.
     if (resume && prepared.project && prepared.project.files.length === resume.included.length) {
@@ -142,6 +148,18 @@ export function FilesTab({
     if (prepared.project && resume === null) {
       setPreparing({ prepared, skipped });
       return;
+    }
+    // Sources d'un projet sans résultat construit : dit avant l'envoi (package.json, astro.config... ne partent pas,
+    // ils ne seraient plus visibles après). Lu sur toute la sélection, dossier racine retiré.
+    if (!confirmedUnbuilt && resume === null && dir === "") {
+      const asSite = stripSingleRoot(picked).files;
+      const pkg = asSite.find((f) => f.path === "package.json");
+      const pkgText = pkg && pkg.file.size <= 256 * 1024 ? await pkg.file.text().catch(() => null) : null;
+      const check = checkVersion(asSite.map((f) => f.path), pkgText);
+      if (check?.code === "unbuilt") {
+        setUnbuilt({ check, picked });
+        return;
+      }
     }
     // Un dossier entier (un seul dossier en tête des chemins) : le site complet, « Remplacer » proposé.
     void transfer(prepared.send, skipped, undefined, { complete: stripSingleRoot(prepared.send).root !== null });
@@ -200,6 +218,7 @@ export function FilesTab({
       setResume(null);
       setInterrupted([]);
       applyFiles(res.files);
+      setProjectCheck(res.projectCheck ?? null);
       const replaced = res.accepted.filter((p) => existing.has(p)).length;
       const added = res.accepted.length - replaced;
       const parts = [
@@ -269,6 +288,21 @@ export function FilesTab({
     }
   }
 
+  async function cleanDev() {
+    setBusy(true);
+    try {
+      const count = files.data?.devFiles.length ?? 0;
+      const res = await api<FilesResponse>(`/api/sites/${site.id}/files/clean-dev`, { method: "POST", json: { confirm: true } });
+      applyFiles(res);
+      setConfirmClean(false);
+      toast.success(plural(count, "fichier de développement retiré", "fichiers de développement retirés"));
+    } catch (err) {
+      toast.error(errorMessage(err, "Nettoyage impossible."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function download(path: string) {
     const a = document.createElement("a");
     a.href = rawUrl(site.id, path);
@@ -308,7 +342,23 @@ export function FilesTab({
 
   return (
     <div className="space-y-5">
+      {projectCheck ? <VersionCheckNotice check={projectCheck} /> : null}
       {files.data?.versionCheck ? <VersionCheckNotice check={files.data.versionCheck} id={checkId} /> : null}
+      {files.data?.devFiles.length ? (
+        <Banner
+          level="warning"
+          action={
+            <Button variant="secondary" onClick={() => setConfirmClean(true)} disabled={busy}>
+              Nettoyer
+            </Button>
+          }
+        >
+          {plural(files.data.devFiles.length, "fichier de développement reste", "fichiers de développement restent")} dans la version de
+          travail (<span className="font-mono break-all">{files.data.devFiles.slice(0, 3).join(", ")}</span>
+          {files.data.devFiles.length > 3 ? "..." : ""}) :{" "}
+          {files.data.devFiles.length > 1 ? "ils ne sont plus servis, mais n'ont rien à faire dans le site." : "il n'est plus servi, mais n'a rien à faire dans le site."}
+        </Banner>
+      ) : null}
       {files.data?.workingDirty ? (
         <PublishBar site={site} check={files.data.versionCheck} checkId={checkId} nextVersion={nextVersion} onSite={onSite} />
       ) : null}
@@ -565,7 +615,10 @@ export function FilesTab({
         fileCount={siteFiles.length}
         maxZipBytes={limits?.maxZipBytes ?? null}
         busy={!!progress}
-        onDone={(res) => applyFiles(res.files)}
+        onDone={(res) => {
+          applyFiles(res.files);
+          setProjectCheck(res.projectCheck ?? null);
+        }}
       />
 
       <ConfirmDialog
@@ -629,6 +682,56 @@ export function FilesTab({
           </div>
         ) : null}
       </Modal>
+
+      <Modal open={unbuilt !== null} onClose={() => setUnbuilt(null)} title="Ce dossier n'est pas encore un site" wide>
+        {unbuilt ? (
+          <div className="space-y-4 text-sm">
+            <VersionCheckNotice check={unbuilt.check} />
+            <p>
+              Les fichiers de développement (package.json, configuration, src/) ne partent pas : envoyés tels quels, ces sources ne
+              donneraient pas de site.
+            </p>
+            <ModalActions>
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  const picked = unbuilt.picked;
+                  setUnbuilt(null);
+                  void send(picked, true);
+                }}
+              >
+                Envoyer quand même
+              </Button>
+              <Button data-autofocus onClick={() => setUnbuilt(null)}>
+                Annuler
+              </Button>
+            </ModalActions>
+          </div>
+        ) : null}
+      </Modal>
+
+      <ConfirmDialog
+        open={confirmClean}
+        title="Nettoyer les fichiers de développement ?"
+        message={
+          <>
+            <p>
+              {plural(files.data?.devFiles.length ?? 0, "fichier sera retiré", "fichiers seront retirés")} de la version de travail :{" "}
+              <span className="font-mono break-all">{(files.data?.devFiles ?? []).slice(0, 10).join(", ")}</span>
+              {(files.data?.devFiles.length ?? 0) > 10 ? "..." : ""}
+            </p>
+            <p className="mt-2 text-[var(--muted)]">
+              Un fichier dont le site a vraiment besoin s'autorise dans l'onglet Serveur (Règles du site). Le site en ligne change à la
+              prochaine publication.
+            </p>
+          </>
+        }
+        confirmLabel="Nettoyer"
+        danger
+        busy={busy}
+        onConfirm={() => void cleanDev()}
+        onClose={() => setConfirmClean(false)}
+      />
 
       {askMode ? (
         <ReplaceOrAddDialog

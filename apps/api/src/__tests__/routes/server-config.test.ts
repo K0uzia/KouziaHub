@@ -239,19 +239,20 @@ describe("envoi d'un site complet : « Remplacer tout le contenu » (retour de p
     await uploadFiles(hub, siteId, VITE_TEMPLATE);
     // Comportement d'avant (ajout) : les fichiers du modèle Vite restent mêlés au nouveau site.
     await uploadFiles(hub, siteId, NEW_SITE.filter((f) => f.filename !== "index.html"));
-    expect(await paths()).toEqual([".htaccess", "404.html", "_astro/index.B1x2.css", "index.html", "src/main.js", "vite.svg"]);
+    // src/main.js du modèle : refusé à l'envoi depuis le 19/10/2026 (sources à la racine).
+    expect(await paths()).toEqual([".htaccess", "404.html", "_astro/index.B1x2.css", "index.html", "vite.svg"]);
     expect((await htaccessOf("index.html"))).toContain("vite-project");
 
     // Remplacer tout le contenu : la version de travail devient exactement l'envoi (+ le .htaccess généré, gardé).
     const res = await uploadFiles(hub, siteId, NEW_SITE, undefined, "replace");
     expect(res.statusCode).toBe(200);
     const body = res.json() as UploadResult;
-    expect(body.removed).toBe(2);
+    expect(body.removed).toBe(1);
     expect(await paths()).toEqual([".htaccess", "404.html", "_astro/index.B1x2.css", "index.html"]);
     expect(await htaccessOf("index.html")).not.toContain("vite-project");
     expect((await detail()).serverConfig.status).toBe("generated");
     expect(await prisma.auditEvent.findFirst({ where: { action: "files.upload", siteId }, orderBy: { at: "desc" } })).toMatchObject({
-      detail: "3 fichier(s), contenu remplacé, 2 retiré(s)",
+      detail: "3 fichier(s), contenu remplacé, 1 retiré(s)",
     });
   });
 
@@ -278,7 +279,7 @@ describe("envoi d'un site complet : « Remplacer tout le contenu » (retour de p
     const zip = await makeZip(NEW_SITE.map((f) => ({ name: f.filename, content: f.content })));
     const res = await uploadZip(hub, siteId, zip, "replace");
     expect(res.statusCode).toBe(200);
-    expect((res.json() as UploadResult).removed).toBe(2);
+    expect((res.json() as UploadResult).removed).toBe(1);
     expect(await paths()).toEqual([".htaccess", "404.html", "_astro/index.B1x2.css", "index.html"]);
   });
 });
@@ -288,3 +289,97 @@ async function htaccessOf(path: string): Promise<string | null> {
   const res = await hub.app.inject({ method: "GET", url: `/api/sites/${siteId}/files/raw?path=${encodeURIComponent(path)}`, headers: hub.headers });
   return res.statusCode === 200 ? res.body : null;
 }
+
+describe("fichiers de développement et CSP du site (retour de production du 19/10/2026)", () => {
+  /** Reste d'un envoi d'avant la règle : écrit directement dans la version de travail. */
+  async function leftover(path: string, content: string) {
+    const blob = await hub.services.blobs.putBuffer(Buffer.from(content));
+    await prisma.workingFile.create({ data: { siteId, path, sha256: blob.sha256, size: blob.size } });
+  }
+  const filesOf = async () => (await hub.app.inject({ method: "GET", url: `/api/sites/${siteId}/files`, headers: hub.headers })).json() as { devFiles: string[]; files: Array<{ path: string }> };
+  const publishNow = async (payload: Record<string, unknown> = {}) => {
+    const res = await hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/publish`, headers: hub.headers, payload });
+    await settle(hub);
+    return res;
+  };
+
+  it("package.json resté d'un ancien envoi : signalé, jamais déployé ni exporté, « Nettoyer » le retire après confirmation", async () => {
+    await uploadFiles(hub, siteId, [
+      { filename: "index.html", content: "<!doctype html><title>Portfolio</title><h1>Portfolio</h1>" },
+      { filename: "404.html", content: "<!doctype html><title>404</title><h1>Introuvable</h1>" },
+    ]);
+    await leftover("package.json", '{ "name": "vite-project" }');
+    await leftover("src/main.js", "console.log(1)");
+    expect((await filesOf()).devFiles).toEqual(["package.json", "src/main.js"]);
+
+    expect((await publishNow()).statusCode).toBe(200);
+    const deployment = hub.cf.deployments("kz-alpha").at(-1)!;
+    expect(Object.keys(deployment.manifest).sort()).toEqual(["/404.html", "/index.html"]);
+    expect(deployment.workerJs).toContain("const HAS_404 = true;");
+    expect(deployment.workerJs).toContain("frame-ancestors 'self'; object-src 'none'; base-uri 'self'; upgrade-insecure-requests");
+
+    const exportRes = await hub.app.inject({ method: "GET", url: `/api/sites/${siteId}/export?target=hostinger`, headers: hub.headers });
+    const exported = await unzip(exportRes.rawPayload);
+    expect(exported.has("package.json")).toBe(false);
+    expect(exported.has("src/main.js")).toBe(false);
+    expect(exported.get(".htaccess")).toContain("RewriteRule ^src(?:/|$) - [F,L,NC]");
+    expect(exported.get(".htaccess")).toMatch(/<FilesMatch "\(\?i\)\^\(\?:package\\.json\|/);
+
+    const noConfirm = await hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/files/clean-dev`, headers: hub.headers, payload: {} });
+    expect(noConfirm.statusCode).toBe(400);
+    const cleaned = await hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/files/clean-dev`, headers: hub.headers, payload: { confirm: true } });
+    expect(cleaned.statusCode).toBe(200);
+    expect((cleaned.json() as { devFiles: string[] }).devFiles).toEqual([]);
+    expect((await filesOf()).files.map((f) => f.path).sort()).toEqual([".htaccess", "404.html", "index.html"]);
+    expect(await prisma.auditEvent.findFirst({ where: { action: "files.clean-dev", siteId } })).toMatchObject({ detail: "2 fichier(s) : package.json, src/main.js" });
+  });
+
+  it("règles du site (colonnes Site) : chemins exacts, CSP ajoutée sans affaiblir frame-ancestors et object-src", async () => {
+    expect((await patch({ siteCsp: 'default-src "self"' })).json()).toMatchObject({ code: "site_csp" });
+    expect((await patch({ siteCsp: "pas une csp !" })).json().error).toMatch(/directive inconnue : « pas »/);
+    expect((await patch({ siteCsp: "default-src 'self';\nimg-src *" })).json().error).toMatch(/saut de ligne/);
+    expect((await patch({ devFilesAllowed: ["../x.json"] })).json()).toMatchObject({ code: "dev_files_allowed" });
+    expect((await patch({ devFilesAllowed: ["src/"] })).json().error).toMatch(/ni dossier, ni joker/);
+    expect((await patch({ devFilesAllowed: ["data/*.json"] })).json().error).toMatch(/ni dossier, ni joker/);
+    expect((await patch({ devFilesAllowed: Array.from({ length: 51 }, (_, i) => `f${i}.json`) })).statusCode).toBe(400);
+
+    const ok = await patch({
+      devFilesAllowed: ["/data/package.json", "src/app.js", "src/app.js"],
+      siteCsp: "  default-src 'self';   img-src 'self' data: ; frame-ancestors *; object-src *  ",
+    });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json()).toMatchObject({ devFilesAllowed: ["data/package.json", "src/app.js"], siteCsp: "default-src 'self'; img-src 'self' data:; frame-ancestors *; object-src *" });
+    expect(await prisma.site.findUniqueOrThrow({ where: { id: siteId }, select: { devFilesAllowed: true, siteCsp: true } })).toEqual({
+      devFilesAllowed: "data/package.json\nsrc/app.js",
+      siteCsp: "default-src 'self'; img-src 'self' data:; frame-ancestors *; object-src *",
+    });
+    // .htaccess : CSP du hub complétée, frame-ancestors et object-src du hub gardées ; src/app.js excepté de la règle src/.
+    const h = (await htaccess())!;
+    const csp = /Content-Security-Policy "([^"]+)"/.exec(h)![1]!;
+    expect(csp).toContain("frame-ancestors 'self'");
+    expect(csp).toContain("object-src 'none'");
+    expect(csp).toContain("img-src 'self' data:");
+    expect(csp).not.toContain("frame-ancestors *");
+    expect(h).toContain("    RewriteCond %{REQUEST_URI} !^/src/app\\.js$\n    RewriteRule ^src(?:/|$) - [F,L,NC]");
+
+    const sent = (await uploadFiles(hub, siteId, [
+      { filename: "index.html", content: "<h1>x</h1>" },
+      { filename: "data/package.json", content: "{}" },
+      { filename: "src/app.js", content: "x" },
+      { filename: "src/autre.js", content: "x" },
+      { filename: "package.json", content: "{}" },
+    ])).json() as UploadResult;
+    expect(sent.accepted.sort()).toEqual(["data/package.json", "index.html", "src/app.js"]);
+    expect(sent.rejected.map((r) => r.path).sort()).toEqual(["package.json", "src/autre.js"]);
+    expect((await publishNow()).statusCode).toBe(200);
+    const worker = hub.cf.deployments("kz-alpha").at(-1)!.workerJs;
+    expect(worker).toContain('const ALLOW = ["data/package.json","src/app.js"];');
+    expect(worker).toContain(
+      `"Content-Security-Policy":"frame-ancestors 'self'; object-src 'none'; base-uri 'self'; upgrade-insecure-requests; default-src 'self'; img-src 'self' data:"`,
+    );
+
+    // Vidées : retour aux valeurs par défaut (colonnes à null).
+    expect((await patch({ devFilesAllowed: [], siteCsp: "" })).json()).toMatchObject({ devFilesAllowed: [], siteCsp: null });
+    expect(await prisma.site.findUniqueOrThrow({ where: { id: siteId }, select: { devFilesAllowed: true, siteCsp: true } })).toEqual({ devFilesAllowed: null, siteCsp: null });
+  });
+});

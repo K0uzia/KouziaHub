@@ -3,6 +3,8 @@
 // - Cloudflare Pages (.htaccess ignoré) : _headers et règles de cache du _worker.js, au déploiement.
 // Fonctions pures : aucun accès à la base ni aux fichiers.
 
+import { DEV_TOOLING } from "./site-paths.js";
+
 export type CanonicalHost = "www" | "apex";
 
 export type ServerProfile = {
@@ -11,6 +13,10 @@ export type ServerProfile = {
   canonicalHost: CanonicalHost;
   /** Chemin depuis la racine (ex. « /404.html »). */
   notFoundPage: string;
+  /** CSP du site (onglet Serveur) ; absente : CSP par défaut de l'export. */
+  csp?: string | null;
+  /** Exceptions du site aux fichiers d'outillage refusés. */
+  allow?: readonly string[];
 };
 
 /**
@@ -107,7 +113,59 @@ export function notFoundPageError(value: string): string | null {
   return valid ? null : "Chemin de page 404 invalide (ex. /404.html).";
 }
 
+/** Directives que la CSP du site ne peut pas changer : elles restent celles de la CSP de base. */
+const IMPOSED_DIRECTIVES = ["frame-ancestors", "object-src"];
+
+/**
+ * CSP du site ajoutée à une CSP de base sans l'affaiblir : chaque directive du site remplace celle de même nom,
+ * sauf frame-ancestors et object-src, toujours imposées par la base (anti-intégration et plugins).
+ */
+export function mergeCsp(base: string, site: string | null | undefined): string {
+  const parse = (csp: string) =>
+    csp
+      .split(";")
+      .map((d) => d.trim())
+      .filter(Boolean)
+      .map((d) => [d.split(/\s+/)[0]!.toLowerCase(), d] as const);
+  const merged = new Map(parse(base));
+  for (const [name, directive] of parse(site ?? "")) {
+    if (!IMPOSED_DIRECTIVES.includes(name)) merged.set(name, directive);
+  }
+  return [...merged.values()].join("; ");
+}
+
 const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Outillage du projet refusé en 403 (même liste que l'envoi et le _worker.js : DEV_TOOLING). Une exception du
+ * site (chemin exact) : son nom sort de la liste par nom (FilesMatch ne voit que le nom), et une condition
+ * l'excepte de la règle du dossier src/.
+ */
+function toolingDenyRules(allow: readonly string[]): string[] {
+  const allowedNames = new Set(allow.map((a) => a.split("/").pop()!.toLowerCase()));
+  const names = DEV_TOOLING.names.filter((n) => !allowedNames.has(n)).map(escapeRegex);
+  const patterns = DEV_TOOLING.patterns.map((p) => p.replace(/^\^|\$$/g, ""));
+  const rootDirs = DEV_TOOLING.rootDirs;
+  const out = [
+    "# Outillage du projet (package.json, verrous, configuration de build, src/) : jamais servi.",
+    "<IfModule mod_authz_core.c>",
+    `    <FilesMatch "(?i)^(?:${[...names, ...patterns].join("|")})$">`,
+    "        Require all denied",
+    "    </FilesMatch>",
+    "</IfModule>",
+    "<IfModule mod_rewrite.c>",
+    "    RewriteEngine On",
+    ...DEV_TOOLING.rootPatterns.map((p) => `    RewriteRule ${p} - [F,L,NC]`),
+    ...rootDirs.flatMap((d) => [
+      ...allow.filter((a) => a.toLowerCase().startsWith(`${d}/`)).map((a) => `    RewriteCond %{REQUEST_URI} !^/${escapeRegex(a)}$`),
+      `    RewriteRule ^${escapeRegex(d)}(?:/|$) - [F,L,NC]`,
+    ]),
+    "</IfModule>",
+  ];
+  if (allow.length) out.push(`# Exceptions du site (onglet Serveur), servies : ${allow.join(", ")}`);
+  out.push("");
+  return out;
+}
 
 /**
  * .htaccess complet. Tout est sous IfModule : un module absent n'empêche jamais le site de répondre.
@@ -181,6 +239,7 @@ export function buildHtaccess(profile: ServerProfile, content: SiteContent): str
     "    RewriteRule ^ - [F,L]",
     "</IfModule>",
     "",
+    ...toolingDenyRules(profile.allow ?? []),
     "# Fichiers de développement jamais servis",
     "<IfModule mod_authz_core.c>",
     '    <FilesMatch "(?:\\.(?:env|ini|log|sh|md|markdown|mdc|bak|sql|sqlite|lock|ya?ml|map|swp)|~)$">',
@@ -206,8 +265,10 @@ export function buildHtaccess(profile: ServerProfile, content: SiteContent): str
       ? '    Header always set Strict-Transport-Security "max-age=31536000" env=FINAL_HOST'
       : '    # Header always set Strict-Transport-Security "max-age=31536000"',
     ...PRODUCTION_SECURITY_HEADERS.filter(([name]) => name !== "Content-Security-Policy").map(([name, value]) => `    Header always set ${name} "${value}"`),
-    "    # CSP : chaque service externe ajouté (formulaire, mesure d'audience, carte) ouvre seulement sa directive.",
-    `    Header always set Content-Security-Policy "${DEFAULT_CSP}"`,
+    profile.csp
+      ? "    # CSP du hub complétée par la CSP du site (onglet Serveur) ; frame-ancestors et object-src restent imposées."
+      : "    # CSP : chaque service externe ajouté (formulaire, mesure d'audience, carte) ouvre seulement sa directive.",
+    `    Header always set Content-Security-Policy "${mergeCsp(DEFAULT_CSP, profile.csp)}"`,
     "</IfModule>",
     "",
     "<IfModule mod_brotli.c>",

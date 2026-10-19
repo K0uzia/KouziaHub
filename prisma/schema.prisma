@@ -128,6 +128,10 @@ model Site {
   /// SHA-256 du dernier .htaccess écrit par le hub : différent du fichier actuel = modifié à la main.
   serverConfigHash String?
   serverConfigAt   DateTime?
+  /// Fichiers de développement servis malgré la règle (chemins exacts, un par ligne), null : aucun.
+  devFilesAllowed  String?
+  /// CSP du site, ajoutée à la CSP minimale de la version de travail et à celle de l'export, null : aucune.
+  siteCsp          String?
   thumbnailPath    String?
   /// "capture" ou "upload".
   thumbnailSource  String?

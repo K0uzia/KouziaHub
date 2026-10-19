@@ -286,18 +286,22 @@ describe("publication et versions", () => {
       { filename: "src/pages/index.astro", content: "<h1>Accueil</h1>\n" },
       { filename: "public/favicon.svg", content: "<svg/>" },
     ])).json() as UploadResult;
-    expect(sent.files.versionCheck).toEqual({
+    // Depuis le 19/10/2026, package.json, astro.config.mjs et src/ sont refusés à l'envoi : le projet est reconnu sur
+    // tout l'envoi (projectCheck), sans le contenu de package.json, d'où la commande du framework.
+    expect(sent.rejected.map((r) => r.path).sort()).toEqual(["astro.config.mjs", "package.json", "src/pages/index.astro"]);
+    expect(sent.projectCheck).toEqual({
       code: "unbuilt",
       framework: "Astro",
-      command: "npm run build",
+      command: "npx astro build",
       outDir: "dist/",
-      buildScript: "astro build",
-      message: "Projet Astro non construit : lancez npm run build sur votre PC, puis envoyez le dossier dist/.",
+      buildScript: null,
+      message: "Projet Astro non construit : lancez npx astro build sur votre PC, puis envoyez le dossier dist/.",
     });
-    expect((await files()).versionCheck?.code).toBe("unbuilt");
+    // Ce qui reste (public/) n'est pas un site : pas d'index.html, publication bloquée.
+    expect((await files()).versionCheck?.code).toBe("no_index");
     const res = await publish();
     expect(res.statusCode).toBe(409);
-    expect(res.json().error).toBe("Projet Astro non construit : lancez npm run build sur votre PC, puis envoyez le dossier dist/.");
+    expect(res.json().code).toBe("version_check");
     // Rien n'est construit ni déployé.
     expect(hub.cf.deployments("kz-alpha").filter((d) => Object.keys(d.manifest).includes("/src/pages/index.astro"))).toHaveLength(0);
     // Le contenu de dist/ envoyé à la place : le contrôle se tait.

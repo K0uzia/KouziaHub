@@ -109,14 +109,16 @@ describe("cas réel : dossier de projet (portfolio)", () => {
     expect(reasons.get("Portfolio/.git/objects/0")).toMatch(/\.git refusé/);
     expect(reasons.get("Portfolio/.astro/types-0.d.ts")).toMatch(/\.astro refusé/);
     expect(reasons.get("Portfolio/dist/video.mp4")).toMatch(/27,0 Mio.*25 Mio/);
-    expect(session.rejected).toHaveLength(250 + 1 + 20 + 3 + 1);
-    expect(session.included).toHaveLength(90 + 2 + 30);
+    // + package.json et astro.config.mjs (outillage du projet, refusés depuis le 19/10/2026).
+    expect(reasons.get("Portfolio/package.json")).toMatch(/Fichier de développement refusé/);
+    expect(session.rejected).toHaveLength(250 + 1 + 20 + 3 + 1 + 2);
+    expect(session.included).toHaveLength(90 + 30);
     for (const [n, chunk] of streamOf(session, local).entries()) expect((await put(session.id, n, chunk)).statusCode).toBe(200);
     const done = await complete(session.id);
     expect(done.statusCode).toBe(200);
     const result = done.json() as UploadResult;
-    expect(result.accepted).toHaveLength(122);
-    expect(result.rejected).toHaveLength(275);
+    expect(result.accepted).toHaveLength(120);
+    expect(result.rejected).toHaveLength(277);
     expect(await workingPaths()).toContain("Portfolio/dist/index.html");
     expect((await state(session.id)).statusCode).toBe(404);
   });

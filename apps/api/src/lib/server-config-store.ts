@@ -5,6 +5,7 @@ import type { BlobStore } from "@/lib/blobs.js";
 import { applyWorkingChanges } from "@/lib/files.js";
 import { prisma } from "@/lib/prisma.js";
 import { createHash } from "node:crypto";
+import { siteExtras } from "@/lib/site-extras.js";
 import { buildHtaccess, HTACCESS_PATH, siteContentOf, type ServerProfile } from "@/lib/server-config.js";
 
 export function profileOf(site: Pick<Site, "finalDomain" | "canonicalHost" | "notFoundPage">): ServerProfile {
@@ -18,7 +19,13 @@ export function profileOf(site: Pick<Site, "finalDomain" | "canonicalHost" | "no
 /** .htaccess que le hub génère aujourd'hui pour la version de travail : profil du site et fichiers présents. */
 export async function generatedHtaccess(site: Site): Promise<string> {
   const paths = (await prisma.workingFile.findMany({ where: { siteId: site.id }, select: { path: true } })).map((f) => f.path);
-  return buildHtaccess(profileOf(site), siteContentOf(paths, site.notFoundPage));
+  return buildHtaccess(await fullProfileOf(site), siteContentOf(paths, site.notFoundPage));
+}
+
+/** Profil complet : profil du site, CSP et exceptions de l'onglet Serveur. */
+export async function fullProfileOf(site: Site): Promise<ServerProfile> {
+  const extras = await siteExtras(site.id);
+  return { ...profileOf(site), csp: extras.siteCsp, allow: extras.devFilesAllowed };
 }
 
 const sha256 = (text: string) => createHash("sha256").update(Buffer.from(text, "utf8")).digest("hex");

@@ -77,8 +77,63 @@ export function devDirectoryOf(sitePath: string): string | null {
   return null;
 }
 
+/**
+ * Fichiers d'outillage d'un projet (manifeste, verrous, configuration de build, conteneurs) : rien à faire dans
+ * un site construit, et lisibles par tous s'ils sont servis (ex. package.json resté d'un ancien envoi). Refusés à
+ * l'envoi (interface et serveur) et en 403 par le _worker.js, sauf exception posée par site (onglet Serveur).
+ * Données : le _worker.js applique les mêmes, une seule source.
+ */
+export const DEV_TOOLING = {
+  /** Noms refusés partout (minuscules). */
+  names: [
+    "package.json",
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "yarn.lock",
+    "bun.lock",
+    "bun.lockb",
+    "jsconfig.json",
+    ".npmrc",
+    ".nvmrc",
+    ".node-version",
+    ".editorconfig",
+    "dockerfile",
+    "makefile",
+  ],
+  /** Motifs de nom refusés partout (expressions, insensibles à la casse). */
+  patterns: ["^tsconfig[^/]*\\.json$", "^docker-compose[^/]*\\.ya?ml$", "^(?:vite|astro|next|nuxt|svelte)\\.config\\.[a-z]+$"],
+  /** Motifs refusés à la racine seulement (configuration d'outils : tailwind.config.js, eslint.config.mjs...). */
+  rootPatterns: ["^[^/]+\\.config\\.(?:js|ts|mjs|cjs|mts|cts)$"],
+  /** Dossiers de sources refusés à la racine. */
+  rootDirs: ["src"],
+} as const;
+
+/** Exception d'un site : chemin exact seulement (ni dossier, ni joker). */
+export function isAllowedPath(sitePath: string, allow: readonly string[] | undefined): boolean {
+  return allow?.includes(sitePath) ?? false;
+}
+
+/** Élément d'outillage d'un chemin (« package.json », « src/ »...), null s'il n'y en a pas. */
+export function devToolingOf(sitePath: string): string | null {
+  const segments = sitePath.split("/");
+  const base = segments[segments.length - 1]!;
+  const lowerBase = base.toLowerCase();
+  if ((DEV_TOOLING.names as readonly string[]).includes(lowerBase)) return base;
+  if (DEV_TOOLING.patterns.some((p) => new RegExp(p, "i").test(base))) return base;
+  if (segments.length === 1 && DEV_TOOLING.rootPatterns.some((p) => new RegExp(p, "i").test(base))) return base;
+  if (segments.length > 1 && (DEV_TOOLING.rootDirs as readonly string[]).includes(segments[0]!.toLowerCase())) return `${segments[0]}/`;
+  return null;
+}
+
+export type ClassifyOptions = {
+  /** Exceptions du site aux fichiers d'outillage (jamais aux .env, .git, dossiers de développement, _worker.js). */
+  allow?: readonly string[];
+};
+
 /** Tri d'un chemin déjà normalisé : accepté, refusé (montré avec sa raison) ou écarté sans bruit. */
-export function classifySitePath(sitePath: string): Classification {
+export function classifySitePath(sitePath: string, options: ClassifyOptions = {}): Classification {
   const segments = sitePath.split("/");
   const base = segments[segments.length - 1]!;
   const lowerBase = base.toLowerCase();
@@ -106,14 +161,20 @@ export function classifySitePath(sitePath: string): Classification {
   if (lowerBase.endsWith(".bak") || lowerBase.endsWith("~") || lowerBase.endsWith(".swp") || lowerBase.endsWith(".swo")) {
     return { action: "reject", reason: "Fichier de sauvegarde refusé." };
   }
+  const tooling = devToolingOf(sitePath);
+  if (tooling && !isAllowedPath(sitePath, options.allow)) {
+    return tooling.endsWith("/")
+      ? { action: "reject", reason: `Dossier ${tooling} refusé (sources du projet, inutiles dans un site construit ; exception possible dans l'onglet Serveur).` }
+      : { action: "reject", reason: `Fichier de développement refusé (${tooling}) : inutile dans un site construit (exception possible dans l'onglet Serveur).` };
+  }
   return { action: "accept" };
 }
 
 /** Normalisation puis tri : la raison du refus est toujours renvoyée en français. */
-export function checkSitePath(raw: string): { path: string; verdict: Classification } {
+export function checkSitePath(raw: string, options: ClassifyOptions = {}): { path: string; verdict: Classification } {
   const normalized = normalizeSitePath(raw);
   if (!normalized.ok) return { path: raw, verdict: { action: "reject", reason: normalized.reason } };
-  return { path: normalized.path, verdict: classifySitePath(normalized.path) };
+  return { path: normalized.path, verdict: classifySitePath(normalized.path, options) };
 }
 
 /** Fichiers envoyés à Cloudflare comme champs dédiés du déploiement, pas comme fichiers servis. */

@@ -25,6 +25,7 @@ async function upload(files: MultipartFile[]) {
   // Envoi par session, seul chemin d'entrée des fichiers.
   const res = await uploadFiles(hub, siteId, files);
   expect(res.statusCode, res.body).toBe(200);
+  return res;
 }
 async function publish() {
   await hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/publish`, headers: hub.headers, payload: {} });
@@ -147,7 +148,7 @@ describe("P2-4 : purge du cache, envois occupés gardés", () => {
 
 describe("P2-5 : fichiers de développement retirés de l'export", () => {
   it("notes, manifestes, configuration et fichiers cachés retirés ; .well-known et .htaccess gardés", async () => {
-    await upload([
+    const sent = await upload([
       { filename: "index.html", content: "<h1>x</h1>" },
       { filename: "README.md", content: "# notes" },
       { filename: "docs/guide.markdown", content: "x" },
@@ -162,11 +163,15 @@ describe("P2-5 : fichiers de développement retirés de l'export", () => {
       { filename: "assets/.cache-info", content: "x" },
       { filename: ".well-known/security.txt", content: "Contact: mailto:securite@exemple.fr" },
     ]);
+    // Outillage du projet : refusé dès l'envoi depuis le 19/10/2026 (il n'entre plus dans la version).
+    const refused = (sent.json() as { rejected: Array<{ path: string; reason: string }> }).rejected;
+    expect(refused.map((r) => r.path).sort()).toEqual([".editorconfig", ".npmrc", "package-lock.json", "package.json", "pnpm-lock.yaml", "tsconfig.app.json", "yarn.lock"]);
+    expect(refused.every((r) => /Fichier de développement refusé/.test(r.reason))).toBe(true);
     await publish();
     const s = await summary();
     const removed = s.issues.find((i) => i.code === "dev_files_removed")!;
     expect(removed.paths.sort()).toEqual(
-      [".editorconfig", ".gitignore", ".npmrc", "README.md", "assets/.cache-info", "docs/guide.markdown", "package-lock.json", "package.json", "pnpm-lock.yaml", "tsconfig.app.json", "yarn.lock"].sort(),
+      [".gitignore", "README.md", "assets/.cache-info", "docs/guide.markdown"].sort(),
     );
     const files = await unzip((await hub.app.inject({ method: "GET", url: `/api/sites/${siteId}/export`, headers: hub.headers })).rawPayload);
     expect(files.has(".well-known/security.txt")).toBe(true);

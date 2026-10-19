@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
+import { siteExtras } from "@/lib/site-extras.js";
 import { z } from "zod";
 import type { UploadResult } from "@/contract.js";
 import { requireAuth } from "@/lib/auth.js";
@@ -61,7 +62,7 @@ export function uploadsRoutes(services: Services): FastifyPluginAsync {
       await loadSite(id);
       const parsed = createSchema.safeParse(request.body);
       if (!parsed.success) throw new HttpError(400, "Description d'envoi invalide.");
-      return store.create(id, parsed.data);
+      return store.create(id, parsed.data, (await siteExtras(id)).devFilesAllowed);
     });
 
     app.get("/api/sites/:id/uploads/:uid", async (request) => {
@@ -86,12 +87,13 @@ export function uploadsRoutes(services: Services): FastifyPluginAsync {
         const { session, stored, zipPath, done } = await store.assemble(id, uid, services.blobs);
         try {
           const mode = session.mode ?? "merge";
-          const run = () => (zipPath ? importZip(services, site, zipPath, mode) : importFiles(services, site, stored, [], mode));
+          // Écartés dès l'ouverture : comptés dans le résultat et dans la reconnaissance du projet (package.json...).
+          const run = () => (zipPath ? importZip(services, site, zipPath, mode) : importFiles(services, site, stored, session.rejected, mode));
           // Remplacer : purge et écriture en une seule opération, sous le verrou du site (aucune publication entre les deux).
           const result = mode === "replace" ? await services.engine.withLock(id, run) : await run();
           await done();
-          // Écartés dès l'ouverture de la session, puis ceux de la finalisation.
-          return { ...result, rejected: [...session.rejected, ...result.rejected] };
+          // Écartés dès l'ouverture de la session (déjà dans le résultat d'un envoi de fichiers), puis ceux de la finalisation.
+          return zipPath ? { ...result, rejected: [...session.rejected, ...result.rejected] } : result;
         } catch (err) {
           // Contenu refusé (zip piégé, plafond du site) : renvoyer les mêmes octets ne changerait rien.
           if (err instanceof HttpError && err.statusCode < 500) await done();
