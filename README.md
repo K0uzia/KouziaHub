@@ -111,7 +111,7 @@ Un **jeton** est une clé d'accès à votre compte Cloudflare, limitée à certa
 
 ### a) Jeton API du hub
 
-Sans ce jeton, le hub fonctionne en **mode démonstration** : le catalogue affiche « Mode démonstration » et rien n'est créé chez Cloudflare.
+Sans ce jeton, le hub fonctionne en **mode démonstration** : le catalogue affiche « Mode démonstration » et rien n'est créé chez Cloudflare. C'est le seul cas où ce bandeau apparaît.
 
 1. Custom token, permissions :
    - Account > Cloudflare Pages > Edit ; Account Resources : Include > votre compte ;
@@ -137,7 +137,7 @@ Il permet au hub de vous **proposer** vos domaines Cloudflare à surveiller ; ri
 
 ### d) Lien avec l'ERP (lecture des clients)
 
-Tant que ce lien n'est pas posé, le hub montre des clients de démonstration (il le signale). Le hub lit seulement le nom, le numéro et le type de chaque client, jamais son adresse ni ses coordonnées.
+Tant que ce lien n'est pas posé, le hub propose des clients d'exemple (« Exemple 01 : boulangerie »...) et le catalogue affiche un bandeau d'information distinct : « Clients de l'ERP pas encore reliés ». Tout le reste du hub fonctionne en vrai. Le hub lit seulement le nom, le numéro et le type de chaque client, jamais son adresse ni ses coordonnées.
 
 L'ERP sert la liste des clients sur un **écouteur dédié, port 3100**, sur l'IP de son CT dans le réseau local, jamais par Internet. Cet écouteur ne s'ouvre que si les trois réglages de l'étape 3 sont posés. Le détail côté ERP est dans `docs/hub-lecture.md` du dépôt KouziaCRM.
 

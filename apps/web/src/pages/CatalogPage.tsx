@@ -24,11 +24,12 @@ const STATE_IDS: readonly StateFilter[] = ["all", "down", "error", "creating", "
 const VIEWS = ["cards", "list"] as const;
 /** Relecture du catalogue tant qu'un site change d'état (création, mise en ligne, certificat). */
 const POLL_MS = 3000;
-/** Notices du mode démonstration, regroupées en un bandeau ; texte court au téléphone. */
+/** Mode démonstration : seulement Cloudflare simulé (aucun jeton API). L'ERP non relié a son propre bandeau. */
 const DEMO_SHORT: Partial<Record<Notice["code"], string>> = {
   cloudflare_fake: "Cloudflare simulé",
-  erp_fake: "clients d'essai",
 };
+/** Section du README qui explique le lien avec l'ERP (dépôt privé, ouvert avec le compte GitHub d'Alexandre). */
+const README_ERP = "https://github.com/K0uzia/KouziaHub#d-lien-avec-lerp-lecture-des-clients";
 
 function normalize(text: string): string {
   return text.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
@@ -166,7 +167,7 @@ export function CatalogPage() {
             </Banner>
           ) : null}
           {demoNotices.length ? (
-            // Mode démonstration (Cloudflare simulé, clients d'essai) : un seul bandeau bas, court au téléphone.
+            // Mode démonstration (Cloudflare simulé) : bandeau court au téléphone.
             <Banner level="info" className="max-sm:py-2">
               <span className="font-medium">Mode démonstration</span>
               <span className="sm:hidden"> : {demoNotices.map((n) => DEMO_SHORT[n.code]).join(", ")}.</span>
@@ -184,6 +185,10 @@ export function CatalogPage() {
                       <Link to="/reglages#controles" className="link inline-flex min-h-11 items-center text-sm font-medium">
                         Voir les contrôles
                       </Link>
+                    ) : n.code === "erp_fake" ? (
+                      <a href={README_ERP} target="_blank" rel="noopener noreferrer" className="link inline-flex min-h-11 items-center text-sm font-medium">
+                        Voir la marche à suivre<span className="sr-only"> (README, nouvel onglet)</span>
+                      </a>
                     ) : undefined
                   }
                 >

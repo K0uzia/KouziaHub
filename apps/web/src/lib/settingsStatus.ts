@@ -46,7 +46,7 @@ export function cloudflareStatus(system: Read<SystemStatus>, orphans: OrphanRepo
 export function erpStatus({ data, error: err }: Read<SystemStatus>): TileStatus | null {
   if (err && !data) return error("État du lien ERP illisible.");
   if (!data) return null;
-  if (data.erp.mode === "fake") return todo("Clients de démonstration : lien ERP à poser (hubctl secrets erp).");
+  if (data.erp.mode === "fake") return todo("Clients d'exemple : l'ERP n'est pas encore relié (hubctl secrets erp).");
   if (!data.erp.reachable) return error("ERP injoignable : les noms des clients ne s'affichent pas.");
   return ok("ERP joignable, clients lus en lecture seule.");
 }

@@ -82,7 +82,7 @@ describe("création d'un site", () => {
       expect(res.statusCode).toBe(201);
       await settle(hub);
       const site = await get(res.json().id);
-      expect(site).toMatchObject({ kind: "CLIENT", clientName: "Démo 01 : boulangerie", name: "Démo 01 : boulangerie", erpClientUrl: "https://erp.kouzia.com/clients/demo-01" });
+      expect(site).toMatchObject({ kind: "CLIENT", clientName: "Exemple 01 : boulangerie", name: "Exemple 01 : boulangerie", erpClientUrl: "https://erp.kouzia.com/clients/demo-01" });
       const row = await prisma.site.findUniqueOrThrow({ where: { id: site.id } });
       expect(row.label).toBeNull();
     } finally {
@@ -101,7 +101,7 @@ describe("création d'un site", () => {
   it("modifie libellé et client ; un site perso garde un libellé", async () => {
     const id = await createPersoSite(hub, "alpha");
     const toClient = await hub.app.inject({ method: "PATCH", url: `/api/sites/${id}`, headers: hub.headers, payload: { erpClientId: "demo-02", label: null } });
-    expect(toClient.json()).toMatchObject({ kind: "CLIENT", erpClientId: "demo-02", label: null, name: "Démo 02 : cabinet d'architecture" });
+    expect(toClient.json()).toMatchObject({ kind: "CLIENT", erpClientId: "demo-02", label: null, name: "Exemple 02 : cabinet d'architecture" });
     const noLabel = await hub.app.inject({ method: "PATCH", url: `/api/sites/${id}`, headers: hub.headers, payload: { erpClientId: null } });
     expect(noLabel.statusCode).toBe(400);
     const toPerso = await hub.app.inject({ method: "PATCH", url: `/api/sites/${id}`, headers: hub.headers, payload: { erpClientId: null, label: "Perso" } });
@@ -336,6 +336,11 @@ describe("catalogue", () => {
     expect(body.sites.map((s) => s.slug)).toEqual(["beta", "alpha"]);
     expect(body.stats).toEqual({ online: 1, offline: 1, creating: 0, errors: 0, projectsUsed: 3, projectsLimit: 100 });
     expect(body.notices.map((n) => n.code).sort()).toEqual(["cloudflare_fake", "erp_fake"]);
+    // ERP non relié : bandeau à part, jamais présenté comme une démonstration du hub entier.
+    expect(body.notices.find((n) => n.code === "erp_fake")?.message).toBe(
+      "Clients de l'ERP pas encore reliés : des clients d'exemple sont proposés. Relier l'ERP : hubctl secrets erp",
+    );
+    expect(body.notices.map((n) => n.message).join(" ")).not.toMatch(/démonstration/i);
   });
 
   it("projets proches de 100 : avis", async () => {

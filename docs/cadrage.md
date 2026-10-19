@@ -210,7 +210,7 @@ Ce changement se fait dans le dépôt KouziaCRM, annoncé au superviseur et vali
 
 ### 3.4 Spécification exacte attendue par le hub (côté hub écrit le 17/10/2026, côté ERP à faire après validation)
 
-Le hub contient déjà le client de lecture (`apps/api/src/lib/erp/http.ts`), testé contre un faux serveur. Il n'est actif que si `ERP_BASE_URL` est posée ; sinon une liste de démonstration sert en dev. Si `ERP_BASE_URL` est posée sans `HUB_READ_SECRET`, le hub refuse de démarrer.
+Le hub contient déjà le client de lecture (`apps/api/src/lib/erp/http.ts`), testé contre un faux serveur. Il n'est actif que si `ERP_BASE_URL` est posée ; sinon une liste de clients d'exemple est proposée. Si `ERP_BASE_URL` est posée sans `HUB_READ_SECRET`, le hub refuse de démarrer.
 
 - **Écouteur dédié côté ERP** : la route n'est servie que sur un écouteur à part, port 3100, sur l'IP du CT ERP dans le réseau local du Proxmox (jamais par le tunnel ni sur le port de l'interface). Une règle du pare-feu Proxmox, côté CT ERP, n'ouvre le port 3100 qu'à l'IP du CT du hub. Côté hub : `ERP_BASE_URL=http://<IP du CT ERP>:3100`.
 - **Requêtes** : `GET {ERP_BASE_URL}/api/hub/clients` (liste complète) et `GET {ERP_BASE_URL}/api/hub/clients/:id` (identifiant encodé dans l'URL, accepté seulement s'il respecte `^[A-Za-z0-9_-]{1,64}$`, sinon le hub n'appelle pas). Aucune autre méthode, aucun paramètre de requête : la recherche se fait côté hub.
