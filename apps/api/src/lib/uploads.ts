@@ -165,6 +165,10 @@ export class UploadStore {
       const parsedDir = normalizeDir(input.dir ?? "");
       if (!parsedDir.ok) throw new HttpError(400, `Dossier cible invalide : ${parsedDir.reason}`);
       dir = parsedDir.path;
+      mode = input.mode ?? "merge";
+      if (mode !== "replace" && mode !== "merge") throw new HttpError(400, "Mode attendu : replace ou merge.");
+      // Remplacer tout le contenu : seulement pour le site entier, envoyé à la racine.
+      if (mode === "replace" && dir !== "") throw new HttpError(400, "« Remplacer tout le contenu » s'applique à la racine du site seulement.");
       const seen = new Set<string>();
       input.files.forEach((f, index) => {
         if (!SHA.test(f.sha256) || !Number.isSafeInteger(f.size) || f.size < 0) {

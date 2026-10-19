@@ -97,6 +97,8 @@ export async function sendFiles(opts: {
   signal?: AbortSignal;
   onProgress: (p: SendProgress) => void;
   onSession?: (s: UploadSession) => void;
+  /** « replace » : la version de travail devient exactement cet envoi (racine seulement). */
+  mode?: "replace" | "merge";
 }): Promise<UploadResult> {
   const { siteId, dir, files, signal, onProgress } = opts;
   const bytesTotal = files.reduce((n, f) => n + f.file.size, 0);
@@ -123,7 +125,7 @@ export async function sendFiles(opts: {
       });
     if (!same) throw new SelectionMismatchError();
   } else {
-    const body: CreateUploadInput = { kind: "files", dir, files: decls };
+    const body: CreateUploadInput = { kind: "files", dir, files: decls, ...(opts.mode === "replace" ? { mode: "replace" as const } : {}) };
     session = await api<UploadSession>(base(siteId), { method: "POST", json: body, signal });
   }
   opts.onSession?.(session);

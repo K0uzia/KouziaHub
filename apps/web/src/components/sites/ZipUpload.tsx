@@ -17,13 +17,13 @@ import { RejectedSummary, UploadProgress, type Progress } from "@/components/sit
 
 type Mode = "replace" | "merge";
 const MODES = [
-  { id: "replace", label: "Remplacer tout" },
-  { id: "merge", label: "Fusionner" },
+  { id: "replace", label: "Remplacer tout le contenu" },
+  { id: "merge", label: "Ajouter et remplacer les doublons" },
 ] as const;
 
 const MODE_HINT: Record<Mode, string> = {
-  replace: "Les fichiers de travail actuels sont retirés, le contenu du zip les remplace.",
-  merge: "Le contenu du zip s'ajoute aux fichiers de travail ; un fichier du même nom est remplacé.",
+  replace: "Conseillé pour un site complet : les fichiers de travail actuels sont retirés, le contenu du zip devient le site (le .htaccess généré par le hub est gardé).",
+  merge: "Le contenu du zip s'ajoute aux fichiers de travail ; un fichier en double est remplacé, rien n'est retiré.",
 };
 
 function isZip(file: File) {
@@ -105,7 +105,7 @@ export function ZipUpload({
       setResume(null);
       setInterrupted([]);
       onDone(res);
-      toast.success(`${plural(res.accepted.length, "fichier reçu", "fichiers reçus")} depuis le zip`);
+      toast.success(`${plural(res.accepted.length, "fichier reçu", "fichiers reçus")} depuis le zip${res.removed ? `, ${plural(res.removed, "ancien fichier retiré", "anciens fichiers retirés")}` : ""}`);
       if (res.rejected.length || res.strippedRoot) setResult(res);
       if (res.rejected.length) toast.warning(plural(res.rejected.length, "fichier écarté", "fichiers écartés"));
     } catch (err) {
@@ -244,7 +244,7 @@ export function ZipUpload({
 
       <ConfirmDialog
         open={pending !== null}
-        title="Remplacer tous les fichiers de travail ?"
+        title="Remplacer tout le contenu du site ?"
         message={
           <>
             <p>
@@ -254,7 +254,7 @@ export function ZipUpload({
             <p className="mt-2 text-[var(--muted)]">Les versions déjà publiées ne changent pas. Le site en ligne ne change qu'à la prochaine publication.</p>
           </>
         }
-        confirmLabel="Remplacer tout"
+        confirmLabel="Remplacer tout le contenu"
         danger
         onConfirm={() => pending && void send(pending)}
         onClose={() => setPending(null)}

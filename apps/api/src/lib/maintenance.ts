@@ -4,7 +4,7 @@ import path from "node:path";
 import type { CachePurgeResult, HubCachePurgeInput, HubCachePurgeResult, PurgeCount, SiteFilesPurgeResult, StorageUsage } from "@/contract.js";
 import { audit } from "@/lib/audit.js";
 import { CF_PURGE_RATE_LIMITED, CF_PURGE_REFUSED, CloudflareError } from "@/lib/cloudflare/types.js";
-import { applyWorkingChanges, listFiles } from "@/lib/files.js";
+import { applyWorkingChanges, listFiles, type FileRef } from "@/lib/files.js";
 import { HttpError } from "@/lib/http.js";
 import { finalHost } from "@/lib/monitor/targets.js";
 import { isUploadSessionBusy } from "@/lib/uploads.js";
@@ -58,11 +58,26 @@ const TEMP_GRACE_MS = 10 * 60_000;
  * statut PURGED), en gardant toujours la version servie. Un échec Cloudflare laisse la version intacte
  * et figure au rapport : jamais d'état à moitié purgé.
  */
+/**
+ * Version de travail remplacée par `upserts` en une seule écriture : les fichiers absents sont retirés et leurs
+ * objets libérés s'ils ne servent plus. « Vider les fichiers » (upserts vide) et « Remplacer tout le contenu »
+ * d'un envoi passent par ici. Appelant : sous le verrou du site.
+ */
+export async function replaceWorkingFiles(services: Services, siteId: string, upserts: FileRef[]): Promise<{ removed: number; freedBytes: number }> {
+  const before = await prisma.workingFile.findMany({ where: { siteId }, select: { path: true, sha256: true } });
+  await applyWorkingChanges(siteId, { replaceAll: true, upserts });
+  const keptPaths = new Set(upserts.map((f) => f.path));
+  const keptBlobs = new Set(upserts.map((f) => f.sha256));
+  const freed = await services.blobs.releaseUnused(before.map((w) => w.sha256).filter((sha) => !keptBlobs.has(sha)));
+  invalidateStorageUsage();
+  return { removed: before.filter((w) => !keptPaths.has(w.path)).length, freedBytes: freed.bytes };
+}
+
 export async function purgeSiteFiles(services: Services, siteId: string, withVersions: boolean): Promise<SiteFilesPurgeResult> {
   const site = await prisma.site.findUniqueOrThrow({ where: { id: siteId } });
   const working = await prisma.workingFile.findMany({ where: { siteId }, select: { sha256: true } });
-  const candidates = working.map((w) => w.sha256);
-  await applyWorkingChanges(siteId, { replaceAll: true, upserts: [] });
+  const candidates: string[] = [];
+  const emptied = await replaceWorkingFiles(services, siteId, []);
 
   let versions: SiteFilesPurgeResult["versions"] = null;
   if (withVersions) {
@@ -111,7 +126,7 @@ export async function purgeSiteFiles(services: Services, siteId: string, withVer
   const freed = await services.blobs.releaseUnused(candidates);
   invalidateStorageUsage();
   await audit({ action: "files.purge", result: "ok", siteId, siteSlug: site.slug, detail: `${working.length} fichier(s) de travail` });
-  return { removedFiles: working.length, versions, freedBytes: freed.bytes, files: await listFiles(siteId, services.blobs) };
+  return { removedFiles: working.length, versions, freedBytes: freed.bytes + emptied.freedBytes, files: await listFiles(siteId, services.blobs) };
 }
 
 // --- Place utilisée ---

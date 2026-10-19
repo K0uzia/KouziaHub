@@ -15,7 +15,7 @@ const chunkParams = sessionParams.extend({ n: z.coerce.number().int().min(0).max
 
 const fileDecl = z.object({ path: z.string().min(1).max(2000), size: z.number().int().min(0), sha256: z.string().length(64) });
 const createSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("files"), dir: z.string().max(2000).optional(), files: z.array(fileDecl).max(MAX_FILES * 2) }),
+  z.object({ kind: z.literal("files"), dir: z.string().max(2000).optional(), files: z.array(fileDecl).max(MAX_FILES * 2), mode: z.enum(["replace", "merge"]).optional() }),
   z.object({
     kind: z.literal("zip"),
     mode: z.enum(["replace", "merge"]),
@@ -85,7 +85,10 @@ export function uploadsRoutes(services: Services): FastifyPluginAsync {
         const site = await loadSite(id);
         const { session, stored, zipPath, done } = await store.assemble(id, uid, services.blobs);
         try {
-          const result = zipPath ? await importZip(services, site, zipPath, session.mode ?? "merge") : await importFiles(services.blobs, site, stored, []);
+          const mode = session.mode ?? "merge";
+          const run = () => (zipPath ? importZip(services, site, zipPath, mode) : importFiles(services, site, stored, [], mode));
+          // Remplacer : purge et écriture en une seule opération, sous le verrou du site (aucune publication entre les deux).
+          const result = mode === "replace" ? await services.engine.withLock(id, run) : await run();
           await done();
           // Écartés dès l'ouverture de la session, puis ceux de la finalisation.
           return { ...result, rejected: [...session.rejected, ...result.rejected] };

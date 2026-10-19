@@ -25,6 +25,7 @@ import {
   listDir,
   nameProblem,
   prepareSelection,
+  stripSingleRoot,
   type PreparedSelection,
   type DirEntry,
   type PickedFile,
@@ -72,6 +73,8 @@ export function FilesTab({
   const [progress, setProgress] = useState<Progress | null>(null);
   const [rejected, setRejected] = useState<Rejected | null>(null);
   const [preparing, setPreparing] = useState<{ prepared: PreparedSelection; skipped: SkippedItem[] } | null>(null);
+  /** Site complet envoyé sur des fichiers existants : choix « Remplacer tout » ou « Ajouter ». */
+  const [askMode, setAskMode] = useState<{ toSend: PickedFile[]; skipped: SkippedItem[]; label?: string } | null>(null);
   /** Envois interrompus (sessions ouvertes du serveur) et celui que l'utilisateur reprend. */
   const [interrupted, setInterrupted] = useState<UploadSession[]>([]);
   const [resume, setResume] = useState<UploadSession | null>(null);
@@ -128,18 +131,39 @@ export function FilesTab({
     const skipped = prepared.excluded.map((e) => ({ path: (dir ? `${dir}/` : "") + e.path, reason: e.reason, size: e.size }));
     // Reprise d'un envoi « seulement dist/ » : même choix, sans redemander.
     if (resume && prepared.project && prepared.project.files.length === resume.included.length) {
-      void transfer(prepared.project.files, []);
+      void transfer(prepared.project.files, [], undefined, { complete: false, mode: resume.mode === "replace" ? "replace" : "merge" });
+      return;
+    }
+    // Reprise d'un « Remplacer tout le contenu » : dossier racine retiré comme au premier envoi.
+    if (resume?.mode === "replace") {
+      void transfer(stripSingleRoot(prepared.send).files, skipped, undefined, { complete: false, mode: "replace" });
       return;
     }
     if (prepared.project && resume === null) {
       setPreparing({ prepared, skipped });
       return;
     }
-    void transfer(prepared.send, skipped);
+    // Un dossier entier (un seul dossier en tête des chemins) : le site complet, « Remplacer » proposé.
+    void transfer(prepared.send, skipped, undefined, { complete: stripSingleRoot(prepared.send).root !== null });
   }
 
-  async function transfer(toSend: PickedFile[], skipped: SkippedItem[], label?: string) {
+  /** Fichiers de travail du site (le .htaccess généré par le hub, gardé par « Remplacer », ne compte pas). */
+  const siteFiles = all.filter((f) => !(f.path === ".htaccess" && site.serverConfig.status === "generated"));
+
+  async function transfer(
+    toSend: PickedFile[],
+    skipped: SkippedItem[],
+    label?: string,
+    opts: { complete: boolean; mode?: "replace" | "merge" } = { complete: false },
+  ) {
     setPreparing(null);
+    // Site complet envoyé à la racine alors qu'il y a déjà des fichiers : remplacer ou ajouter ? (rien ne se mélange sans le dire)
+    if (!opts.mode && opts.complete && !resume && dir === "" && siteFiles.length > 0 && toSend.length > 0) {
+      setAskMode({ toSend, skipped, label });
+      return;
+    }
+    setAskMode(null);
+    const mode = opts.mode ?? "merge";
     setRejected(null);
     if (toSend.length === 0) {
       if (skipped.length) {
@@ -167,6 +191,7 @@ export function FilesTab({
         siteId: site.id,
         dir,
         files: toSend,
+        mode,
         resume: resuming,
         signal: ctrl.signal,
         onSession: (s) => (opened = s),
@@ -180,6 +205,7 @@ export function FilesTab({
       const parts = [
         added ? plural(added, "fichier ajouté", "fichiers ajoutés") : null,
         replaced ? plural(replaced, "fichier remplacé", "fichiers remplacés") : null,
+        res.removed ? plural(res.removed, "ancien fichier retiré", "anciens fichiers retirés") : null,
       ].filter(Boolean);
       if (parts.length) toast.success(parts.join(", "));
       const allSkipped = [...skipped, ...res.rejected];
@@ -536,7 +562,7 @@ export function FilesTab({
 
       <ZipUpload
         siteId={site.id}
-        fileCount={all.length}
+        fileCount={siteFiles.length}
         maxZipBytes={limits?.maxZipBytes ?? null}
         busy={!!progress}
         onDone={(res) => applyFiles(res.files)}
@@ -592,10 +618,10 @@ export function FilesTab({
               </div>
             ) : null}
             <ModalActions>
-              <Button variant="secondary" onClick={() => void transfer(preparing.prepared.send, preparing.skipped)}>
+              <Button variant="secondary" onClick={() => void transfer(preparing.prepared.send, preparing.skipped, undefined, { complete: true })}>
                 Tout envoyer ({plural(preparing.prepared.send.length, "fichier", "fichiers")})
               </Button>
-              <Button data-autofocus onClick={() => void transfer(preparing.prepared.project!.files, [], `${preparing.prepared.project!.output}/`)}>
+              <Button data-autofocus onClick={() => void transfer(preparing.prepared.project!.files, [], `${preparing.prepared.project!.output}/`, { complete: true })}>
                 Envoyer seulement {preparing.prepared.project.output}/ ({plural(preparing.prepared.project.files.length, "fichier", "fichiers")},{" "}
                 {formatBytes(preparing.prepared.project.bytes)})
               </Button>
@@ -603,6 +629,16 @@ export function FilesTab({
           </div>
         ) : null}
       </Modal>
+
+      {askMode ? (
+        <ReplaceOrAddDialog
+          siteFiles={siteFiles.map((f) => f.path)}
+          toSend={askMode.toSend}
+          onReplace={() => void transfer(stripSingleRoot(askMode.toSend).files, askMode.skipped, askMode.label, { complete: false, mode: "replace" })}
+          onAdd={() => void transfer(askMode.toSend, askMode.skipped, askMode.label, { complete: false, mode: "merge" })}
+          onClose={() => setAskMode(null)}
+        />
+      ) : null}
 
       <RenameDialog
         key={renaming?.path ?? "none"}
@@ -706,6 +742,83 @@ function RenameDialog({
           </Button>
         </ModalActions>
       </form>
+    </Modal>
+  );
+}
+
+/**
+ * Envoi d'un site complet sur une version de travail qui a déjà des fichiers : « Remplacer tout le contenu » par
+ * défaut (rien de l'ancien ne reste, ex. un index.html d'un autre projet), ou « Ajouter et remplacer les fichiers
+ * en double » (comportement de l'explorateur). Le nombre de fichiers retirés est dit avant.
+ */
+function ReplaceOrAddDialog({
+  siteFiles,
+  toSend,
+  onReplace,
+  onAdd,
+  onClose,
+}: {
+  siteFiles: string[];
+  toSend: PickedFile[];
+  onReplace: () => void;
+  onAdd: () => void;
+  onClose: () => void;
+}) {
+  const { files: asSite, root } = stripSingleRoot(toSend);
+  const incoming = new Set(asSite.map((f) => f.path));
+  const removed = siteFiles.filter((p) => !incoming.has(p));
+  const addPaths = new Set(toSend.map((f) => f.path));
+  const duplicates = siteFiles.filter((p) => addPaths.has(p)).length;
+  return (
+    <Modal open onClose={onClose} title="Remplacer le contenu du site ?" wide description={`La version de travail contient déjà ${plural(siteFiles.length, "fichier", "fichiers")}.`}>
+      <div className="space-y-4 text-sm">
+        <div>
+          <p className="font-medium text-[var(--text)]">Remplacer tout le contenu (conseillé pour un site complet)</p>
+          <p className="mt-1">
+            {removed.length ? (
+              <>
+                {plural(removed.length, "fichier actuel sera retiré", "fichiers actuels seront retirés")}
+                {removed.length <= 5 ? (
+                  <>
+                    {" "}
+                    : <span className="font-mono break-all">{removed.join(", ")}</span>
+                  </>
+                ) : null}
+                .
+              </>
+            ) : (
+              "Aucun fichier actuel ne sera retiré."
+            )}{" "}
+            {root ? (
+              <>
+                Le contenu du dossier <span className="font-mono">{root}/</span> devient la racine du site.
+              </>
+            ) : null}
+          </p>
+        </div>
+        <div>
+          <p className="font-medium text-[var(--text)]">Ajouter et remplacer les fichiers en double</p>
+          <p className="mt-1">
+            Rien n'est retiré{duplicates ? `, ${plural(duplicates, "fichier en double est remplacé", "fichiers en double sont remplacés")}` : ""}
+            {root ? (
+              <>
+                {" "}
+                ; les fichiers arrivent dans le dossier <span className="font-mono">{root}/</span>
+              </>
+            ) : null}
+            . Les anciens fichiers restent mêlés aux nouveaux.
+          </p>
+        </div>
+        <p className="text-[var(--muted)]">Les versions déjà publiées ne changent pas : le site en ligne ne change qu'à la prochaine publication.</p>
+        <ModalActions>
+          <Button variant="secondary" onClick={onAdd}>
+            Ajouter et remplacer les fichiers en double
+          </Button>
+          <Button data-autofocus onClick={onReplace}>
+            Remplacer tout le contenu
+          </Button>
+        </ModalActions>
+      </div>
     </Modal>
   );
 }

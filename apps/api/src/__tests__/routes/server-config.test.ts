@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import yauzl from "yauzl";
-import type { ServerConfigPreview, SiteDetail } from "@/contract.js";
+import type { ServerConfigPreview, SiteDetail, UploadResult } from "@/contract.js";
 import { buildHtaccess, GENERATED_MARKER } from "@/lib/server-config.js";
 import { prisma, resetDb } from "../helpers/db.js";
 import { buildTestHub, createPersoSite, makeZip, settle, uploadFiles, uploadZip, type TestHub } from "../helpers/hub.js";
@@ -220,3 +220,71 @@ describe(".htaccess qui suit le contenu publié (retour de production du 19/10/2
     expect(await servedHtaccess()).toBe("# réglage maison\nOptions -Indexes\n");
   });
 });
+
+describe("envoi d'un site complet : « Remplacer tout le contenu » (retour de production du 19/10/2026)", () => {
+  const VITE_TEMPLATE = [
+    { filename: "index.html", content: '<!doctype html><html><head><title>vite-project</title></head><body><div id="app"></div><script type="module" src="/src/main.js"></script></body></html>' },
+    { filename: "vite.svg", content: "<svg/>" },
+    { filename: "src/main.js", content: "document.querySelector('#app').innerHTML = 'Vite'" },
+  ];
+  const NEW_SITE = [
+    { filename: "index.html", content: "<!doctype html><title>Kouzia</title><h1>Kouzia</h1>" },
+    { filename: "_astro/index.B1x2.css", content: "h1{}" },
+    { filename: "404.html", content: "<!doctype html><title>Introuvable</title><h1>Introuvable</h1>" },
+  ];
+  const paths = async () =>
+    ((await hub.app.inject({ method: "GET", url: `/api/sites/${siteId}/files`, headers: hub.headers })).json() as { files: Array<{ path: string }> }).files.map((f) => f.path).sort();
+
+  it("reproduit le mélange : en « Ajouter », l'ancien index.html Vite reste ; en « Remplacer », plus rien de l'ancien", async () => {
+    await uploadFiles(hub, siteId, VITE_TEMPLATE);
+    // Comportement d'avant (ajout) : les fichiers du modèle Vite restent mêlés au nouveau site.
+    await uploadFiles(hub, siteId, NEW_SITE.filter((f) => f.filename !== "index.html"));
+    expect(await paths()).toEqual([".htaccess", "404.html", "_astro/index.B1x2.css", "index.html", "src/main.js", "vite.svg"]);
+    expect((await htaccessOf("index.html"))).toContain("vite-project");
+
+    // Remplacer tout le contenu : la version de travail devient exactement l'envoi (+ le .htaccess généré, gardé).
+    const res = await uploadFiles(hub, siteId, NEW_SITE, undefined, "replace");
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as UploadResult;
+    expect(body.removed).toBe(2);
+    expect(await paths()).toEqual([".htaccess", "404.html", "_astro/index.B1x2.css", "index.html"]);
+    expect(await htaccessOf("index.html")).not.toContain("vite-project");
+    expect((await detail()).serverConfig.status).toBe("generated");
+    expect(await prisma.auditEvent.findFirst({ where: { action: "files.upload", siteId }, orderBy: { at: "desc" } })).toMatchObject({
+      detail: "3 fichier(s), contenu remplacé, 2 retiré(s)",
+    });
+  });
+
+  it("« Remplacer » : racine seulement ; refusé pendant une opération (verrou du site) ; un .htaccess envoyé remplace le généré", async () => {
+    const sub = await uploadFiles(hub, siteId, NEW_SITE, "sous-dossier", "replace");
+    expect(sub.statusCode).toBe(400);
+    expect(sub.json().error).toMatch(/racine du site seulement/);
+
+    await uploadFiles(hub, siteId, VITE_TEMPLATE);
+    const release = await hub.services.engine.acquire(siteId);
+    const locked = await uploadFiles(hub, siteId, NEW_SITE, undefined, "replace");
+    release();
+    expect(locked.statusCode).toBe(409);
+    expect(await paths()).toContain("vite.svg");
+
+    const own = await uploadFiles(hub, siteId, [...NEW_SITE, { filename: ".htaccess", content: "# réglage maison\n" }], undefined, "replace");
+    expect(own.statusCode).toBe(200);
+    expect(await htaccessOf(".htaccess")).toBe("# réglage maison\n");
+    expect((await detail()).serverConfig.status).toBe("modified");
+  });
+
+  it("zip en « Remplacer » : même purge, nombre de fichiers retirés renvoyé", async () => {
+    await uploadFiles(hub, siteId, VITE_TEMPLATE);
+    const zip = await makeZip(NEW_SITE.map((f) => ({ name: f.filename, content: f.content })));
+    const res = await uploadZip(hub, siteId, zip, "replace");
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as UploadResult).removed).toBe(2);
+    expect(await paths()).toEqual([".htaccess", "404.html", "_astro/index.B1x2.css", "index.html"]);
+  });
+});
+
+/** Contenu d'un fichier de travail. */
+async function htaccessOf(path: string): Promise<string | null> {
+  const res = await hub.app.inject({ method: "GET", url: `/api/sites/${siteId}/files/raw?path=${encodeURIComponent(path)}`, headers: hub.headers });
+  return res.statusCode === 200 ? res.body : null;
+}
