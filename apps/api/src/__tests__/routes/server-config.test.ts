@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import yauzl from "yauzl";
 import type { ServerConfigPreview, SiteDetail } from "@/contract.js";
 import { buildHtaccess, GENERATED_MARKER } from "@/lib/server-config.js";
 import { prisma, resetDb } from "../helpers/db.js";
@@ -35,7 +36,7 @@ describe("profil et .htaccess généré", () => {
     expect(site.serverConfig.generatedAt).not.toBeNull();
     const content = await htaccess();
     expect(content!.startsWith(GENERATED_MARKER)).toBe(true);
-    expect(content).toBe(buildHtaccess({ finalDomain: null, canonicalHost: "www", notFoundPage: "/404.html" }));
+    expect(content).toBe(buildHtaccess({ finalDomain: null, canonicalHost: "www", notFoundPage: "/404.html" }, { hashedDirs: [], notFoundPresent: false, sitemaps: [] }));
     // Un .htaccess seul ne rend pas le site « modifié » (rien à publier sans index.html).
     expect(site.workingDirty).toBe(false);
     expect(await audits("server-config.generate")).toBe(1);
@@ -48,13 +49,15 @@ describe("profil et .htaccess généré", () => {
     expect(ok.statusCode).toBe(200);
     expect(ok.json()).toMatchObject({ finalDomain: "client-exemple.fr", canonicalHost: "apex", notFoundPage: "/introuvable.html", serverConfig: { status: "generated" } });
     const content = (await htaccess())!;
-    expect(content).toContain("ErrorDocument 404 /introuvable.html");
+    // Page absente des fichiers : directive commentée « À compléter », jamais écrite fausse.
+    expect(content).toContain("# ErrorDocument 404 /introuvable.html");
+    expect(content).not.toMatch(/^ErrorDocument/m);
     expect(content).toContain("RewriteRule ^ https://client-exemple.fr%{REQUEST_URI} [R=301,L,NE]");
     expect((await patch({ notFoundPage: "/../x.html" })).statusCode).toBe(400);
     expect((await patch({ canonicalHost: "autre" })).statusCode).toBe(400);
     const cleared = await patch({ finalDomain: null });
     expect(cleared.json().finalDomain).toBeNull();
-    expect(await htaccess()).toContain("Domaine final pas encore renseigné");
+    expect(await htaccess()).toContain("# À compléter : domaine final non renseigné dans l'onglet Serveur");
   });
 
   it("modification à la main : jamais réécrit sans force, état « modified », puis force", async () => {
@@ -129,5 +132,91 @@ describe("déploiement sur Pages", () => {
     expect(deployment.manifest["/404.html"]).toBe(deployment.manifest["/introuvable.html"]);
     expect(deployment.workerJs).toContain("max-age=31536000, immutable");
     expect(deployment.headersFile).toContain("/assets/*");
+  });
+});
+
+/** Fichiers d'un zip d'export, en texte. */
+function unzip(buffer: Buffer): Promise<Map<string, string>> {
+  return new Promise((resolve, reject) => {
+    yauzl.fromBuffer(buffer, { lazyEntries: true }, (err, zip) => {
+      if (err || !zip) return reject(err);
+      const out = new Map<string, string>();
+      zip.on("entry", (entry: yauzl.Entry) => {
+        zip.openReadStream(entry, (e, stream) => {
+          if (e || !stream) return reject(e);
+          const parts: Buffer[] = [];
+          stream.on("data", (c: Buffer) => parts.push(c));
+          stream.on("end", () => {
+            out.set(entry.fileName, Buffer.concat(parts).toString("utf8"));
+            zip.readEntry();
+          });
+        });
+      });
+      zip.on("end", () => resolve(out));
+      zip.readEntry();
+    });
+  });
+}
+
+const publishNow = async () => {
+  const res = await hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/publish`, headers: hub.headers, payload: {} });
+  await settle(hub);
+  return res;
+};
+/** .htaccess de la version servie (ce qui part à l'export), lu dans ses fichiers. */
+const servedHtaccess = async () => {
+  const site = await prisma.site.findUniqueOrThrow({ where: { id: siteId } });
+  const file = await prisma.versionFile.findFirst({ where: { versionId: site.currentVersionId!, path: ".htaccess" } });
+  return file ? (await hub.services.blobs.read(file.sha256)).toString("utf8") : null;
+};
+
+describe(".htaccess qui suit le contenu publié (retour de production du 19/10/2026)", () => {
+  it("site Astro construit, puis ajout de 404.html : le .htaccess généré évolue à chaque publication ; export sans « null »", async () => {
+    await uploadFiles(hub, siteId, [
+      { filename: "index.html", content: "<!doctype html><title>Accueil</title><h1>Accueil</h1>" },
+      { filename: "_astro/index.B1x2.css", content: "h1{color:red}" },
+      { filename: "sitemap-index.xml", content: '<?xml version="1.0"?><sitemapindex/>' },
+    ]);
+    expect((await publishNow()).statusCode).toBe(200);
+    const first = (await servedHtaccess())!;
+    expect(first).toContain('SetEnvIf Request_URI "^/(?:_astro)/" HUB_PATH_CACHE');
+    expect(first).toContain("# Sitemap présent (/sitemap-index.xml)");
+    expect(first).toContain("# ErrorDocument 404 /404.html");
+    expect(first).not.toMatch(/^ErrorDocument/m);
+    expect((await detail()).serverConfig).toMatchObject({ status: "generated", outdated: false, notFoundPagePresent: false });
+
+    // 404.html ajouté : l'état le signale, la publication suivante met le .htaccess à jour.
+    await uploadFiles(hub, siteId, [{ filename: "404.html", content: "<!doctype html><title>Introuvable</title><h1>Page introuvable</h1>" }]);
+    expect((await detail()).serverConfig).toMatchObject({ status: "generated", outdated: true, notFoundPagePresent: true });
+    expect((await publishNow()).statusCode).toBe(200);
+    const second = (await servedHtaccess())!;
+    expect(second).toMatch(/^ErrorDocument 404 \/404\.html$/m);
+    expect(second).not.toContain("# ErrorDocument 404");
+    expect(second).not.toBe(first);
+    expect((await detail()).serverConfig).toMatchObject({ status: "generated", outdated: false });
+    expect(await htaccess()).toBe(second);
+    expect(await prisma.auditEvent.count({ where: { action: "server-config.generate", detail: "publication : contenu du site changé" } })).toBe(2);
+
+    // Export Hostinger : .htaccess généré d'après la version exportée, aucune valeur null ni undefined.
+    const res = await hub.app.inject({ method: "GET", url: `/api/sites/${siteId}/export?target=hostinger`, headers: hub.headers });
+    expect(res.statusCode).toBe(200);
+    const exported = (await unzip(res.rawPayload)).get(".htaccess")!;
+    expect(exported).toBeDefined();
+    expect(exported).not.toMatch(/\bnull\b|\bundefined\b/);
+    expect(exported).toMatch(/^ErrorDocument 404 \/404\.html$/m);
+    expect(exported).toContain('SetEnvIf Request_URI "^/(?:_astro)/" HUB_PATH_CACHE');
+  });
+
+  it(".htaccess modifié à la main : jamais écrasé à la publication, « la configuration générée a changé » signalé", async () => {
+    await uploadFiles(hub, siteId, [
+      { filename: "index.html", content: "<!doctype html><title>A</title><h1>A</h1>" },
+      { filename: ".htaccess", content: "# réglage maison\nOptions -Indexes\n" },
+    ]);
+    expect((await publishNow()).statusCode).toBe(200);
+    expect((await servedHtaccess())).toBe("# réglage maison\nOptions -Indexes\n");
+    await uploadFiles(hub, siteId, [{ filename: "404.html", content: "<!doctype html><title>404</title><h1>404</h1>" }]);
+    expect((await detail()).serverConfig).toMatchObject({ status: "modified", outdated: true });
+    expect((await publishNow()).statusCode).toBe(200);
+    expect(await servedHtaccess()).toBe("# réglage maison\nOptions -Indexes\n");
   });
 });

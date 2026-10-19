@@ -6,7 +6,7 @@ import { z } from "zod";
 import type { Page, ServerConfigPreview, VersionEntry } from "@/contract.js";
 import { badListQuery, pageOf, pageQuery, skipTake } from "@/lib/pagination.js";
 import { buildHtaccess, normalizeFinalDomain, notFoundPageError, pagesDeployConfig } from "@/lib/server-config.js";
-import { profileOf, writeServerConfig } from "@/lib/server-config-store.js";
+import { generatedHtaccess, profileOf, refreshServerConfigForPublish, writeServerConfig } from "@/lib/server-config-store.js";
 import { syncSiteTargets } from "@/lib/monitor/targets.js";
 import { audit } from "@/lib/audit.js";
 import { requireAuth } from "@/lib/auth.js";
@@ -215,6 +215,8 @@ export function sitesRoutes(services: Services): FastifyPluginAsync {
       const check = await workingVersionCheck(await prisma.workingFile.findMany({ where: { siteId: id }, select: { path: true, sha256: true } }), services.blobs);
       if (check && !parsed.data?.force) throw new HttpError(409, check.message, "version_check");
       if (check) await audit({ action: "version.force", result: "ok", siteId: id, siteSlug: site.slug, detail: check.message });
+      // .htaccess généré : mis à jour d'après le contenu publié (404, dossiers hashés, sitemap) avant l'instantané.
+      await refreshServerConfigForPublish(services.blobs, id);
       const version = await snapshotWorking(id, parsed.data?.note || null);
       try {
         await services.engine.start(id, "PUBLISH", { versionId: version.id, versionNumber: version.number });
@@ -298,7 +300,7 @@ export function sitesRoutes(services: Services): FastifyPluginAsync {
       const user = { headers: await read("_headers"), redirects: await read("_redirects") };
       const config = pagesDeployConfig(profileOf(site), new Set(), user);
       return {
-        htaccess: buildHtaccess(profileOf(site)),
+        htaccess: await generatedHtaccess(site),
         pagesHeaders: config.headersFile ?? null,
         pagesRedirects: config.redirectsFile ?? null,
         hubCacheRules: config.cacheRules,

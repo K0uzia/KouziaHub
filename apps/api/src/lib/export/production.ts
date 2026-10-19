@@ -8,7 +8,7 @@ import type { ExportIssue, ExportSummary, ExportTarget, RejectedFile } from "@/c
 import { HttpError } from "@/lib/http.js";
 import { finalHost } from "@/lib/monitor/targets.js";
 import { prisma } from "@/lib/prisma.js";
-import { buildHtaccess, buildPagesRedirects, buildProductionPagesHeaders, GENERATED_MARKER, HTACCESS_PATH } from "@/lib/server-config.js";
+import { buildHtaccess, buildPagesRedirects, buildProductionPagesHeaders, GENERATED_MARKER, HTACCESS_PATH, siteContentOf } from "@/lib/server-config.js";
 import { profileOf } from "@/lib/server-config-store.js";
 import type { Services } from "@/lib/services.js";
 import { classifySitePath } from "@/lib/site-paths.js";
@@ -193,7 +193,8 @@ export async function buildExportPlan(services: Services, siteId: string, versio
 
   // Configuration de l'hébergeur.
   if (target === "hostinger") {
-    const generatedText = buildHtaccess(profile);
+    // Contenu de la version exportée (404, dossiers hashés, sitemap), pas celui de la version de travail.
+    const generatedText = buildHtaccess(profile, siteContentOf(files.keys(), profile.notFoundPage));
     // Généré par le hub, même sous un profil antérieur (marqueur en tête) : remplacé par celui du profil actuel.
     const hubMade =
       versionHtaccess &&
