@@ -189,6 +189,13 @@ ok "Service ${KH_SERVICE} installé (relance automatique), sauvegarde quotidienn
 # --- Réglages Cloudflare et compte ---
 title "6/6 Réglages"
 if [ "$INTERACTIVE" -eq 1 ]; then
+  # git clone ne garde pas le jeton saisi : il est redemandé une fois, pour les mises à jour.
+  if is_git_install && [ ! -s "$KH_GITHUB_TOKEN_FILE" ]; then
+    echo "  Le dépôt est privé : « hubctl update » a besoin du jeton GitHub en lecture seule (README 1.2)."
+    if confirm "Poser maintenant le jeton (le même que pour git clone) ?" o; then
+      sh "${KH_LIB_DIR}/configure.sh" github || warn "À refaire : hubctl secrets github"
+    fi
+  fi
   if [ ! -s "$KH_TUNNEL_TOKEN_FILE" ]; then
     echo "  Le tunnel relie hub.kouzia.com à ce CT (README, étape 3)."
     if confirm "Avez-vous déjà la commande d'installation du tunnel du hub ?" n; then
@@ -220,6 +227,7 @@ title "Installation terminée"
 _todo=0
 if [ ! -s "$KH_TUNNEL_TOKEN_FILE" ]; then echo "  À faire : tunnel du hub         > hubctl cloudflare"; _todo=1; fi
 if ! access_configured; then echo "  À faire : Cloudflare Access     > hubctl secrets access"; _todo=1; fi
+if is_git_install && [ ! -s "$KH_GITHUB_TOKEN_FILE" ]; then echo "  À faire : jeton GitHub (mises à jour) > hubctl secrets github"; fi
 echo "  Compte du hub (si pas encore fait) : hubctl admin"
 if ! env_has CLOUDFLARE_API_TOKEN; then
   echo "  Plus tard : jeton API Cloudflare > hubctl secrets api (en attendant, mode simulé)"

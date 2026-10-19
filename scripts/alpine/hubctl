@@ -47,6 +47,7 @@ Réglages (rien n'est affiché à l'écran)
   cloudflare                  jeton du tunnel Cloudflare du hub
   secrets [access|api|erp]    Cloudflare Access (domaine d'équipe, AUD), API Cloudflare (jeton, compte, zone), lien ERP
   secrets veille              jeton de lecture des zones Cloudflare (détection des domaines à surveiller)
+  secrets github              jeton GitHub en lecture seule (dépôt privé : nécessaire à update)
   chromium                    installer Chromium pour les vignettes automatiques
   admin                       créer le compte ou changer le mot de passe, puis double authentification
   2fa-reset                   couper la double authentification (téléphone perdu), puis : hubctl admin
@@ -196,6 +197,7 @@ show_menu() {
     menu_item 9 "Jeton API Cloudflare" "jeton, compte, zone"
     menu_item 10 "Mon compte" "mot de passe, double authentification"
     menu_item 11 "Vignettes (Chromium)" "facultatif"
+    menu_item 19 "Jeton GitHub" "lecture seule, pour les mises à jour"
     printf '\n  %s\n' "${C_BOLD}Secours${C_RESET}"
     menu_item 12 "Revenir à la version d'avant" "après une mise à jour"
     menu_item 13 "Couper la double authentification" "téléphone perdu"
@@ -229,6 +231,7 @@ show_menu() {
       15) menu_run push-keys ;;
       16) menu_run veille deploy ;;
       17) menu_run secrets veille ;;
+      19) menu_run secrets github ;;
       q|Q|0) exit 0 ;;
       *) warn "Choix inconnu : ${_choice}" ;;
     esac
