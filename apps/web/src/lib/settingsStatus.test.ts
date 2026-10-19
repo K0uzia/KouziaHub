@@ -9,6 +9,7 @@ import {
   securityStatus,
   storageStatus,
   veilleStatus,
+  VEILLE_READY,
 } from "@/lib/settingsStatus";
 
 const system = (over: Partial<SystemStatus["cloudflare"]> = {}, erp: Partial<SystemStatus["erp"]> = {}): SystemStatus => ({
@@ -70,13 +71,31 @@ describe("état des tuiles des Réglages", () => {
 
   it("veille : non déployée, en erreur, muette, active", () => {
     const now = Date.parse("2026-10-18T12:00:00Z");
-    const health = (edge: Partial<MonitorOverview["health"]["edge"]>) =>
-      ({ health: { edge: { configured: true, lastSeenAt: "2026-10-18T11:58:00Z", lastSyncAt: null, error: null, ...edge } } }) as Pick<MonitorOverview, "health">;
+    const health = (edge: Partial<MonitorOverview["health"]["edge"]>, watched = 3) =>
+      ({
+        health: { edge: { configured: true, lastSeenAt: "2026-10-18T11:58:00Z", lastSyncAt: null, error: null, ...edge } },
+        stats: { watched, up: watched, down: 0, warnings: 0, openIncidents: 0 },
+      }) as Pick<MonitorOverview, "health" | "stats">;
     expect(veilleStatus(read(health({ configured: false })), now)?.level).toBe("todo");
     expect(veilleStatus(read(health({ error: "signature refusée" })), now)?.level).toBe("error");
     expect(veilleStatus(read(health({ lastSeenAt: null })), now)?.level).toBe("todo");
     expect(veilleStatus(read(health({ lastSeenAt: "2026-10-18T11:30:00Z" })), now)?.level).toBe("error");
     expect(veilleStatus(read(health({})), now)?.level).toBe("ok");
+  });
+
+  it("veille prête sans adresse surveillée : « À faire », message qui dit quoi faire (pas « pas encore de passage »)", () => {
+    const now = Date.parse("2026-10-18T12:00:00Z");
+    const ready = (edge: Partial<MonitorOverview["health"]["edge"]> = {}) =>
+      ({
+        health: { edge: { configured: true, lastSeenAt: null, lastSyncAt: "2026-10-18T11:59:00Z", error: null, ...edge } },
+        stats: { watched: 0, up: 0, down: 0, warnings: 0, openIncidents: 0 },
+      }) as Pick<MonitorOverview, "health" | "stats">;
+    expect(veilleStatus(read(ready()), now)).toEqual({ level: "todo", label: "À faire", reason: "Veille prête : ajoutez un site ou une adresse à surveiller." });
+    // Déployée sans adresse, mais déjà passée : toujours « prête », jamais « muette » ni « active ».
+    expect(veilleStatus(read(ready({ lastSeenAt: "2026-10-18T10:00:00Z" })), now)?.reason).toBe(VEILLE_READY);
+    // Non déployée ou en erreur : ces états passent avant.
+    expect(veilleStatus(read(ready({ configured: false })), now)?.reason).toMatch(/non déployé/);
+    expect(veilleStatus(read(ready({ error: "signature refusée" })), now)?.level).toBe("error");
   });
 
   it("journal : échecs de la semaine", () => {
