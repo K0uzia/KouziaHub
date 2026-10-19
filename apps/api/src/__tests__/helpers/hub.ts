@@ -70,14 +70,14 @@ export async function createPersoSite(hub: TestHub, slug: string, label = `Site 
  * Envoi de fichiers comme l'interface : session, morceaux, finalisation. Renvoie la réponse de la finalisation
  * (UploadResult), ou celle de l'étape refusée (ouverture ou morceau).
  */
-export async function uploadFiles(hub: TestHub, siteId: string, files: Array<{ filename: string; content: Buffer | string }>, dir?: string) {
+export async function uploadFiles(hub: TestHub, siteId: string, files: Array<{ filename: string; content: Buffer | string }>, dir?: string, mode?: "replace" | "merge") {
   const bufs = files.map((f) => Buffer.from(f.content));
   const sha = (b: Buffer) => createHash("sha256").update(b).digest("hex");
   const open = await hub.app.inject({
     method: "POST",
     url: `/api/sites/${siteId}/uploads`,
     headers: hub.headers,
-    payload: { kind: "files", ...(dir !== undefined ? { dir } : {}), files: files.map((f, i) => ({ path: f.filename, size: bufs[i]!.length, sha256: sha(bufs[i]!) })) },
+    payload: { kind: "files", ...(dir !== undefined ? { dir } : {}), ...(mode ? { mode } : {}), files: files.map((f, i) => ({ path: f.filename, size: bufs[i]!.length, sha256: sha(bufs[i]!) })) },
   });
   if (open.statusCode !== 200) return open;
   const session = open.json() as { id: string; included: number[]; chunkSize: number; chunkCount: number };

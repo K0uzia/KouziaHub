@@ -197,6 +197,8 @@ export type UploadResult = {
   rejected: RejectedFile[];
   /** Zip seulement : dossier racine unique retiré automatiquement (ex. « dist/ »), null sinon. */
   strippedRoot?: string | null;
+  /** Mode « replace » : fichiers de travail retirés (absents du nouvel envoi). */
+  removed?: number;
   files: FilesResponse;
 };
 
@@ -208,13 +210,14 @@ export type UploadFileDecl = { path: string; size: number; sha256: string };
  * retenus, mis bout à bout dans l'ordre de `included`, ou le zip, forment un flux découpé en morceaux de `chunkSize`.
  */
 export type CreateUploadInput =
-  | { kind: "files"; dir?: string; files: UploadFileDecl[] }
+  /** mode « replace » (racine seulement) : la version de travail est vidée puis remplie par l'envoi, en une opération. */
+  | { kind: "files"; dir?: string; files: UploadFileDecl[]; mode?: "replace" | "merge" }
   | { kind: "zip"; mode: "replace" | "merge"; name: string; size: number; sha256: string };
 
 export type UploadSession = {
   id: string;
   kind: "files" | "zip";
-  /** Envoi de fichiers : dossier cible ; zip : mode. */
+  /** Envoi de fichiers : dossier cible ; mode (fichiers et zip). */
   dir: string | null;
   mode: "replace" | "merge" | null;
   /** Fichiers retenus (chemins complets dans le site) ; zip : son nom. Sert à vérifier une sélection refaite avant de reprendre. */

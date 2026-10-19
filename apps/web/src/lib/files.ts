@@ -144,6 +144,17 @@ function detectProject(files: PickedFile[]): ProjectHint | null {
   return null;
 }
 
+/**
+ * Dossier unique en tête de tous les chemins (dossier choisi ou glissé) : retiré pour que son contenu soit le
+ * site, comme le dossier racine unique d'un zip. root null : fichiers à plat ou plusieurs dossiers.
+ */
+export function stripSingleRoot(files: PickedFile[]): { files: PickedFile[]; root: string | null } {
+  const tops = new Set(files.map((f) => (f.path.includes("/") ? f.path.split("/")[0]! : "")));
+  if (files.length === 0 || tops.size !== 1 || tops.has("")) return { files, root: null };
+  const root = [...tops][0]!;
+  return { files: files.map((f) => ({ file: f.file, path: f.path.slice(root.length + 1) })), root };
+}
+
 /** Fichiers d'un champ « fichier » : chemin relatif gardé pour un envoi de dossier (webkitdirectory). */
 export function filesFromInput(list: FileList | null): PickedFile[] {
   return Array.from(list ?? []).map((file) => ({ file, path: file.webkitRelativePath || file.name }));
