@@ -80,3 +80,32 @@ export async function disablePush(devices: PushDevice[]): Promise<void> {
   await sub.unsubscribe();
   if (mine) await api(`/api/push/devices/${mine.id}`, { method: "DELETE" });
 }
+
+/** Notification reçue pendant que le hub est à l'écran : le service worker la passe à la page (toast). */
+export type ForegroundPush = { title: string; body: string; url: string; tag: string };
+export type PushToastKind = "success" | "error" | "warning" | "info";
+
+/** Pastille du toast d'après la notification (titres du hub et de la veille, workers/veille/src/push.ts). */
+export function pushToastKind(p: { title: string; tag?: string }): PushToastKind {
+  if ((p.tag ?? "").startsWith("test:")) return "info";
+  if (/^(Rétabli|Site rétabli|Hub de nouveau en ligne)\b|sites rétablis$/.test(p.title)) return "success";
+  if (/^(Panne|Site en panne|Toujours en panne|Hub hors ligne)\b|sites (toujours )?en panne$/.test(p.title)) return "error";
+  return "warning";
+}
+
+/** Écran à ouvrir : chemin du hub seulement, jamais une autre origine. */
+export function pushTarget(url: string): string {
+  return url.startsWith("/") && !url.startsWith("//") ? url : "/surveillance";
+}
+
+/** Écoute les notifications passées par le service worker ; renvoie la fonction qui arrête l'écoute. */
+export function onForegroundPush(handler: (push: ForegroundPush) => void): () => void {
+  if (!("serviceWorker" in navigator)) return () => undefined;
+  const listener = (event: MessageEvent) => {
+    const d = event.data as Partial<ForegroundPush> & { type?: string };
+    if (d?.type !== "kouzia-push" || typeof d.title !== "string") return;
+    handler({ title: d.title, body: typeof d.body === "string" ? d.body : "", url: pushTarget(typeof d.url === "string" ? d.url : ""), tag: typeof d.tag === "string" ? d.tag : "" });
+  };
+  navigator.serviceWorker.addEventListener("message", listener);
+  return () => navigator.serviceWorker.removeEventListener("message", listener);
+}

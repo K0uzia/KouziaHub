@@ -1,11 +1,12 @@
 import { useEffect, useRef } from "react";
-import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
+import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type { IconDefinition } from "@fortawesome/fontawesome-svg-core";
 import { faGear, faHeartPulse, faRightFromBracket, faTableCellsLarge } from "@fortawesome/free-solid-svg-icons";
 import { toast } from "sonner";
 import { useAuth } from "@/lib/auth";
 import { errorMessage } from "@/lib/api";
+import { onForegroundPush, pushToastKind } from "@/lib/push";
 import { BrandMark } from "@/components/BrandMark";
 
 type NavItem = { to: string; label: string; icon: IconDefinition; match: (path: string) => boolean };
@@ -20,11 +21,25 @@ export function AppLayout() {
   const { logout, user } = useAuth();
   const { pathname } = useLocation();
   const mainRef = useRef<HTMLElement>(null);
+  const navigate = useNavigate();
 
   // Changement d'écran : la région qui défile revient en haut (sinon la fiche s'ouvrait au milieu).
   useEffect(() => {
     mainRef.current?.scrollTo({ top: 0 });
   }, [pathname]);
+
+  // Alerte reçue hub à l'écran : toast dans la page ; la notification de l'appareil reste pour le hub hors écran.
+  useEffect(
+    () =>
+      onForegroundPush((push) => {
+        toast[pushToastKind(push)](push.title, {
+          description: push.body || undefined,
+          id: push.tag || undefined,
+          action: { label: "Ouvrir", onClick: () => navigate(push.url) },
+        });
+      }),
+    [navigate],
+  );
 
   async function onLogout() {
     try {
