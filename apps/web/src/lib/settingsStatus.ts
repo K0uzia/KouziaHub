@@ -59,12 +59,16 @@ export function storageStatus({ data, error: err }: Read<StorageUsage>): TileSta
   return ok("Rien à libérer.");
 }
 
-export function veilleStatus({ data, error: err }: Read<Pick<MonitorOverview, "health">>, now = Date.now()): TileStatus | null {
+/** Veille prête mais sans rien à surveiller : elle ne passe pas, ce n'est pas une panne. */
+export const VEILLE_READY = "Veille prête : ajoutez un site ou une adresse à surveiller.";
+
+export function veilleStatus({ data, error: err }: Read<Pick<MonitorOverview, "health" | "stats">>, now = Date.now()): TileStatus | null {
   if (err && !data) return error("État de la veille illisible.");
   if (!data) return null;
   const edge = data.health.edge;
   if (!edge.configured) return todo("Worker de veille non déployé (hubctl veille deploy) : seule la box surveille.");
   if (edge.error) return error(`Veille en erreur : ${edge.error}`);
+  if (data.stats.watched === 0) return todo(VEILLE_READY);
   if (!edge.lastSeenAt) return todo("Veille déployée, pas encore de passage.");
   if (now - Date.parse(edge.lastSeenAt) > 15 * 60_000) return error("Veille muette depuis plus de 15 minutes.");
   return ok("Veille active, passages réguliers.");

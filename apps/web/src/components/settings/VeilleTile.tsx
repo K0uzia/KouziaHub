@@ -33,7 +33,7 @@ export function VeilleTile() {
         </dl>
       ) : null}
       <Link to="/surveillance" className="link inline-flex min-h-11 items-center self-start text-sm font-medium">
-        Surveillance et marche à suivre
+        {overview.data && overview.data.stats.watched === 0 ? "Ajouter une adresse à surveiller" : "Surveillance et marche à suivre"}
       </Link>
     </Tile>
   );
