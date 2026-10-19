@@ -104,11 +104,11 @@ const OUTPUT_DIRS = ["dist", "build", "out"];
  * Tri avant l'envoi, avec les règles du serveur (@hub/site-paths, une seule source) : les dossiers de
  * développement et les fichiers interdits ne partent jamais ; les fichiers trop lourds sont nommés.
  */
-export function prepareSelection(picked: PickedFile[], maxFileBytes: number | null): PreparedSelection {
+export function prepareSelection(picked: PickedFile[], maxFileBytes: number | null, allow: readonly string[] = []): PreparedSelection {
   const send: PickedFile[] = [];
   const excluded: ExcludedFile[] = [];
   for (const p of picked) {
-    const { verdict } = checkSitePath(p.path);
+    const { verdict } = checkSitePath(p.path, { allow });
     if (verdict.action !== "accept") excluded.push({ path: p.path, size: p.file.size, reason: verdict.reason });
     else if (maxFileBytes != null && p.file.size > maxFileBytes) excluded.push({ path: p.path, size: p.file.size, reason: fileTooBigReason(p.file.size) });
     else send.push(p);
@@ -124,12 +124,13 @@ export function prepareSelection(picked: PickedFile[], maxFileBytes: number | nu
     byReason.set(key, g);
   }
   const groups = [...byReason.values()].sort((a, b) => b.count - a.count);
-  return { send, excluded, groups, project: detectProject(send) };
+  // Projet reconnu sur toute la sélection : package.json est écarté de l'envoi, mais il signe le projet.
+  return { send, excluded, groups, project: detectProject(picked, send) };
 }
 
-function detectProject(files: PickedFile[]): ProjectHint | null {
-  const paths = new Set(files.map((f) => f.path));
-  const tops = new Set(files.map((f) => (f.path.includes("/") ? f.path.split("/")[0]! : "")));
+function detectProject(all: PickedFile[], files: PickedFile[]): ProjectHint | null {
+  const paths = new Set(all.map((f) => f.path));
+  const tops = new Set(all.map((f) => (f.path.includes("/") ? f.path.split("/")[0]! : "")));
   // Un seul dossier racine (dossier choisi ou glissé) ou les fichiers du projet à plat.
   const root = tops.size === 1 && !tops.has("") ? [...tops][0]! : paths.has("package.json") ? "" : null;
   if (root === null) return null;

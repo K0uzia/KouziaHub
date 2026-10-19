@@ -149,7 +149,7 @@ export class UploadStore {
     await rename(tmp, file);
   }
 
-  async create(siteId: string, input: CreateUploadInput): Promise<UploadSession> {
+  async create(siteId: string, input: CreateUploadInput, allow: readonly string[] = []): Promise<UploadSession> {
     await this.sweep();
     const id = randomBytes(12).toString("hex");
     const now = this.now();
@@ -174,7 +174,7 @@ export class UploadStore {
         if (!SHA.test(f.sha256) || !Number.isSafeInteger(f.size) || f.size < 0) {
           throw new HttpError(400, `Description invalide pour « ${String(f.path).slice(0, 200)} » (taille ou empreinte).`);
         }
-        const { path: target, verdict } = checkSitePath(dir ? `${dir}/${f.path}` : f.path);
+        const { path: target, verdict } = checkSitePath(dir ? `${dir}/${f.path}` : f.path, { allow });
         if (verdict.action !== "accept") {
           rejected.push({ path: target || "(sans nom)", reason: verdict.reason });
           return;

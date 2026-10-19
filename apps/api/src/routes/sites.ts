@@ -1,4 +1,5 @@
 import { createReadStream } from "node:fs";
+import { MAX_ALLOWED_PATHS, MAX_CSP_LENGTH, parseAllowList, parseSiteCsp, saveSiteExtras, siteExtras, type SiteExtras } from "@/lib/site-extras.js";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import type { FastifyPluginAsync } from "fastify";
@@ -37,6 +38,8 @@ const updateSchema = z
     finalDomain: z.string().max(260).nullable().optional(),
     canonicalHost: z.enum(["www", "apex"]).optional(),
     notFoundPage: z.string().max(220).optional(),
+    devFilesAllowed: z.array(z.string().max(500)).max(MAX_ALLOWED_PATHS).optional(),
+    siteCsp: z.string().max(MAX_CSP_LENGTH).nullable().optional(),
   })
   .strict();
 const regenerateSchema = z.object({ force: z.boolean().optional() }).nullish();
@@ -144,7 +147,22 @@ export function sitesRoutes(services: Services): FastifyPluginAsync {
       const notFoundError = notFoundPageError(notFoundPage);
       if (notFoundError) throw new HttpError(400, notFoundError);
       const canonicalHost = parsed.data.canonicalHost ?? site.canonicalHost;
-      const profileChanged = finalDomain !== site.finalDomain || canonicalHost !== site.canonicalHost || notFoundPage !== site.notFoundPage;
+      const extrasPatch: Partial<SiteExtras> = {};
+      if (parsed.data.devFilesAllowed !== undefined) {
+        const allow = parseAllowList(parsed.data.devFilesAllowed);
+        if (!allow.ok) throw new HttpError(400, `Exceptions refusées : ${allow.reason}`, "dev_files_allowed");
+        extrasPatch.devFilesAllowed = allow.value;
+      }
+      if (parsed.data.siteCsp !== undefined) {
+        const csp = parseSiteCsp(parsed.data.siteCsp);
+        if (!csp.ok) throw new HttpError(400, csp.reason, "site_csp");
+        extrasPatch.siteCsp = csp.value;
+      }
+      const before = await siteExtras(id);
+      const after = Object.keys(extrasPatch).length ? await saveSiteExtras(id, extrasPatch) : before;
+      const cspChanged = before.siteCsp !== after.siteCsp;
+      const profileChanged =
+        finalDomain !== site.finalDomain || canonicalHost !== site.canonicalHost || notFoundPage !== site.notFoundPage || cspChanged;
       await prisma.site.update({
         where: { id },
         data: { label: nextLabel, erpClientId: nextClient, kind: nextClient ? "CLIENT" : "PERSO", finalDomain, canonicalHost, notFoundPage, touchedAt: new Date() },

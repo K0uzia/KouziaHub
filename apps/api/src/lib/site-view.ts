@@ -1,4 +1,5 @@
 import type { Operation as OperationRow, Site } from "@prisma/client";
+import { siteExtras } from "@/lib/site-extras.js";
 import type { CatalogResponse, Notice, Operation, SiteDetail, SiteMonitorBadge, SiteSummary } from "@/contract.js";
 import { siteBadges } from "@/lib/monitor/view.js";
 import { prisma } from "@/lib/prisma.js";
@@ -112,6 +113,7 @@ export async function siteDetail(siteId: string, services: Services): Promise<Si
     canonicalHost: site.canonicalHost === "apex" ? "apex" : "www",
     notFoundPage: site.notFoundPage,
     serverConfig: await serverConfigState(site),
+    ...(await siteExtras(site.id)),
   };
 }
 

@@ -69,7 +69,7 @@ describe("générateur du .htaccess", () => {
     expect(h).toContain("<IfModule mod_brotli.c>");
     expect(h).toContain("<IfModule mod_deflate.c>");
     expect(h).toContain("RewriteRule (^|/)\\.(?!well-known/) - [F,L]");
-    const devFiles = /<FilesMatch "([^"]+)">\s*Require all denied/.exec(h)![1]!;
+    const devFiles = [...h.matchAll(/<FilesMatch "([^"]+)">\s*Require all denied/g)].map((m) => m[1]!).find((p) => p.includes("env"))!;
     for (const ext of ["env", "log", "md", "markdown", "bak", "map", "swp"]) expect(devFiles).toContain(ext);
     expect(h).toContain('Header set Cache-Control "public, max-age=31536000, immutable"');
     expect(h).toContain('Header set Cache-Control "public, max-age=604800"');

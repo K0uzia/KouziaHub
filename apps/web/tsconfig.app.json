@@ -20,7 +20,8 @@
     "paths": {
       "@/*": ["./src/*"],
       "@hub/contract": ["../api/src/contract.ts"],
-      "@hub/site-paths": ["../api/src/lib/site-paths.ts"]
+      "@hub/site-paths": ["../api/src/lib/site-paths.ts"],
+      "@hub/version-check": ["../api/src/lib/version-check.ts"]
     }
   },
   "include": ["src"]

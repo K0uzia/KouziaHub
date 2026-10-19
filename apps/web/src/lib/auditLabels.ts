@@ -20,6 +20,7 @@ export const ACTION_LABEL: Record<string, string> = {
   "files.move": "Renommage",
   "files.zip": "Envoi d'un zip",
   "files.restore": "Restauration d'une version",
+  "files.clean-dev": "Fichiers de développement retirés",
   "thumbnail.upload": "Vignette envoyée",
   "thumbnail.capture": "Capture de la vignette",
   "orphan.delete": "Suppression d'un enregistrement DNS orphelin",

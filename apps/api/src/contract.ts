@@ -117,6 +117,10 @@ export type SiteDetail = SiteSummary & {
   canonicalHost: CanonicalHost;
   notFoundPage: string;
   serverConfig: ServerConfigState;
+  /** Fichiers de développement servis quand même (onglet Serveur). */
+  devFilesAllowed: string[];
+  /** CSP du site (version de travail et .htaccess de l'export), null : CSP par défaut. */
+  siteCsp: string | null;
 };
 
 export type CatalogResponse = {
@@ -157,6 +161,10 @@ export type UpdateSiteInput = {
   finalDomain?: string | null;
   canonicalHost?: CanonicalHost;
   notFoundPage?: string;
+  /** Exceptions aux fichiers de développement refusés (chemins exacts ou dossiers terminés par « / »). */
+  devFilesAllowed?: string[];
+  /** CSP du site, null ou vide : CSP par défaut. */
+  siteCsp?: string | null;
 };
 
 export type WorkingFileEntry = { path: string; size: number; updatedAt: string; sha256: string };
@@ -185,6 +193,8 @@ export type FilesResponse = {
   hasIndex: boolean;
   /** Contrôle de la version, null si elle est publiable telle quelle. */
   versionCheck: VersionCheck | null;
+  /** Fichiers de développement restés dans la version de travail (ancien envoi) : à nettoyer. */
+  devFiles: string[];
   workingDirty: boolean;
   limits: { maxFiles: number; maxFileBytes: number; maxZipBytes: number };
 };
@@ -199,6 +209,8 @@ export type UploadResult = {
   strippedRoot?: string | null;
   /** Mode « replace » : fichiers de travail retirés (absents du nouvel envoi). */
   removed?: number;
+  /** Projet reconnu sur tout l'envoi, fichiers écartés compris (package.json, astro.config...), s'il n'est pas construit. */
+  projectCheck?: VersionCheck | null;
   files: FilesResponse;
 };
 

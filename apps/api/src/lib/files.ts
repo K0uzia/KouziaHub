@@ -1,6 +1,8 @@
 import type { FilesResponse, VersionCheck } from "@/contract.js";
 import type { BlobStore } from "@/lib/blobs.js";
 import { checkVersion } from "@/lib/version-check.js";
+import { classifySitePath } from "@/lib/site-paths.js";
+import { siteExtras } from "@/lib/site-extras.js";
 import { HttpError } from "@/lib/http.js";
 import { FILE_LIMITS, MAX_FILES, MAX_SITE_BYTES } from "@/lib/limits.js";
 import { prisma } from "@/lib/prisma.js";
@@ -52,6 +54,12 @@ export async function workingVersionCheck(files: Array<{ path: string; sha256: s
   );
 }
 
+/** Fichiers de la version de travail que la règle refuse aujourd'hui (restes d'un envoi d'avant la règle), exceptions du site déduites. */
+export async function leftoverDevFiles(siteId: string, paths: string[]): Promise<string[]> {
+  const { devFilesAllowed: allow } = await siteExtras(siteId);
+  return paths.filter((p) => classifySitePath(p, { allow }).action === "reject");
+}
+
 export async function listFiles(siteId: string, blobs: BlobStore): Promise<FilesResponse> {
   const [files, site] = await Promise.all([
     prisma.workingFile.findMany({ where: { siteId }, orderBy: { path: "asc" } }),
@@ -62,6 +70,7 @@ export async function listFiles(siteId: string, blobs: BlobStore): Promise<Files
     totalBytes: files.reduce((sum, f) => sum + f.size, 0),
     hasIndex: files.some((f) => f.path === "index.html"),
     versionCheck: await workingVersionCheck(files, blobs),
+    devFiles: await leftoverDevFiles(siteId, files.map((f) => f.path)),
     workingDirty: site.workingDirty,
     limits: FILE_LIMITS,
   };

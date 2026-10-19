@@ -1,4 +1,6 @@
-import type { RejectedFile, UploadResult } from "@/contract.js";
+import type { RejectedFile, UploadResult, VersionCheck } from "@/contract.js";
+import { siteExtras } from "@/lib/site-extras.js";
+import { checkVersion } from "@/lib/version-check.js";
 import { audit } from "@/lib/audit.js";
 import { replaceWorkingFiles } from "@/lib/maintenance.js";
 import { prisma } from "@/lib/prisma.js";
@@ -12,6 +14,15 @@ import { extractZip } from "@/lib/zip.js";
  * Écriture des fichiers reçus dans la version de travail : mêmes contrôles pour l'envoi direct et pour
  * l'envoi par morceaux (conflits de casse, plafonds du site, tout ou rien).
  */
+/**
+ * Projet reconnu sur tout l'envoi, fichiers écartés compris : package.json et astro.config ne sont plus gardés,
+ * mais ils signent un projet non construit. Seulement « unbuilt » (le reste se lit sur la version de travail).
+ */
+function projectCheckOf(accepted: string[], rejected: string[]): VersionCheck | null {
+  const check = checkVersion([...accepted, ...rejected], null);
+  return check?.code === "unbuilt" ? check : null;
+}
+
 /**
  * « Remplacer tout le contenu » : la version de travail devient exactement l'envoi, par la même purge que
  * « Vider les fichiers ». Le .htaccess généré par le hub (non modifié) est gardé si l'envoi n'en apporte pas.
@@ -50,7 +61,16 @@ export async function importFiles(
       detail: mode === "replace" ? `${kept.length} fichier(s), contenu remplacé, ${removed} retiré(s)` : `${kept.length} fichier(s)`,
     });
   }
-  return { accepted: kept.map((f) => f.path), rejected: allRejected, ...(mode === "replace" ? { removed } : {}), files: await listFiles(site.id, services.blobs) };
+  return {
+    accepted: kept.map((f) => f.path),
+    rejected: allRejected,
+    ...(mode === "replace" ? { removed } : {}),
+    projectCheck: projectCheckOf(
+      kept.map((f) => f.path),
+      allRejected.map((r) => r.path),
+    ),
+    files: await listFiles(site.id, services.blobs),
+  };
 }
 
 /** Zip déjà écrit sur le disque : extraction contrôlée (chemins, bombes, interdits) puis écriture, tout ou rien. */
@@ -61,7 +81,7 @@ export async function importZip(
   mode: "replace" | "merge",
 ): Promise<UploadResult> {
   try {
-    const extraction = await extractZip(zipPath, services.blobs);
+    const extraction = await extractZip(zipPath, services.blobs, undefined, (await siteExtras(site.id)).devFilesAllowed);
     if (mode === "merge") {
       const { kept, rejected: conflicts } = splitCaseConflicts(extraction.accepted, await workingPaths(site.id));
       extraction.accepted = kept;
@@ -82,6 +102,7 @@ export async function importZip(
     return {
       accepted: extraction.accepted.map((f) => f.path),
       rejected: extraction.rejected,
+      projectCheck: projectCheckOf(extraction.accepted.map((f) => f.path), extraction.rejected.map((r) => r.path)),
       strippedRoot: extraction.strippedRoot,
       ...(mode === "replace" ? { removed } : {}),
       files: await listFiles(site.id, services.blobs),

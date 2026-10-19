@@ -1,4 +1,5 @@
-import type { VersionCheck } from "@/contract.js";
+// Import relatif : module aussi utilisé par l'interface (alias @hub/version-check), avant l'envoi.
+import type { VersionCheck } from "../contract.js";
 
 // Contrôle d'une version avant publication : un site statique a son index.html à la racine. Sinon, si les
 // fichiers sont les sources d'un projet à construire (Astro, Vite, Next...), le hub le reconnaît et dit quoi

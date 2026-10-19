@@ -9,7 +9,7 @@ import { HttpError } from "@/lib/http.js";
 import { finalHost } from "@/lib/monitor/targets.js";
 import { prisma } from "@/lib/prisma.js";
 import { buildHtaccess, buildPagesRedirects, buildProductionPagesHeaders, GENERATED_MARKER, HTACCESS_PATH, siteContentOf } from "@/lib/server-config.js";
-import { profileOf } from "@/lib/server-config-store.js";
+import { fullProfileOf } from "@/lib/server-config-store.js";
 import type { Services } from "@/lib/services.js";
 import { classifySitePath } from "@/lib/site-paths.js";
 import {
@@ -137,7 +137,7 @@ export async function buildExportPlan(services: Services, siteId: string, versio
   if (version.status === "UPLOADING") throw new HttpError(409, "Version en cours d'envoi.");
   if (version.source === "placeholder") throw new HttpError(409, "Seule la page d'attente est publiée : rien à extraire.", "nothing_published");
 
-  const profile = profileOf(site);
+  const profile = await fullProfileOf(site);
   const origin = profile.finalDomain ? `https://${finalHost(profile.finalDomain, profile.canonicalHost)}` : null;
   const canonicalHost = origin ? new URL(origin).host : null;
   const notFoundPath = profile.notFoundPage.slice(1);
@@ -164,7 +164,7 @@ export async function buildExportPlan(services: Services, siteId: string, versio
   let versionHtaccess: VersionFile | null = null;
   const user: { headers?: string; redirects?: string } = {};
   for (const f of version.files) {
-    const verdict = classifySitePath(f.path);
+    const verdict = classifySitePath(f.path, { allow: profile.allow });
     const reason = verdict.action !== "accept" ? verdict.reason : exportRejectReason(f.path);
     if (reason) {
       removed.push({ path: f.path, reason });

@@ -74,7 +74,7 @@ type Candidate = { entry: Entry; path: string };
  * de travail : l'appelant n'écrit qu'après succès complet (tout ou rien). Les tailles comptées sont celles
  * réellement décompressées, jamais celles annoncées par l'en-tête.
  */
-export async function extractZip(file: string, blobs: BlobStore, limits: ZipLimits = DEFAULT_ZIP_LIMITS): Promise<ZipExtraction> {
+export async function extractZip(file: string, blobs: BlobStore, limits: ZipLimits = DEFAULT_ZIP_LIMITS, allow: readonly string[] = []): Promise<ZipExtraction> {
   let zip: ZipFile;
   try {
     zip = await openZip(file);
@@ -121,7 +121,7 @@ export async function extractZip(file: string, blobs: BlobStore, limits: ZipLimi
     const toRead: Candidate[] = [];
     const seen = new Map<string, string>();
     for (const c of candidates) {
-      const verdict = classifySitePath(c.path);
+      const verdict = classifySitePath(c.path, { allow });
       if (verdict.action !== "accept") {
         rejected.push({ path: c.path, reason: verdict.reason });
         continue;

@@ -1,8 +1,9 @@
 import type { FastifyPluginAsync } from "fastify";
+import { siteExtras } from "@/lib/site-extras.js";
 import { z } from "zod";
 import { audit } from "@/lib/audit.js";
 import { requireAuth } from "@/lib/auth.js";
-import { applyWorkingChanges, CASE_CONFLICT, listFiles, type FileRef } from "@/lib/files.js";
+import { applyWorkingChanges, leftoverDevFiles, CASE_CONFLICT, listFiles, type FileRef } from "@/lib/files.js";
 import { HttpError } from "@/lib/http.js";
 import { idParams } from "@/lib/http-input.js";
 import { MAX_FILES_PER_UPLOAD } from "@/lib/limits.js";
@@ -12,6 +13,7 @@ import { checkSitePath, normalizeSitePath } from "@/lib/site-paths.js";
 
 const rawQuery = z.object({ path: z.string().min(1).max(2000) });
 const deleteSchema = z.object({ paths: z.array(z.string().min(1).max(2000)).min(1).max(MAX_FILES_PER_UPLOAD) });
+const cleanDevSchema = z.object({ confirm: z.literal(true) });
 const moveSchema = z.object({ from: z.string().min(1).max(2000), to: z.string().min(1).max(2000) });
 
 async function loadSite(id: string) {
@@ -67,6 +69,25 @@ export function filesRoutes(services: Services): FastifyPluginAsync {
     // Envoi de fichiers et de zips : uniquement par les sessions (routes/uploads.ts), seul chemin d'entrée.
     // Les anciennes routes multipart POST /api/sites/:id/files et /zip sont retirées.
 
+    // « Nettoyer les fichiers de développement » : restes d'un envoi d'avant la règle (package.json, src/...),
+    // exceptions du site déduites, après confirmation dans l'interface. Sous le verrou du site.
+    app.post("/api/sites/:id/files/clean-dev", async (request) => {
+      const { id } = idParams.parse(request.params);
+      const site = await loadSite(id);
+      const parsed = cleanDevSchema.safeParse(request.body);
+      if (!parsed.success) throw new HttpError(400, "Confirmation attendue.");
+      return services.engine.withLock(id, async () => {
+        const paths = (await prisma.workingFile.findMany({ where: { siteId: id }, select: { path: true } })).map((f) => f.path);
+        const leftovers = await leftoverDevFiles(id, paths);
+        if (leftovers.length) {
+          await applyWorkingChanges(id, { deletePaths: leftovers });
+          await audit({ action: "files.clean-dev", result: "ok", siteId: id, siteSlug: site.slug, detail: `${leftovers.length} fichier(s) : ${leftovers.slice(0, 5).join(", ")}${leftovers.length > 5 ? "..." : ""}` });
+          void services.blobs.gc().catch(() => undefined);
+        }
+        return listFiles(id, services.blobs);
+      });
+    });
+
     app.post("/api/sites/:id/files/delete", async (request) => {
       const { id } = idParams.parse(request.params);
       const site = await loadSite(id);
@@ -106,12 +127,13 @@ export function filesRoutes(services: Services): FastifyPluginAsync {
         throw new HttpError(400, "Un dossier ne peut pas être déplacé dans lui-même.");
       }
       const movingPaths = new Set(moving.map((f) => f.path));
+      const { devFilesAllowed: allow } = await siteExtras(id);
       const existing = new Set(all.filter((f) => !movingPaths.has(f.path)).map((f) => f.path));
       const existingLower = new Map([...existing].map((p) => [p.toLowerCase(), p]));
       const upserts: FileRef[] = [];
       for (const f of moving) {
         const next = from.kind === "dir" ? `${to.path}/${f.path.slice(from.path.length + 1)}` : to.path;
-        const { path: target, verdict } = checkSitePath(next);
+        const { path: target, verdict } = checkSitePath(next, { allow });
         if (verdict.action !== "accept") throw new HttpError(400, `${target.slice(0, 200)} : ${verdict.reason}`);
         if (existing.has(target)) throw new HttpError(409, `Un fichier porte déjà ce nom : ${target.slice(0, 200)}`);
         const other = existingLower.get(target.toLowerCase());

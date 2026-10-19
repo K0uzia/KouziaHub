@@ -24,6 +24,7 @@ import { Segmented } from "@/components/ui/Segmented";
 import { Banner } from "@/components/ui/Banner";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { CloudflareCacheCard } from "@/components/sites/CloudflareCacheCard";
+import { SiteRulesCard } from "@/components/sites/SiteRulesCard";
 
 const HOSTS = [
   { id: "www", label: "Avec www" },
@@ -265,6 +266,8 @@ export function ServerTab({ site, onSite }: { site: SiteDetail; onSite: (s: Site
           </>
         )}
       </Card>
+
+      <SiteRulesCard site={site} onSite={onSite} />
 
       <CloudflareCacheCard site={site} />
 
