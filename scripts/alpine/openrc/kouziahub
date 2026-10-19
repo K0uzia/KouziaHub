@@ -48,11 +48,5 @@ start_pre() {
     eerror ".env manquant : ${KH_APP_DIR}/.env (hubctl install)"
     return 1
   fi
-  # Sans Cloudflare Access, l'API refuse de démarrer en production : message clair plutôt que 10 relances.
-  if ! grep -Eq '^CF_ACCESS_TEAM_DOMAIN="?[^"[:space:]]' "${KH_APP_DIR}/.env" \
-    || ! grep -Eq '^CF_ACCESS_AUD="?[^"[:space:]]' "${KH_APP_DIR}/.env"; then
-    eerror "Cloudflare Access pas encore renseigné : hubctl secrets access"
-    return 1
-  fi
   export HOME="$KH_HOME_DIR"
 }

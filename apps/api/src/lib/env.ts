@@ -32,11 +32,6 @@ export function assertSecurityEnv(): void {
   if (isProduction() && key.toLowerCase() === EXAMPLE_ENCRYPTION_KEY) {
     throw new Error("ENCRYPTION_KEY d'exemple interdite en production (openssl rand -hex 32)");
   }
-  if (isProduction() && accessConfig() === null) {
-    throw new Error(
-      "Cloudflare Access obligatoire en production : CF_ACCESS_TEAM_DOMAIN et CF_ACCESS_AUD dans le .env",
-    );
-  }
 }
 
 function addOrigin(set: Set<string>, raw: string | undefined): void {
@@ -94,8 +89,8 @@ export type AccessConfig = {
 };
 
 /**
- * Vérification du jeton Cloudflare Access. Null : vérification coupée (dev seulement ; en production,
- * assertSecurityEnv refuse le démarrage).
+ * Vérification du jeton Cloudflare Access, facultative (décision du 19/10/2026 : le hub est protégé comme
+ * l'ERP, par son login avec mot de passe et code à 6 chiffres). Null : Access non renseigné ou coupé en dev.
  */
 export function accessConfig(): AccessConfig | null {
   const disabled = ["true", "1"].includes(process.env.CF_ACCESS_DISABLED?.trim().toLowerCase() ?? "");

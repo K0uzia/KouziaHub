@@ -36,16 +36,18 @@ describe("connexion", () => {
 
   it("refuse la connexion par le tunnel tant que la 2FA n'est pas activée", async () => {
     process.env.TRUST_PROXY = "loopback";
+    process.env.HUB_PUBLIC_ORIGIN = "https://hub.kouzia.com";
     const tunnelApp = await buildApp({ silent: true, serveStatic: false, accessVerifier: null });
     const res = await tunnelApp.inject({
       method: "POST",
       url: "/api/auth/login",
       remoteAddress: "127.0.0.1",
-      headers: { ...ORIGIN, "cf-connecting-ip": "203.0.113.9" },
+      headers: { host: "hub.kouzia.com", origin: "https://hub.kouzia.com", "cf-connecting-ip": "203.0.113.9" },
       payload: { email: TEST_EMAIL, password: TEST_PASSWORD },
     });
     await tunnelApp.close();
     delete process.env.TRUST_PROXY;
+    delete process.env.HUB_PUBLIC_ORIGIN;
     expect(res.statusCode).toBe(403);
     expect(res.json().error).toMatch(/hubctl admin/);
   });

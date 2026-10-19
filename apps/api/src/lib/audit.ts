@@ -5,7 +5,7 @@ export type AuditInput = {
   result: "ok" | "error";
   siteId?: string | null;
   siteSlug?: string | null;
-  /** Texte court, sans secret ni donnée personnelle. */
+  /** Texte court, sans secret (une connexion y note l'IP et l'appareil, jamais le mot de passe ni le code). */
   detail?: string | null;
 };
 

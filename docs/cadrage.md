@@ -96,12 +96,14 @@ Trois couches, de la plus proche du contenu à la plus large :
 
 Note : `Disallow` empêche l'exploration, donc le robot ne voit pas l'en-tête `noindex`. Ce n'est pas gênant ici, puisque rien n'est lisible sans le code.
 
-### 1.6 Cloudflare Access devant `hub.kouzia.com`
+### 1.6 Accès à `hub.kouzia.com` : comme l'ERP, sans Cloudflare Access
 
-- Application Access « self-hosted » sur `hub.kouzia.com`, règle Allow avec le sélecteur Emails réduit à l'adresse d'Alexandre [CF-ACCESS-POL]. Fournisseur d'identité : code par e-mail (rien à configurer) ou Google.
-- Créée une fois à la main par Alexandre (le jeton du hub n'a pas besoin de ce droit).
-- Le hub vérifie lui-même l'en-tête `Cf-Access-Jwt-Assertion` (signature avec les clés publiques de `https://<équipe>.cloudflareaccess.com/cdn-cgi/access/certs`, contrôle de `iss` et de `aud`), comme le recommande Cloudflare [CF-JWT]. Une requête qui contournerait Access est ainsi refusée.
-- Puis login propre à l'outil (mot de passe et code TOTP, repris de l'ERP).
+**Décision d'Alexandre du 19/10/2026** (relayée par le superviseur) : ni Cloudflare Access ni Zero Trust devant le hub. Le hub fonctionne comme l'ERP : tunnel Cloudflare à jeton (même procédure que `kouziactl cloudflare`), protection par le login du hub seul, mot de passe et code TOTP obligatoires.
+
+- Par le tunnel (requête de cloudflared en boucle locale avec `CF-Connecting-IP`), seul `hub.kouzia.com` (`HUB_PUBLIC_ORIGIN`) est servi ; tout autre nom d'hôte reçoit la 404 d'une route inconnue (`lib/tunnel-host.ts`, repris de l'ERP).
+- Double authentification exigée par le tunnel et en production, quelle que soit la provenance ; cookies `Secure`, `HttpOnly`, `SameSite=Strict` ; CSRF par contrôle d'origine ; en-têtes de la règle `web-security`.
+- Durcissement en l'absence de filtre amont : 5 essais par quart d'heure et par IP sur la connexion et le code ; verrouillage du compte après 5 échecs, progressif (15 min, 1 h, 4 h, puis 24 h selon les verrouillages des dernières 24 h) ; journal des connexions (IP, provenance, appareil, succès ou échec, jamais le mot de passe ni le code) ; notification Web Push à chaque connexion réussie depuis un nouvel appareil (appareils reconnus par un cookie aléatoire dont seule l'empreinte est gardée).
+- Access reste possible en option : si `CF_ACCESS_TEAM_DOMAIN` et `CF_ACCESS_AUD` sont posés, le hub vérifie en plus l'en-tête `Cf-Access-Jwt-Assertion` (signature, `iss`, `aud`) [CF-JWT].
 
 ### 1.7 Droits minimaux du jeton API Cloudflare
 
@@ -149,7 +151,7 @@ Conséquence : avec un projet par client, le plafond de 100 projets impose de su
 Téléphone ou PC d'Alexandre
    │ HTTPS
    ▼
-Cloudflare Access (hub.kouzia.com, adresse d'Alexandre seule)
+hub.kouzia.com (login du hub : mot de passe et code TOTP, sans Access depuis le 19/10/2026)
    │ tunnel Cloudflare (cloudflared dans le CT du hub)
    ▼
 CT Alpine « kouziahub » (Proxmox)            CT Alpine « kouziacrm » (ERP)
@@ -325,7 +327,7 @@ Rétention : 10 versions de contenu par site sur le CT et chez Cloudflare ; au-d
 | **Fuite du jeton API Cloudflare** | Droits minimaux (1.7), limité au compte et à la zone `kouzia.com`, filtré par IP si possible, date d'expiration. Seulement dans `.env` (600, propriétaire du service), jamais envoyé au navigateur, jamais journalisé (masquage des en-têtes `Authorization` et de la variable dans les journaux, y compris la sortie de wrangler). Procédure de rotation dans `hubctl`. En cas de fuite : révocation immédiate dans Cloudflare, nouveau jeton, lecture du journal d'audit du compte. Le jeton n'a aucun droit sur les autres zones, donc sur les domaines finaux des clients. |
 | **Fichiers malveillants ou piégés** | Contrôles du zip avant décompression : chemins normalisés, refus de `..`, des chemins absolus, des liens symboliques et des noms en double ; plafonds de taille décompressée totale, de taille par fichier (25 Mio) et de nombre de fichiers (20 000) contre les bombes zip ; décompression dans un dossier temporaire neuf hors de l'application. Refus des fichiers de développement (`.env`, `.git`, `node_modules`, `.map`, sauvegardes) avec message. **Refus de `_worker.js`, `functions/` et `_routes.json` envoyés** : seul le hub injecte du code exécuté par Cloudflare, sinon un fichier envoyé pourrait exécuter du code sur le compte. `_headers` et `_redirects` envoyés sont fusionnés avec ceux du hub, qui gardent la priorité. Seul Alexandre envoie des fichiers. |
 | **Sous-domaine orphelin et prise de contrôle** | Un CNAME qui pointe vers un projet `pages.dev` supprimé peut être repris par un tiers qui recrée ce nom [SCOUT-DANGLING]. Le hub supprime toujours dans cet ordre : CNAME, domaine du projet, puis projet. Contrôle quotidien : chaque CNAME de `kouzia.com` marqué `kouzia-hub:` doit correspondre à un projet existant du compte, sinon alerte dans le hub. Les noms de projet portent un préfixe propre (`kz-<slug>`). |
-| **Exposition du hub** | Access en amont (adresse d'Alexandre seule) ; vérification du jeton Access par le hub [CF-JWT] ; login avec TOTP obligatoire ; aucune route publique (contrairement à l'ERP) : par le tunnel, toute requête sans jeton Access valide reçoit 404. En-têtes de la règle `web-security` (CSP stricte, `frame-ancestors 'none'`, `nosniff`, `Referrer-Policy`, `Permissions-Policy`, COOP), `noindex` et `robots.txt` en `Disallow: /`, CSRF sur les actions, cookies `Secure`, `HttpOnly`, `SameSite=Strict`. |
+| **Exposition du hub** | Sans Cloudflare Access (décision du 19/10/2026, voir 1.6) : par le tunnel, seul `hub.kouzia.com` est servi, tout autre hôte reçoit 404 ; login avec TOTP obligatoire ; limite de 5 essais par quart d'heure et par IP ; verrouillage progressif du compte ; journal des connexions ; notification à chaque connexion depuis un nouvel appareil. Access reste possible en option, avec vérification de son jeton [CF-JWT]. En-têtes de la règle `web-security` (CSP stricte, `frame-ancestors 'none'`, `nosniff`, `Referrer-Policy`, `Permissions-Policy`, COOP), `noindex` et `robots.txt` en `Disallow: /`, CSRF sur les actions, cookies `Secure`, `HttpOnly`, `SameSite=Strict`. |
 | **Accès au code d'une version de travail** | Code de 50 bits environ, limitation de débit de la zone, cookie signé et lié à la version du code, mode « fail closed » obligatoire, redirection des adresses `pages.dev` vers le domaine protégé, purge des anciennes versions. |
 | **Lien ERP détourné** | Route joignable seulement en local, pare-feu Proxmox, IP autorisée, signature horodatée, lecture seule, champs minimaux, 404 identique. |
 | **Perte de données du hub** | Sauvegarde quotidienne SQLite et archives des versions, même principe que l'ERP ; restauration testée au lot 0. |
@@ -377,7 +379,7 @@ Chaque lot est livré vérifié (tests, build, contrôle mobile, accessibilité,
 8. **Votre adresse IP de sortie est-elle fixe ?** Si oui, le jeton Cloudflare peut être limité à elle. *Recommandation : le faire si l'IP est fixe ; sinon, s'en tenir aux droits minimaux et à l'expiration annuelle.*
 9. **Vignettes** : capture automatique (Chromium dans le CT, environ 300 Mo) ou image envoyée à la main ? *Recommandation : capture automatique avec repli sur l'image envoyée.*
 10. **Outil de mise à jour** : un `hubctl` copié de `kouziactl`, ou un seul outil commun aux deux CT ? *Recommandation : `hubctl` copié pour démarrer, mutualisation plus tard si la duplication gêne.*
-11. **Connexion Access à `hub.kouzia.com`** : code par e-mail ou compte Google ? *Recommandation : code par e-mail (rien à configurer), Google si vous préférez ne pas attendre un e-mail.*
+11. **Connexion Access à `hub.kouzia.com`** : *sans objet depuis le 19/10/2026* (Access retiré, voir 1.6).
 12. **Source GitHub** : utile dès le départ, ou le zip suffit-il ? *Recommandation : zip d'abord, GitHub en lot optionnel.*
 13. **Afficher l'adresse de la version de travail dans l'ERP** (fiche client) ? *Recommandation : plus tard, par le champ « liens » du projet qui existe déjà, sans migration.*
 
@@ -399,7 +401,7 @@ Décisions d'Alexandre du 18/10/2026 (troisième série, transmises par le super
                                                           notifications urgentes (panne, retour, hub muet)
 ```
 
-- **Le hub n'ouvre aucune porte entrante** : il appelle le Worker en sortie (comme il appelle déjà l'API Cloudflare). Le Worker ne peut pas joindre le hub, protégé par Access ; c'est donc l'absence de battement de cœur qui signale « hub ou box hors ligne ».
+- **Le hub n'ouvre aucune porte entrante** : il appelle le Worker en sortie (comme il appelle déjà l'API Cloudflare). Le hub n'offre aucune route au Worker ; c'est donc l'absence de battement de cœur qui signale « hub ou box hors ligne ».
 - **Points d'entrée du Worker** : `POST /sync`, `POST /report`, `GET /state`, sur son adresse `*.workers.dev`. Chaque requête porte une signature HMAC-SHA256 horodatée (même schéma que le lien ERP, section 3.4), secret partagé `MONITOR_SHARED_SECRET` ; tout le reste répond 404.
 - **Qui décide d'une panne** : la règle de comparaison est un module pur, partagé par les deux côtés. Elle est appliquée par le **Worker** pour les alertes urgentes, parce qu'il est le seul point toujours joignable quand la box tombe. Le hub applique la même règle pour l'affichage et l'historique. Écart assumé à « le hub compare » : sinon, une box coupée empêcherait toute alerte. Un seul émetteur par type d'alerte, pour éviter les doublons.
 

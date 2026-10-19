@@ -45,7 +45,7 @@ Données
 
 Réglages (rien n'est affiché à l'écran)
   cloudflare                  jeton du tunnel Cloudflare du hub
-  secrets [access|api|erp]    Cloudflare Access (domaine d'équipe, AUD), API Cloudflare (jeton, compte, zone), lien ERP
+  secrets [api|erp|access]    API Cloudflare (jeton, compte, zone), lien ERP, Cloudflare Access (facultatif)
   secrets veille              jeton de lecture des zones Cloudflare (détection des domaines à surveiller)
   secrets github              jeton GitHub en lecture seule (dépôt privé : nécessaire à update)
   chromium                    installer Chromium pour les vignettes automatiques
@@ -193,7 +193,7 @@ show_menu() {
     menu_item 6 "Redémarrer le hub" ""
     printf '\n  %s\n' "${C_BOLD}Réglages${C_RESET}"
     menu_item 7 "Tunnel Cloudflare" "jeton du tunnel du hub"
-    menu_item 8 "Cloudflare Access" "domaine d'équipe, AUD"
+    menu_item 8 "Cloudflare Access" "facultatif"
     menu_item 9 "Jeton API Cloudflare" "jeton, compte, zone"
     menu_item 10 "Mon compte" "mot de passe, double authentification"
     menu_item 11 "Vignettes (Chromium)" "facultatif"

@@ -179,10 +179,8 @@ revert_restore() {
     env_fix_perms
   fi
   STOPPED=0
-  if access_configured; then
-    rc-service "$KH_SERVICE" start >/dev/null 2>&1 || true
-    wait_health || warn "Le hub ne répond pas non plus sur l'état d'avant : hubctl logs erreurs."
-  fi
+  rc-service "$KH_SERVICE" start >/dev/null 2>&1 || true
+  wait_health || warn "Le hub ne répond pas non plus sur l'état d'avant : hubctl logs erreurs."
   die "Restauration annulée : le hub est revenu à l'état d'avant. Envoyer « hubctl logs erreurs » au développeur."
 }
 
@@ -226,24 +224,18 @@ fi
 log "Base de données : migrations..."
 db_deploy || revert_restore "Les migrations ont échoué sur la base remise."
 
-if access_configured; then
-  rc-service "$KH_SERVICE" start >/dev/null 2>&1 || true
-  if wait_health; then
-    rm -rf "$OLD_DATA"
-    STOPPED=0
-    ok "Restauration terminée."
-  else
-    show_app_errors
-    warn "Le hub ne répond pas après la restauration."
-    echo "  L'ancien dossier des fichiers est gardé : ${OLD_DATA}"
-    if [ -n "${SAFETY_PATH:-}" ]; then
-      echo "  Pour revenir à l'état d'avant : hubctl restore ${SAFETY_PATH}"
-    fi
-    STOPPED=0
-    exit 1
-  fi
-else
+rc-service "$KH_SERVICE" start >/dev/null 2>&1 || true
+if wait_health; then
   rm -rf "$OLD_DATA"
   STOPPED=0
-  warn "Données remises, mais Cloudflare Access n'est pas renseigné : le hub reste arrêté (hubctl secrets access)."
+  ok "Restauration terminée."
+else
+  show_app_errors
+  warn "Le hub ne répond pas après la restauration."
+  echo "  L'ancien dossier des fichiers est gardé : ${OLD_DATA}"
+  if [ -n "${SAFETY_PATH:-}" ]; then
+    echo "  Pour revenir à l'état d'avant : hubctl restore ${SAFETY_PATH}"
+  fi
+  STOPPED=0
+  exit 1
 fi
