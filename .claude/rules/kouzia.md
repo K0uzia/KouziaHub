@@ -9,7 +9,7 @@ Outil interne de l'EI Kouzia, sur `hub.kouzia.com`. Il héberge les versions de 
 - Fonctions attendues : en un clic, créer `<client>.kouzia.com` ; un dossier par site, lié à un client de l'ERP ; envoi des fichiers du site ; activer ou couper le site ; présentation en catalogue (vignettes, façon « catalogue de streaming »).
 - Version de travail protégée : le client y accède par un code (reçu par e-mail ou communiqué), jamais indexée.
 - Domaine final du client : acheté par Alexandre au nom du client, sur son compte Cloudflare, et laissé vide jusqu'à validation. La mise en ligne sur le domaine final se fait à la main, hors de l'outil.
-- Accès à l'outil : Cloudflare Access devant `hub.kouzia.com` (seule l'adresse d'Alexandre), puis login propre à l'outil.
+- Accès à l'outil : remplacé le 19/10/2026 par la quatrième série ci-dessous (sans Cloudflare Access).
 - L'outil tourne sur le Proxmox d'Alexandre, comme l'ERP (CT Alpine, OpenRC, tunnel Cloudflare).
 - Clients : lus depuis l'ERP en lecture seule ; rien n'est ressaisi.
 
@@ -39,3 +39,9 @@ Elles remplacent les points correspondants ci-dessus et du cadrage (`docs/cadrag
 - Toute modification de l'ERP (point d'accès en lecture des clients) se fait dans le dépôt KouziaCRM, annoncée au superviseur et validée avant écriture.
 - Travail uniquement dans ce dépôt (worktrees dans `.worktrees/`). Commit et fusion en local autorisés une fois vérifiés ; push seulement par la session superviseur, avec l'accord d'Alexandre.
 - Typographie : ni tiret cadratin (U+2014) ni demi-cadratin (U+2013), nulle part.
+
+## Décisions d'Alexandre (19/10/2026, quatrième série : sans Cloudflare Access, verrouillées)
+
+- Ni Cloudflare Access ni Zero Trust devant le hub. Le hub fonctionne comme l'ERP : tunnel Cloudflare à jeton, protection par le login du hub seul, mot de passe et code TOTP obligatoires. Access reste possible en option.
+- Par le tunnel, seul `hub.kouzia.com` est servi (404 ailleurs) ; limite de débit stricte, verrouillage progressif, journal des connexions, notification à chaque nouvel appareil.
+- Elles remplacent le point « Accès à l'outil » de la première série et le cadrage 1.6.
