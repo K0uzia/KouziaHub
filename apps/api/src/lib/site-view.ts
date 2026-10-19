@@ -131,7 +131,11 @@ export async function catalog(services: Services): Promise<CatalogResponse> {
     notices.push({ level: "info", code: "cloudflare_fake", message: "Cloudflare simulé : aucun site n'est réellement créé ni publié." });
   }
   if (services.erp.mode === "fake") {
-    notices.push({ level: "info", code: "erp_fake", message: "Clients de démonstration : l'ERP n'est pas relié." });
+    notices.push({
+      level: "info",
+      code: "erp_fake",
+      message: "Clients de l'ERP pas encore reliés : des clients d'exemple sont proposés. Relier l'ERP : hubctl secrets erp",
+    });
   } else if (!erp.available) {
     notices.push({ level: "warning", code: "erp_unavailable", message: "Clients de l'ERP indisponibles." });
   }

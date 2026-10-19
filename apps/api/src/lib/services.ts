@@ -68,7 +68,7 @@ export function cloudflareFromEnv(dataDir: string): CloudflareGateway {
   });
 }
 
-/** ERP HTTP si ERP_BASE_URL est posée (secret obligatoire), sinon clients de démonstration. */
+/** ERP HTTP si ERP_BASE_URL est posée (secret obligatoire), sinon clients d'exemple. */
 export function erpFromEnv(): ErpDirectory {
   const baseUrl = process.env.ERP_BASE_URL?.trim();
   if (!baseUrl) return new FakeErpDirectory();

@@ -117,9 +117,9 @@ describe("annuaire ERP par HTTP (fetch injecté)", () => {
     expect(warnings).toEqual(["[erp] 1 client(s) écarté(s) : réponse de l'ERP invalide pour ces fiches"]);
   });
 
-  it("annuaire factice : clients marqués démonstration", async () => {
+  it("annuaire factice : clients marqués « Exemple »", async () => {
     const clients = await new FakeErpDirectory().list();
     expect(clients.length).toBeGreaterThanOrEqual(10);
-    expect(clients.every((c) => c.displayName.startsWith("Démo"))).toBe(true);
+    expect(clients.every((c) => c.displayName.startsWith("Exemple "))).toBe(true);
   });
 });

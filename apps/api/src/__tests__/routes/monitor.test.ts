@@ -103,7 +103,7 @@ describe("domaines ajoutés à la main et zones Cloudflare", () => {
     const created = await send("POST", "/api/monitor/targets", { url: "www.client-exemple.fr", label: "Client exemple", keyword: "Bienvenue", erpClientId: "demo-01" });
     expect(created.statusCode).toBe(201);
     const entry = created.json() as MonitorTargetEntry;
-    expect(entry).toMatchObject({ url: "https://www.client-exemple.fr/", hostname: "www.client-exemple.fr", source: "manual", clientName: "Démo 01 : boulangerie" });
+    expect(entry).toMatchObject({ url: "https://www.client-exemple.fr/", hostname: "www.client-exemple.fr", source: "manual", clientName: "Exemple 01 : boulangerie" });
     expect((await send("POST", "/api/monitor/targets", { url: "https://www.client-exemple.fr/", label: "x" })).statusCode).toBe(409);
     for (const bad of ["ftp://a.fr", "https://user:pw@a.fr", "pas une adresse", "https://localhost/", "https://nas.lan/", "https://pve.local/", "https://box.internal/", "https://routeur.home.arpa/", "https://ct.localhost/", "http://192.168.1.10:3100/", "http://[::ffff:127.0.0.1]/"]) {
       expect((await send("POST", "/api/monitor/targets", { url: bad, label: "x" })).statusCode, bad).toBe(400);
