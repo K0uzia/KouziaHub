@@ -5,6 +5,7 @@
 #   hubctl secrets access    Cloudflare Access : domaine d'équipe, AUD, adresse attendue
 #   hubctl secrets api       API Cloudflare : jeton, identifiant de compte, identifiant de zone
 #   hubctl secrets veille    jeton de lecture des zones (surveillance : détection des domaines)
+#   hubctl secrets github    jeton GitHub en lecture seule (dépôt privé, pour hubctl update)
 #   hubctl secrets           les deux
 #   hubctl chromium          installer Chromium pour les vignettes automatiques (facultatif)
 
@@ -167,6 +168,8 @@ configure_erp() {
   une règle du pare-feu n'ouvre le port 3100 qu'à l'IP de ce CT du hub.
   Le secret partagé : une seule valeur, posée à l'identique dans le .env de l'ERP (HUB_READ_SECRET).
   Pour la créer : openssl rand -hex 32 (sur un des deux CT), puis la coller ici et côté ERP.
+  Côté ERP, aussi : HUB_LISTEN=<IP du CT ERP>:3100 et HUB_ALLOWED_IPS=<IP de ce CT>, puis
+  kouziactl restart. Sans eux, l'ERP n'ouvre pas l'écouteur. Les deux CT en IP fixe (README, 2.d).
   État : adresse de l'ERP $(present ERP_BASE_URL), secret $(present HUB_READ_SECRET), lien vers les fiches $(present ERP_PUBLIC_ORIGIN).
   Entrée sans rien saisir = garder la valeur actuelle.
 EOF
@@ -215,6 +218,74 @@ EOF
     ok "Jeton de lecture des zones enregistré."
   fi
   V=""
+}
+
+# --- Jeton GitHub (dépôt privé) ---
+
+configure_github() {
+  title "Jeton GitHub en lecture seule (mises à jour)"
+  cat <<EOF
+  Le dépôt du hub est privé : « hubctl update » a besoin d'un jeton pour récupérer le code.
+  Le créer (README 1.2) : GitHub > Settings > Developer settings > Personal access tokens >
+  Fine-grained tokens > Generate new token, avec SEULEMENT :
+    - Repository access : Only select repositories > K0uzia/KouziaHub
+    - Repository permissions : Contents > Read-only
+  Expiration : un an. Le jeton commence par github_pat_.
+  Il est gardé dans ${KH_GITHUB_TOKEN_FILE}, lisible par root seulement, jamais dans le .env.
+EOF
+  if [ -s "$KH_GITHUB_TOKEN_FILE" ]; then
+    echo "  (un jeton est déjà enregistré ; Entrée sans rien coller = le garder)"
+  fi
+  ask_secret V "Jeton GitHub"
+  if [ -z "$V" ]; then
+    if [ -s "$KH_GITHUB_TOKEN_FILE" ]; then
+      ok "Jeton actuel gardé."
+    else
+      warn "Rien de collé : jeton non posé (plus tard : hubctl secrets github)."
+    fi
+    return 0
+  fi
+  # Fine-grained seulement : un jeton classique (ghp_) ouvre tous les dépôts du compte.
+  if ! printf '%s' "$V" | grep -Eq '^github_pat_[A-Za-z0-9_]{40,250}$'; then
+    _len="${#V}"
+    V=""
+    die "Ce n'est pas un jeton fine-grained (${_len} caractères reçus, il commence par github_pat_). Rien n'a changé."
+  fi
+  mkdir -p "$KH_ETC_DIR"
+  chmod 700 "$KH_ETC_DIR"
+  _prev=""
+  if [ -s "$KH_GITHUB_TOKEN_FILE" ]; then
+    _prev="$(mktemp "${KH_ETC_DIR}/.github-prev.XXXXXX")"
+    cp -p "$KH_GITHUB_TOKEN_FILE" "$_prev"
+  fi
+  _tmp="$(mktemp "${KH_ETC_DIR}/.github.XXXXXX")"
+  chmod 600 "$_tmp"
+  printf '%s' "$V" > "$_tmp"
+  V=""
+  chown root:root "$_tmp"
+  mv -f "$_tmp" "$KH_GITHUB_TOKEN_FILE"
+  log "Essai du jeton auprès de GitHub..."
+  if git_with_github_token ls-remote --heads "$KH_REPO_URL" "$KH_REPO_BRANCH" >/dev/null 2>&1; then
+    rm -f "$_prev"
+    ok "Jeton GitHub accepté et enregistré (${KH_GITHUB_TOKEN_FILE}, lisible par root seulement)."
+  else
+    if [ -n "$_prev" ]; then mv -f "$_prev" "$KH_GITHUB_TOKEN_FILE"; else rm -f "$KH_GITHUB_TOKEN_FILE"; fi
+    die "GitHub refuse ce jeton (ou le réseau ne répond pas) : droits, dépôt choisi ou expiration à vérifier. Rien n'a changé."
+  fi
+
+  echo "  Date d'expiration du jeton, affichée par GitHub (AAAA-MM-JJ), pour être prévenu 30 jours avant."
+  ask EXP "Expiration (facultatif, Entrée = ne pas suivre)" ""
+  if [ -n "$EXP" ]; then
+    if iso_day_ok "$EXP"; then
+      state_set github-token-expires "$EXP"
+      ok "Expiration notée : $EXP (hubctl status prévient 30 jours avant)."
+    else
+      warn "Date non reconnue ($EXP) : expiration non suivie (relancer hubctl secrets github pour la saisir)."
+      state_set github-token-expires ""
+    fi
+  else
+    state_set github-token-expires ""
+  fi
 }
 
 # --- API Cloudflare ---
@@ -320,6 +391,9 @@ case "$SECTION" in
     configure_veille
     restart_if_needed
     ;;
+  github)
+    configure_github
+    ;;
   secrets|"")
     [ -f "$KH_ENV_FILE" ] || die ".env absent : lancer « hubctl install »."
     configure_access
@@ -332,6 +406,6 @@ case "$SECTION" in
     restart_if_needed
     ;;
   *)
-    die "Réglage inconnu : $SECTION (cloudflare, secrets, secrets access, secrets api, secrets erp, secrets veille, chromium)"
+    die "Réglage inconnu : $SECTION (cloudflare, secrets, secrets access, secrets api, secrets erp, secrets veille, secrets github, chromium)"
     ;;
 esac

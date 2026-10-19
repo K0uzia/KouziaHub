@@ -18,13 +18,23 @@ self.addEventListener("push", (event) => {
     data = { body: event.data ? event.data.text() : "" };
   }
   const title = data.title || "Kouzia Hub";
+  const message = { title, body: data.body || "", url: data.url || "/surveillance", tag: data.tag || "" };
   event.waitUntil(
-    self.registration.showNotification(title, {
-      body: data.body || "",
-      tag: data.tag || undefined,
-      lang: "fr",
-      data: { url: data.url || "/surveillance" },
-    }),
+    (async () => {
+      const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      const onScreen = windows.filter((c) => c.visibilityState === "visible" && new URL(c.url).origin === self.location.origin);
+      if (onScreen.length === 0) {
+        await self.registration.showNotification(title, { body: message.body, tag: message.tag || undefined, lang: "fr", data: { url: message.url } });
+        return;
+      }
+      // Hub à l'écran : le message s'affiche en toast dans la page, pas en notification de l'appareil.
+      for (const client of onScreen) client.postMessage({ type: "kouzia-push", ...message });
+      // Chaque push doit montrer une notification (userVisibleOnly ; Safari et Firefox retirent sinon
+      // l'abonnement) : posée sans son ni vibration, puis retirée aussitôt.
+      const tag = `ecran:${message.tag || Date.now()}`;
+      await self.registration.showNotification(title, { body: message.body, tag, silent: true, lang: "fr", data: { url: message.url } });
+      for (const n of await self.registration.getNotifications({ tag })) n.close();
+    })(),
   );
 });
 

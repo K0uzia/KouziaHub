@@ -37,7 +37,7 @@ Cadrage technique complet : `docs/cadrage.md`.
 | Processeur | 2 cœurs |
 | Mémoire | 2048 Mo (swap 512 Mo) |
 | Disque | 16 Go (les sauvegardes gardent tous les fichiers des sites) |
-| Réseau | DHCP ou IP fixe, comme l'ERP |
+| Réseau | **IP fixe** (IP statique, ou réservation DHCP sur la box) : le lien avec l'ERP (2.d) en dépend, comme l'IP du CT de l'ERP |
 | Démarrer avec l'hôte (Start at boot) | oui |
 
 Démarrer le CT, ouvrir sa « Console » et se connecter en `root`. Si le collage ne marche pas dans cette console, ouvrir le « Shell » du nœud Proxmox puis taper `pct enter <numéro du CT>`.
@@ -50,7 +50,17 @@ git clone https://github.com/K0uzia/KouziaHub.git /opt/kouziahub
 sh /opt/kouziahub/scripts/alpine/hubctl install
 ```
 
-Répondre aux questions (Entrée = choix conseillé). Si GitHub demande un identifiant (dépôt privé) : votre nom GitHub, et comme mot de passe un jeton GitHub en lecture seule sur ce dépôt.
+Répondre aux questions (Entrée = choix conseillé).
+
+Le dépôt est privé : `git clone` demande un identifiant. Répondre votre nom GitHub (`K0uzia`) et, comme mot de passe, un **jeton GitHub en lecture seule**, jamais votre vrai mot de passe :
+
+1. GitHub > Settings > Developer settings > Personal access tokens > **Fine-grained tokens** > Generate new token.
+2. Nom : `Lecture KouziaHub (CT hub)`. Expiration : un an.
+3. Repository access : **Only select repositories** > `K0uzia/KouziaHub`, et lui seul.
+4. Permissions > Repository permissions : **Contents : Read-only** (« Metadata : Read-only » s'ajoute seul). Rien d'autre.
+5. Generate token, copier le jeton (il ne sera plus affiché) et le coller à la question du mot de passe.
+
+`git clone` ne garde pas ce jeton. Or `hubctl update` en a besoin pour chaque mise à jour : **après `hubctl install`, lancer `hubctl secrets github`** et coller le même jeton (l'installation le propose d'elle-même à l'étape « Réglages »). Le hub l'essaie aussitôt auprès de GitHub, puis le garde dans `/etc/kouziahub/github-token`, lisible par root seulement, jamais dans le `.env` ni dans la configuration du dépôt. Il demande aussi sa date d'expiration (facultative) : `hubctl status` prévient alors 30 jours avant. Avant l'expiration, refaire un jeton de la même façon et relancer `hubctl secrets github`. Seuls les jetons fine-grained (`github_pat_...`) sont acceptés : un jeton classique ouvrirait tous les dépôts du compte.
 
 L'installation propose Chromium (environ 300 Mo). C'est le navigateur sans écran qui fabrique les vignettes et mesure la vitesse des sites. Sans lui, vous enverrez une image par site et la vitesse ne sera pas mesurée ; `hubctl chromium` l'ajoute plus tard.
 
@@ -133,10 +143,27 @@ Il permet au hub de vous **proposer** vos domaines Cloudflare à surveiller ; ri
 
 Tant que ce lien n'est pas posé, le hub montre des clients de démonstration (il le signale). Le hub lit seulement le nom, le numéro et le type de chaque client, jamais son adresse ni ses coordonnées.
 
-1. Côté ERP (une fois sa mise à jour faite) : l'ERP sert la liste des clients sur un **écouteur dédié, port 3100**, sur l'IP de son CT dans le réseau local, jamais par Internet.
-2. Dans Proxmox, sur le CT de l'ERP : Firewall > Add, règle « IN », ACCEPT, port de destination 3100, source = l'IP du CT du hub ; aucune autre source.
-3. Créer une seule fois le secret partagé (`openssl rand -hex 32`, sur l'un des deux CT) et le poser à l'identique dans le `.env` de l'ERP (`HUB_READ_SECRET`).
-4. Dans le CT du hub : `hubctl secrets erp` : IP du CT de l'ERP (le hub en fait `http://<IP du CT ERP>:3100`), puis le secret (invisible), puis `https://erp.kouzia.com` pour les liens « fiche client ».
+L'ERP sert la liste des clients sur un **écouteur dédié, port 3100**, sur l'IP de son CT dans le réseau local, jamais par Internet. Cet écouteur ne s'ouvre que si les trois réglages de l'étape 3 sont posés. Le détail côté ERP est dans `docs/hub-lecture.md` du dépôt KouziaCRM.
+
+1. **Les deux CT ont une IP fixe** (IP statique dans Proxmox, ou réservation DHCP sur la box). Si l'IP de l'un change, le lien s'arrête (l'ERP, lui, continue de fonctionner). Relever les deux IP avec `ip -4 addr` dans chaque CT (côté ERP, aussi `kouziactl summary`, ligne IP LAN). Exemple dans la suite : ERP `192.168.1.20`, hub `192.168.1.30`.
+2. Créer une seule fois le secret partagé : `openssl rand -hex 32`, sur l'un des deux CT. La même valeur va dans les deux `.env`, et nulle part ailleurs.
+3. Dans le CT de l'ERP, ajouter à `/opt/kouziacrm/.env` :
+
+   ```sh
+   HUB_READ_SECRET="le secret de l'étape 2"
+   HUB_ALLOWED_IPS="192.168.1.30"
+   HUB_LISTEN="192.168.1.20:3100"
+   ```
+
+   `HUB_ALLOWED_IPS` : l'IP du CT du hub, seule autorisée à lire. `HUB_LISTEN` : l'IP du CT de l'ERP suivie de `:3100` (`0.0.0.0` est refusé exprès). Sans ces deux lignes, aucun écouteur ne s'ouvre, même avec le secret.
+4. **Redémarrer l'ERP** pour qu'il relise son `.env` : `kouziactl restart`, puis `grep "\[hub\]" /var/log/kouzia/app.log | tail -n 3`. La dernière ligne doit dire `lecture par le hub sur 192.168.1.20:3100`. Si elle dit `écouteur non démarré`, la suite de la ligne donne la raison (IP mal recopiée, par exemple).
+5. Pare-feu Proxmox, pour que le port 3100 ne soit ouvert qu'au hub :
+   1. **Avant tout : Centre de données > Pare-feu > Options.** Si « Pare-feu » est sur « Non », vérifier d'abord que « Politique d'entrée » est sur **ACCEPT**, puis seulement passer « Pare-feu » sur « Oui ». Dans l'autre ordre, l'hôte Proxmox lui-même peut devenir injoignable.
+   2. CT de l'ERP > Réseau : modifier la carte `net0` et cocher « Pare-feu ».
+   3. CT de l'ERP > Pare-feu > Options : « Politique d'entrée » sur ACCEPT (l'ERP reste joignable comme aujourd'hui), puis « Pare-feu » sur « Oui ».
+   4. CT de l'ERP > Pare-feu, deux règles dans cet ordre (la première en haut), « Activer » coché sur les deux : `in`, ACCEPT, source `192.168.1.30`, tcp, port de destination 3100 ; puis `in`, DROP, source vide, tcp, port de destination 3100.
+6. Dans le CT du hub : `hubctl secrets erp` : IP du CT de l'ERP (le hub en fait `http://<IP du CT ERP>:3100`), puis le secret (invisible), puis `https://erp.kouzia.com` pour les liens « fiche client ». Le hub redémarre seul.
+7. Vérifier : dans le hub, le bandeau « ERP indisponible » disparaît et les clients s'affichent. Depuis le CT du hub, `curl -s -o /dev/null -w "%{http_code}\n" http://192.168.1.20:3100/api/hub/clients` répond `404` (normal : la requête n'est pas signée) ; depuis un autre poste du réseau, la même commande n'obtient aucune réponse.
 
 ---
 
@@ -160,7 +187,7 @@ Bon à savoir :
 
 ### 4.1 Mettre à jour
 
-`hubctl update` fait tout, dans l'ordre : arrêt du hub, **sauvegarde automatique**, récupération du code sur GitHub, dépendances seulement si elles ont changé, base de données, interface, redémarrage et contrôle que le hub répond. Si le hub ne répond plus, il propose de revenir en arrière. Plus tard, `hubctl rollback` remet la version d'avant la dernière mise à jour (code et données d'alors).
+`hubctl update` (jeton GitHub posé, voir 1.2) fait tout, dans l'ordre : arrêt du hub, **sauvegarde automatique**, récupération du code sur GitHub, dépendances seulement si elles ont changé, base de données, interface, redémarrage et contrôle que le hub répond. Si le hub ne répond plus, il propose de revenir en arrière. Plus tard, `hubctl rollback` remet la version d'avant la dernière mise à jour (code et données d'alors).
 
 **Quand la veille Cloudflare change, `hubctl update` le signale : relancer `hubctl veille deploy` avec un nouveau jeton (chapitre 2 b). C'est le cas de cette version** (les requêtes du hub vers la veille sont désormais signées avec leurs paramètres et protégées contre le rejeu ; sans redéploiement, le hub décide seul).
 
@@ -436,6 +463,7 @@ make dev     # API http://127.0.0.1:3101 et interface http://localhost:5174
 | `hubctl secrets api` | Jeton API du hub, Account ID, Zone ID |
 | `hubctl secrets erp` | Lien avec l'ERP |
 | `hubctl secrets veille` | Jeton de lecture des zones |
+| `hubctl secrets github` | Jeton GitHub en lecture seule (dépôt privé, nécessaire à `hubctl update`) |
 | `hubctl chromium` | Installer Chromium (compte dédié et pare-feu) |
 | `hubctl admin` | Créer le compte ou changer le mot de passe, puis double authentification |
 | `hubctl 2fa-reset` | Couper la double authentification (téléphone perdu), puis `hubctl admin` |

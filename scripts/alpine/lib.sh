@@ -35,6 +35,8 @@ KH_PASSPHRASE_FILE="${KH_ETC_DIR}/backup-pass"
 KH_STATE_DIR="${KH_STATE_DIR:-${KH_APP_DIR}/.deploy-state}"
 KH_ENV_FILE="${KH_APP_DIR}/.env"
 KH_TUNNEL_TOKEN_FILE="${KH_ETC_DIR}/tunnel.token"
+# Jeton GitHub en lecture seule (dépôt privé) : root:root 600, lu seulement par git_fetch_origin.
+KH_GITHUB_TOKEN_FILE="${KH_ETC_DIR}/github-token"
 KH_LOCK_FILE="${KH_LOCK_FILE:-/run/kouziahub-ops.lock}"
 KH_REPO_URL="${KH_REPO_URL:-https://github.com/K0uzia/KouziaHub.git}"
 KH_REPO_BRANCH="${KH_REPO_BRANCH:-main}"
@@ -98,6 +100,20 @@ require_node_min() {
     printf '%s\n' "  Corriger : apk add --no-cache nodejs-current npm   (ou passer le CT en Alpine 3.21 ou plus)" >&2
     exit 1
   fi
+}
+
+# Jours restants avant l'expiration du jeton GitHub (date saisie à la pose), vide si inconnue.
+# Calcul par Node (déjà requis) : « date -d » de BusyBox ne lit pas tous les formats.
+github_token_days_left() {
+  _exp="$(state_get github-token-expires)"
+  iso_day_ok "$_exp" || return 0
+  KH_DAY="$_exp" node -p 'Math.floor((Date.parse(process.env.KH_DAY + "T00:00:00Z") - Date.now()) / 864e5)' 2>/dev/null || true
+}
+
+# Vrai si $1 est une date réelle AAAA-MM-JJ (2027-02-30 refusé).
+iso_day_ok() {
+  printf '%s' "${1:-}" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' || return 1
+  KH_DAY="$1" node -e 'const d = new Date(process.env.KH_DAY + "T00:00:00Z"); process.exit(!isNaN(d) && d.toISOString().slice(0, 10) === process.env.KH_DAY ? 0 : 1)' 2>/dev/null
 }
 
 # Données ICU complètes : avec icu-data-en seul, Intl fr-FR de Node retombe sur l'anglais (« € » avant
@@ -418,11 +434,31 @@ current_commit() {
 
 # Aligne le code sur GitHub (source de vérité). .env et data/ ne sont pas suivis par git : conservés.
 # L'adresse est celle des scripts (KH_REPO_URL), jamais celle écrite dans la configuration du dépôt.
+# git_with_github_token <commande git...> : git_in_app, plus le jeton du dépôt privé s'il est posé.
+# Le programme d'identification est écrit ici, jamais lu dans la configuration du dépôt (garde
+# [credential] maintenu) ; il lit le fichier root à chaque appel : le jeton n'est ni dans argv, ni dans
+# ps, ni dans .git/config.
+git_with_github_token() {
+  if [ -s "$KH_GITHUB_TOKEN_FILE" ]; then
+    git_in_app -c "credential.helper=!f() { [ \"\$1\" = get ] || exit 0; echo username=x-access-token; printf 'password=%s\\n' \"\$(cat '${KH_GITHUB_TOKEN_FILE}')\"; }; f" "$@"
+  else
+    git_in_app "$@"
+  fi
+}
+
+github_fetch_hint() {
+  if [ -s "$KH_GITHUB_TOKEN_FILE" ]; then
+    printf '%s' "Jeton GitHub refusé ou expiré ? En créer un nouveau (README 1.2), puis : hubctl secrets github"
+  else
+    printf '%s' "Le dépôt est privé : poser le jeton GitHub en lecture seule avec « hubctl secrets github » (README 1.2), puis relancer « hubctl update »"
+  fi
+}
+
 git_sync_from_origin() {
   _branch="${1:-$KH_REPO_BRANCH}"
   log "Récupération de la dernière version (GitHub, branche ${_branch})..."
-  git_in_app fetch --no-tags --depth 1 "$KH_REPO_URL" "+${_branch}:refs/remotes/origin/${_branch}" \
-    || die "Impossible de joindre GitHub (réseau ou droits d'accès au dépôt)."
+  git_with_github_token fetch --no-tags --depth 1 "$KH_REPO_URL" "+${_branch}:refs/remotes/origin/${_branch}" \
+    || die "Impossible de joindre GitHub (réseau ou droits d'accès au dépôt). $(github_fetch_hint)."
   git_in_app checkout -f -B "$_branch" "origin/${_branch}" \
     || die "Impossible de placer le code sur origin/${_branch}."
   fix_ownership

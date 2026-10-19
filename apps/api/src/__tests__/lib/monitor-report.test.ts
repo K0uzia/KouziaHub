@@ -33,6 +33,7 @@ import {
 } from "@/lib/monitor/report-text.js";
 import { updateReportSettings } from "@/lib/report-settings.js";
 import { availability } from "@/lib/monitor/view.js";
+import { frNumber } from "@/lib/fr-format.js";
 import { prisma, resetDb } from "../helpers/db.js";
 import { readPdf } from "../helpers/pdf-text.js";
 
@@ -225,11 +226,13 @@ describe("rapport mensuel (PDF)", () => {
     expect(view.days).toHaveLength(31);
     expect(view.days.every((d) => d === "ok")).toBe(true);
     expect(view.incidentsSummary).toBeNull();
+    // 31 jours × 288 contrôles par jour (toutes les 5 min) × 2 points de contrôle.
+    expect(31 * 288 * 2).toBe(17_856);
     expect(view.figures).toEqual([
-      { value: "17 856", label: "vérifications d'ouverture" },
-      { value: "31", label: "contrôles du cadenas" },
-      { value: "31", label: "contrôles du nom de domaine" },
-      { value: "2", label: "mesures de vitesse" },
+      { value: "toutes les 5 min", label: "vérification que le site s'ouvre, jour et nuit, depuis 2 endroits (17 856 au total)", wide: true },
+      { value: "31", label: "contrôles du cadenas", wide: false },
+      { value: "31", label: "contrôles du nom de domaine", wide: false },
+      { value: "2", label: "mesures de vitesse", wide: false },
     ]);
     const pdf = await renderReportPdf(view);
     expect(pdf.subarray(0, 5).toString()).toBe("%PDF-");
@@ -319,6 +322,25 @@ describe("rapport mensuel (PDF)", () => {
     expect(view.days.slice(10).every((d) => d === "ok")).toBe(true);
     const { text } = readPdf(await renderReportPdf(view));
     expect(text).toContain("Pas de mesure");
+  });
+
+  it("cible ajoutée en cours de mois : seuls ses propres contrôles comptent, points réellement actifs", async () => {
+    // Un autre site, surveillé tout le mois, ne doit rien ajouter au compte de celui-ci.
+    const other = await prisma.monitorTarget.create({ data: { url: "https://autre.exemple.fr/", hostname: "autre.exemple.fr", label: "Autre", source: "manual" } });
+    await seedMonth(other, []);
+    const target = await fixtureTarget();
+    await seedMonth(target, [], { fromDay: 11 });
+    const view = await buildReportView(target, "2026-10", NOW, CTX);
+    // Du 11 au 31 : 21 jours × 288 × 2 points.
+    expect(view.figures[0]).toEqual({
+      value: "toutes les 5 min",
+      label: `vérification que le site s'ouvre, jour et nuit, depuis 2 endroits (${frNumber(21 * 288 * 2)} au total)`,
+      wide: true,
+    });
+    // Veille Cloudflare absente : un seul point de contrôle, dit tel quel.
+    await prisma.monitorHourly.deleteMany({ where: { targetId: target.id, observer: "edge" } });
+    const hubOnly = await buildReportView(target, "2026-10", NOW, CTX);
+    expect(hubOnly.figures[0]!.label).toBe(`vérification que le site s'ouvre, jour et nuit, depuis 1 endroit (${frNumber(21 * 288)} au total)`);
   });
 
   it("sans aucune mesure : pas de chiffre inventé, une page", async () => {

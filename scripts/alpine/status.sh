@@ -112,6 +112,21 @@ else
   echo "  Vignettes              : image envoyée à la main (hubctl chromium pour l'automatique)"
 fi
 echo "  Lien avec l'ERP        : $(yes_no ERP_BASE_URL)"
+if [ -s "$KH_GITHUB_TOKEN_FILE" ]; then
+  _days="$(github_token_days_left)"
+  _set="$(date -r "$KH_GITHUB_TOKEN_FILE" '+%Y-%m-%d' 2>/dev/null || echo '?')"
+  if [ -z "$_days" ]; then
+    echo "  Jeton GitHub           : renseigné (posé le ${_set}, expiration non suivie)"
+  elif [ "$_days" -lt 0 ]; then
+    warn "Jeton GitHub expiré depuis le $(state_get github-token-expires) : hubctl update échouera. En refaire un (README 1.2), puis hubctl secrets github"
+  elif [ "$_days" -le 30 ]; then
+    warn "Jeton GitHub : expire dans ${_days} jour(s), le $(state_get github-token-expires). En refaire un (README 1.2), puis hubctl secrets github"
+  else
+    echo "  Jeton GitHub           : renseigné (posé le ${_set}, expire le $(state_get github-token-expires))"
+  fi
+elif is_git_install; then
+  warn "Jeton GitHub : vide, hubctl update ne peut pas récupérer le code du dépôt privé (hubctl secrets github)"
+fi
 
 title "Surveillance"
 if env_has VAPID_PUBLIC_KEY && env_has VAPID_PRIVATE_KEY; then
