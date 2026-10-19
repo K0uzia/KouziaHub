@@ -84,7 +84,7 @@ Le hub n'en a pas besoin : il est protégé comme l'ERP, par son login (1.5). Pa
 
 - 5 essais de connexion au plus par quart d'heure et par adresse IP ;
 - après 5 échecs, le compte se verrouille 15 min, puis 1 h, 4 h et 24 h si cela se répète dans la journée (`hubctl admin` sur le CT le déverrouille) ;
-- chaque connexion, réussie ou refusée, est notée dans Réglages > Journal (adresse IP, date, appareil ; jamais le mot de passe ni le code) ;
+- chaque connexion, réussie ou refusée, est notée dans Réglages > Journal (adresse IP, date, appareil ; jamais le mot de passe ni le code). Exception : les essais bloqués par la limite de débit (réponse « trop de tentatives », 429) ne sont pas notés, seuls les essais traités le sont ;
 - une notification arrive sur le téléphone à chaque connexion réussie depuis un nouvel appareil.
 
 Si vous voulez un jour une porte de plus devant le hub, Cloudflare Access reste possible : application « Self-hosted » sur `hub.kouzia.com` (Zero Trust > Access > Applications), règle Allow sur votre adresse seule, puis `hubctl secrets access` (domaine d'équipe et AUD). Le hub vérifie alors aussi le jeton d'Access.
