@@ -6,6 +6,7 @@ import type { MonitorCheck, MonitorTarget } from "@prisma/client";
 import type { ReportSettings } from "@/contract.js";
 import type { ErpDirectory } from "@/lib/erp/types.js";
 import { prisma } from "@/lib/prisma.js";
+import { HTTP_INTERVAL_MS } from "@/lib/monitor/service.js";
 import { availability } from "@/lib/monitor/view.js";
 import { getReportSettings } from "@/lib/report-settings.js";
 import { frNumber, parisMidnight } from "@/lib/fr-format.js";
@@ -102,7 +103,7 @@ export type ReportView = {
   domain: string[] | null;
   speed: { verdict: SpeedVerdict; seconds: string; comparison: string; stability: string | null } | null;
   /** Chiffres clés tirés des données ; une valeur à zéro est masquée. */
-  figures: Array<{ value: string; label: string }>;
+  figures: Array<{ value: string; label: string; wide: boolean }>;
   footer: { preparedBy: string; contact: string[] };
 };
 
@@ -149,7 +150,7 @@ export async function buildReportView(target: MonitorTarget, month: string, now 
       orderBy: { startedAt: "asc" },
     }),
     prisma.monitorCheck.findFirst({ where: { targetId: target.id, kind: "http" }, orderBy: { at: "asc" }, select: { at: true } }),
-    prisma.monitorHourly.findMany({ where: { targetId: target.id, hour: inMonth }, select: { hour: true, checks: true } }),
+    prisma.monitorHourly.findMany({ where: { targetId: target.id, hour: inMonth }, select: { hour: true, checks: true, observer: true } }),
     prisma.monitorCheck.findFirst({ where: { targetId: target.id, kind: "tls", at: { lt: end } }, orderBy: { at: "desc" } }),
     prisma.monitorCheck.count({ where: { targetId: target.id, kind: "tls", at: inMonth } }),
     prisma.monitorCheck.findFirst({ where: { targetId: target.id, kind: "domain", at: { lt: end } }, orderBy: { at: "desc" } }),
@@ -264,9 +265,19 @@ export async function buildReportView(target: MonitorTarget, month: string, now 
   });
 
   // Chiffres clés : comptes tirés des données, valeurs à zéro masquées.
+  // Ouverture : le rythme d'abord (le total, 31 j × 288 × 2 points, impressionne sans rien dire), le total en
+  // détail. Les points comptés sont ceux qui ont vraiment contrôlé ce site ce mois-ci (hub, Cloudflare).
   const availabilityChecks = hourly.reduce((s, h) => s + h.checks, 0);
+  const places = new Set(hourly.filter((h) => h.checks > 0).map((h) => h.observer)).size;
+  const opening =
+    availabilityChecks > 0
+      ? {
+          value: `toutes les ${HTTP_INTERVAL_MS / 60_000} min`,
+          label: `vérification que le site s'ouvre, jour et nuit, depuis ${plural(places, "endroit", "endroits")} (${count(availabilityChecks)} au total)`,
+          wide: true,
+        }
+      : null;
   const figures = [
-    { n: availabilityChecks, label: availabilityChecks > 1 ? "vérifications d'ouverture" : "vérification d'ouverture" },
     { n: tlsCount, label: tlsCount > 1 ? "contrôles du cadenas" : "contrôle du cadenas" },
     { n: domainCount, label: domainCount > 1 ? "contrôles du nom de domaine" : "contrôle du nom de domaine" },
     { n: speedCount, label: speedCount > 1 ? "mesures de vitesse" : "mesure de vitesse" },
@@ -274,7 +285,8 @@ export async function buildReportView(target: MonitorTarget, month: string, now 
     { n: alerts, label: alerts > 1 ? "alertes reçues par Kouzia" : "alerte reçue par Kouzia" },
   ]
     .filter((f) => f.n > 0)
-    .map((f) => ({ value: count(f.n), label: f.label }));
+    .map((f) => ({ value: count(f.n), label: f.label, wide: false }));
+  if (opening) figures.unshift(opening);
 
   const settings = ctx.settings ?? null;
   const contact = [settings?.email, settings?.phone ? frPhone(settings.phone) : null, settings?.website ? frWebsite(settings.website) : null].filter((v): v is string => Boolean(v));
@@ -364,9 +376,13 @@ const s = StyleSheet.create({
   th: { fontWeight: 600, fontSize: 10, color: C.muted, paddingVertical: 5 },
   td: { fontSize: 11, paddingVertical: 5, color: C.text },
   row: { flexDirection: "row", borderTopWidth: 1, borderTopColor: C.line },
-  figure: { flexGrow: 1, flexBasis: 0, minWidth: 80 },
+  // Un seul grand chiffre (le rythme de vérification), les autres comptes en ligne, nombre en gras.
+  figureWide: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 6 },
+  figureWideLabel: { flex: 1, fontSize: 10, lineHeight: 1.3, color: C.muted },
   figureValue: { fontWeight: 600, fontSize: 22, color: C.ink },
-  figureLabel: { fontSize: 10, lineHeight: 1.3, color: C.muted, marginTop: 2 },
+  figureRow: { flexDirection: "row", flexWrap: "wrap", columnGap: 18, rowGap: 4 },
+  figureLabel: { fontSize: 10, lineHeight: 1.3, color: C.muted },
+  figureCount: { fontWeight: 600, fontSize: 12, color: C.ink },
   legend: { flexDirection: "row", gap: 12, marginTop: 6, alignItems: "center" },
   legendItem: { flexDirection: "row", gap: 4, alignItems: "center", fontSize: 9, color: C.muted },
   footer: { position: "absolute", bottom: 22, left: 38, right: 38, flexDirection: "row", fontSize: 8.5, color: C.muted, borderTopWidth: 1, borderTopColor: C.line, paddingTop: 6 },
@@ -634,13 +650,22 @@ function ReportDocument({ v }: { v: ReportView }) {
                 <TileIcon kind="check" />
                 <Text style={s.tileTitle}>Ce que Kouzia a fait pour vous ce mois-ci</Text>
               </View>
-              <View style={{ flexDirection: "row", gap: 10, flexWrap: "wrap" }}>
-                {v.figures.map((f, n) => (
-                  <View key={n} style={s.figure}>
+              {v.figures
+                .filter((f) => f.wide)
+                .map((f, n) => (
+                  <View key={n} style={s.figureWide}>
                     <Text style={s.figureValue}>{t(f.value)}</Text>
-                    <Text style={s.figureLabel}>{t(f.label)}</Text>
+                    <Text style={s.figureWideLabel}>{t(f.label)}</Text>
                   </View>
                 ))}
+              <View style={s.figureRow}>
+                {v.figures
+                  .filter((f) => !f.wide)
+                  .map((f, n) => (
+                    <Text key={n} style={s.figureLabel}>
+                      <Text style={s.figureCount}>{t(f.value)}</Text> {t(f.label)}
+                    </Text>
+                  ))}
               </View>
             </View>
           ) : null}
