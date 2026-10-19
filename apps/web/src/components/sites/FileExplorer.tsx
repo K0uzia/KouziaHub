@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -39,6 +39,7 @@ import { Modal, ModalActions } from "@/components/ui/Modal";
 import { Field, Input } from "@/components/ui/Field";
 import { Banner } from "@/components/ui/Banner";
 import { PublishBar } from "@/components/sites/PublishBar";
+import { VersionCheckNotice } from "@/components/sites/VersionCheckNotice";
 import { ZipUpload } from "@/components/sites/ZipUpload";
 import { RejectedSummary, SkippedList, UploadProgress, type Progress, type SkippedItem } from "@/components/sites/UploadFeedback";
 
@@ -77,6 +78,7 @@ export function FilesTab({
   const [confirmDelete, setConfirmDelete] = useState<string[] | null>(null);
   const [renaming, setRenaming] = useState<DirEntry | null>(null);
   const [busy, setBusy] = useState(false);
+  const checkId = useId();
   const fileInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement>(null);
   const [folderPick] = useState(canPickFolder);
@@ -280,8 +282,9 @@ export function FilesTab({
 
   return (
     <div className="space-y-5">
+      {files.data?.versionCheck ? <VersionCheckNotice check={files.data.versionCheck} id={checkId} /> : null}
       {files.data?.workingDirty ? (
-        <PublishBar site={site} hasIndex={files.data.hasIndex} nextVersion={nextVersion} onSite={onSite} />
+        <PublishBar site={site} check={files.data.versionCheck} checkId={checkId} nextVersion={nextVersion} onSite={onSite} />
       ) : null}
 
       <Card className="p-0">

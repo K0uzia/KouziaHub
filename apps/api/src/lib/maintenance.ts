@@ -111,7 +111,7 @@ export async function purgeSiteFiles(services: Services, siteId: string, withVer
   const freed = await services.blobs.releaseUnused(candidates);
   invalidateStorageUsage();
   await audit({ action: "files.purge", result: "ok", siteId, siteSlug: site.slug, detail: `${working.length} fichier(s) de travail` });
-  return { removedFiles: working.length, versions, freedBytes: freed.bytes, files: await listFiles(siteId) };
+  return { removedFiles: working.length, versions, freedBytes: freed.bytes, files: await listFiles(siteId, services.blobs) };
 }
 
 // --- Place utilisée ---

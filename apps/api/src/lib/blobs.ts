@@ -113,6 +113,17 @@ export class BlobStore {
     return createReadStream(this.pathOf(sha256));
   }
 
+  /** Petit fichier texte (package.json) : null s'il dépasse maxBytes ou s'il est illisible. */
+  async readText(sha256: string, maxBytes: number): Promise<string | null> {
+    try {
+      const info = await stat(this.pathOf(sha256));
+      if (info.size > maxBytes) return null;
+      return await readFile(this.pathOf(sha256), "utf8");
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * Supprime les blobs qu'aucune ligne WorkingFile ou VersionFile ne référence. Un blob plus récent que
    * graceMs est gardé : il peut appartenir à un envoi dont les lignes ne sont pas encore écrites.

@@ -1,4 +1,6 @@
-import type { FilesResponse } from "@/contract.js";
+import type { FilesResponse, VersionCheck } from "@/contract.js";
+import type { BlobStore } from "@/lib/blobs.js";
+import { checkVersion } from "@/lib/version-check.js";
 import { HttpError } from "@/lib/http.js";
 import { FILE_LIMITS, MAX_FILES, MAX_SITE_BYTES } from "@/lib/limits.js";
 import { prisma } from "@/lib/prisma.js";
@@ -40,7 +42,17 @@ export async function workingPaths(siteId: string): Promise<string[]> {
   return (await prisma.workingFile.findMany({ where: { siteId }, select: { path: true } })).map((f) => f.path);
 }
 
-export async function listFiles(siteId: string): Promise<FilesResponse> {
+/** Contrôle de la version de travail (projet non construit, index.html absent) : lit package.json s'il est à la racine. */
+export async function workingVersionCheck(files: Array<{ path: string; sha256: string }>, blobs: BlobStore): Promise<VersionCheck | null> {
+  const pkg = files.find((f) => f.path === "package.json");
+  const text = pkg ? await blobs.readText(pkg.sha256, 256 * 1024) : null;
+  return checkVersion(
+    files.map((f) => f.path),
+    text,
+  );
+}
+
+export async function listFiles(siteId: string, blobs: BlobStore): Promise<FilesResponse> {
   const [files, site] = await Promise.all([
     prisma.workingFile.findMany({ where: { siteId }, orderBy: { path: "asc" } }),
     prisma.site.findUniqueOrThrow({ where: { id: siteId }, select: { workingDirty: true } }),
@@ -49,6 +61,7 @@ export async function listFiles(siteId: string): Promise<FilesResponse> {
     files: files.map((f) => ({ path: f.path, size: f.size, sha256: f.sha256, updatedAt: f.updatedAt.toISOString() })),
     totalBytes: files.reduce((sum, f) => sum + f.size, 0),
     hasIndex: files.some((f) => f.path === "index.html"),
+    versionCheck: await workingVersionCheck(files, blobs),
     workingDirty: site.workingDirty,
     limits: FILE_LIMITS,
   };
@@ -74,8 +87,9 @@ export async function computeDirty(siteId: string): Promise<boolean> {
     where: { id: site.currentVersionId },
     select: { source: true, files: { select: { path: true, sha256: true } } },
   });
-  // Page d'attente servie : rien à publier tant qu'il manque index.html (un .htaccess seul ne compte pas).
-  if (!version || version.source === "placeholder") return working.some((f) => f.path === "index.html");
+  // Page d'attente servie : modifié dès qu'un fichier du site existe (le .htaccess généré seul ne compte pas). Sans
+  // index.html, la barre de publication montre le contrôle de la version et « Publier quand même ».
+  if (!version || version.source === "placeholder") return working.some((f) => f.path !== ".htaccess");
   return fingerprint(working) !== fingerprint(version.files);
 }
 

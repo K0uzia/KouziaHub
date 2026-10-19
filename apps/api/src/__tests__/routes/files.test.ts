@@ -54,8 +54,9 @@ describe("explorateur de fichiers", () => {
     expect(body.rejected).toHaveLength(4);
     expect(body.rejected.find((r) => r.path === "assets/.env")?.reason).toMatch(/\.env/);
     expect(body.rejected.find((r) => r.path === "assets/.DS_Store")?.reason).toMatch(/système/);
-    // Page d'attente servie et pas d'index.html : rien à publier, donc pas « modifié ».
-    expect(body.files).toMatchObject({ hasIndex: false, workingDirty: false, totalBytes: 12, limits: { maxFiles: 20000 } });
+    // Page d'attente servie, des fichiers sans index.html : « modifié », et le contrôle de la version le signale
+    // (la barre de publication propose alors seulement « Publier quand même »).
+    expect(body.files).toMatchObject({ hasIndex: false, workingDirty: true, versionCheck: { code: "no_index" }, totalBytes: 12, limits: { maxFiles: 20000 } });
   });
 
   it("refuse _worker.js envoyé à la racine et un dossier cible piégé", async () => {
@@ -264,11 +265,49 @@ describe("publication : délai dépassé après création du déploiement", () =
 });
 
 describe("publication et versions", () => {
-  it("refuse sans index.html à la racine", async () => {
-    await upload([{ filename: "page.html", content: "x" }]);
+  it("sans index.html à la racine : avertissement dès l'envoi, publication refusée sauf « Publier quand même »", async () => {
+    const sent = (await upload([{ filename: "page.html", content: "x" }])).json() as UploadResult;
+    expect(sent.files.versionCheck).toMatchObject({ code: "no_index" });
     const res = await publish();
-    expect(res.statusCode).toBe(400);
-    expect(res.json().error).toMatch(/index\.html/);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ code: "version_check", error: "Pas de fichier index.html à la racine : le site n'aura pas de page d'accueil." });
+    expect(await versions()).toHaveLength(1);
+    const forced = await hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/publish`, headers: hub.headers, payload: { force: true } });
+    await settle(hub);
+    expect(forced.statusCode).toBe(200);
+    expect((await versions())[0]).toMatchObject({ number: 2, status: "PUBLISHED", current: true });
+    expect(await prisma.auditEvent.findFirst({ where: { action: "version.force" } })).toMatchObject({ result: "ok", detail: "Pas de fichier index.html à la racine : le site n'aura pas de page d'accueil." });
+  });
+
+  it("sources Astro envoyées sans dist/ : projet reconnu, commande annoncée, rien de construit, publication bloquée", async () => {
+    const sent = (await upload([
+      { filename: "package.json", content: JSON.stringify({ scripts: { build: "astro build" } }) },
+      { filename: "astro.config.mjs", content: "export default {};\n" },
+      { filename: "src/pages/index.astro", content: "<h1>Accueil</h1>\n" },
+      { filename: "public/favicon.svg", content: "<svg/>" },
+    ])).json() as UploadResult;
+    expect(sent.files.versionCheck).toEqual({
+      code: "unbuilt",
+      framework: "Astro",
+      command: "npm run build",
+      outDir: "dist/",
+      buildScript: "astro build",
+      message: "Projet Astro non construit : lancez npm run build sur votre PC, puis envoyez le dossier dist/.",
+    });
+    expect((await files()).versionCheck?.code).toBe("unbuilt");
+    const res = await publish();
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("Projet Astro non construit : lancez npm run build sur votre PC, puis envoyez le dossier dist/.");
+    // Rien n'est construit ni déployé.
+    expect(hub.cf.deployments("kz-alpha").filter((d) => Object.keys(d.manifest).includes("/src/pages/index.astro"))).toHaveLength(0);
+    // Le contenu de dist/ envoyé à la place : le contrôle se tait.
+    await hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/files/delete`, headers: hub.headers, payload: { paths: ["package.json", "astro.config.mjs", "src/", "public/"] } });
+    const built = (await upload([
+      { filename: "index.html", content: "<h1>Accueil</h1>" },
+      { filename: "_astro/index.B1x2.css", content: "h1{}" },
+    ])).json() as UploadResult;
+    expect(built.files.versionCheck).toBeNull();
+    expect((await publish()).statusCode).toBe(200);
   });
 
   it("publie un instantané : _headers à part, version servie, travail à jour", async () => {
