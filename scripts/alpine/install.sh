@@ -40,7 +40,7 @@ ops_lock refuse
 STOPPED=0
 on_exit() {
   _rc=$?
-  if [ "$_rc" -ne 0 ] && [ "$STOPPED" -eq 1 ] && service_exists "$KH_SERVICE" && access_configured; then
+  if [ "$_rc" -ne 0 ] && [ "$STOPPED" -eq 1 ] && service_exists "$KH_SERVICE"; then
     rc-service "$KH_SERVICE" start >/dev/null 2>&1 || true
   fi
 }
@@ -202,16 +202,10 @@ if [ "$INTERACTIVE" -eq 1 ]; then
       sh "${KH_LIB_DIR}/configure.sh" cloudflare || warn "Tunnel à refaire : hubctl cloudflare"
     fi
   fi
-  if ! access_configured; then
-    echo "  Le hub ne démarre qu'avec Cloudflare Access renseigné (README, étape 4)."
-    if confirm "Avez-vous déjà le domaine d'équipe et l'AUD de l'application Access ?" n; then
-      sh "${KH_LIB_DIR}/configure.sh" access --no-restart || warn "À refaire : hubctl secrets access"
-    fi
-  fi
 fi
 
 STOPPED=0
-if [ "$NO_START" -eq 0 ] && access_configured; then
+if [ "$NO_START" -eq 0 ]; then
   start_app || { show_app_errors; warn "Le hub ne répond pas encore : hubctl status puis hubctl logs erreurs."; }
 fi
 
@@ -226,7 +220,6 @@ fi
 title "Installation terminée"
 _todo=0
 if [ ! -s "$KH_TUNNEL_TOKEN_FILE" ]; then echo "  À faire : tunnel du hub         > hubctl cloudflare"; _todo=1; fi
-if ! access_configured; then echo "  À faire : Cloudflare Access     > hubctl secrets access"; _todo=1; fi
 if is_git_install && [ ! -s "$KH_GITHUB_TOKEN_FILE" ]; then echo "  À faire : jeton GitHub (mises à jour) > hubctl secrets github"; fi
 echo "  Compte du hub (si pas encore fait) : hubctl admin"
 if ! env_has CLOUDFLARE_API_TOKEN; then

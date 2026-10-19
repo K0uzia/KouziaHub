@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomBytes, randomInt } from "node:crypto";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { User } from "@prisma/client";
+import { audit } from "@/lib/audit.js";
 import { prisma } from "@/lib/prisma.js";
 import { decrypt, encrypt } from "@/lib/crypto.js";
 import { getCookieSecure } from "@/lib/env.js";
@@ -9,9 +10,13 @@ import { generateTotpSecret, matchTotpStep } from "@/lib/admin/totp.js";
 export const CHALLENGE_COOKIE = "kz_hub_mfa";
 export const CHALLENGE_TTL_MS = 5 * 60_000;
 export const CHALLENGE_MAX_ATTEMPTS = 5;
-/** Échecs consécutifs venus du tunnel avant verrouillage temporaire du compte. */
+/** Échecs consécutifs (connexion stricte) avant verrouillage temporaire du compte. */
 export const LOCK_AFTER_FAILURES = 5;
-export const LOCK_DURATION_MS = 15 * 60_000;
+/**
+ * Verrouillage progressif, sans filtre en amont du tunnel (pas de Cloudflare Access) : 15 min, puis 1 h,
+ * 4 h et 24 h selon le nombre de verrouillages des dernières 24 h (journal, action auth.lock).
+ */
+export const LOCK_STEPS_MS = [15 * 60_000, 3_600_000, 4 * 3_600_000, 24 * 3_600_000] as const;
 export const RECOVERY_CODE_COUNT = 10;
 
 const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -40,12 +45,17 @@ export async function registerFailure(userId: string, request: FastifyRequest): 
   if (!strictLogin(request)) return;
   const user = await prisma.user.update({ where: { id: userId }, data: { failedLogins: { increment: 1 } } });
   if (user.failedLogins >= LOCK_AFTER_FAILURES) {
+    const recent = await prisma.auditEvent.count({ where: { action: "auth.lock", at: { gte: new Date(Date.now() - 86_400_000) } } });
+    const duration = LOCK_STEPS_MS[Math.min(recent, LOCK_STEPS_MS.length - 1)]!;
     await prisma.user.update({
       where: { id: userId },
-      data: { failedLogins: 0, lockedUntil: new Date(Date.now() + LOCK_DURATION_MS) },
+      data: { failedLogins: 0, lockedUntil: new Date(Date.now() + duration) },
     });
+    await audit({ action: "auth.lock", result: "error", detail: `compte verrouillé ${formatLock(duration)} après ${LOCK_AFTER_FAILURES} échecs (IP ${request.ip})` });
   }
 }
+
+const formatLock = (ms: number) => (ms < 3_600_000 ? `${ms / 60_000} min` : `${ms / 3_600_000} h`);
 
 export async function clearFailures(userId: string): Promise<void> {
   await prisma.user.update({ where: { id: userId }, data: { failedLogins: 0, lockedUntil: null } });

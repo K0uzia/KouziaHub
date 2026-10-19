@@ -4,7 +4,7 @@ Outil interne d'Alexandre, sur `https://hub.kouzia.com`. Il met en ligne les **v
 
 En bref : créer un site en un clic, y déposer les fichiers comme dans un FTP, publier des versions (toutes gardées et republiables), allumer ou couper l'adresse, voir tous les sites en catalogue, recevoir une alerte sur le téléphone si un site tombe, télécharger un rapport mensuel en PDF. Les clients sont lus dans l'ERP, rien n'est ressaisi.
 
-Le hub tourne dans son propre conteneur (CT) Alpine sur le Proxmox, comme l'ERP. On y entre par Cloudflare Access (votre adresse seule), puis par un mot de passe et un code du téléphone. Tout se pilote sur le CT avec une seule commande : `hubctl` (sans rien après, elle ouvre un menu).
+Le hub tourne dans son propre conteneur (CT) Alpine sur le Proxmox, comme l'ERP. On y entre comme dans l'ERP : par le tunnel Cloudflare, puis par le login du hub, avec mot de passe et code à 6 chiffres du téléphone (sans Cloudflare Access ni Zero Trust). Tout se pilote sur le CT avec une seule commande : `hubctl` (sans rien après, elle ouvre un menu).
 
 Cadrage technique complet : `docs/cadrage.md`.
 
@@ -64,13 +64,13 @@ Le dépôt est privé : `git clone` demande un identifiant. Répondre votre nom 
 
 L'installation propose Chromium (environ 300 Mo). C'est le navigateur sans écran qui fabrique les vignettes et mesure la vitesse des sites. Sans lui, vous enverrez une image par site et la vitesse ne sera pas mesurée ; `hubctl chromium` l'ajoute plus tard.
 
-Les étapes 1.3 et 1.4 peuvent se faire pendant l'installation (elle les propose) ou après. **Le hub ne démarre pas tant que l'étape 1.4 n'est pas faite** : il n'est jamais exposé sans Access.
+L'étape 1.3 peut se faire pendant l'installation (elle la propose) ou après. Le hub démarre dès la fin de l'installation ; par Internet, il ne laisse entrer qu'avec le mot de passe **et** le code à 6 chiffres (1.5).
 
 ### 1.3 Tunnel Cloudflare du hub
 
-Le tunnel relie `hub.kouzia.com` au CT sans ouvrir aucun port de la box.
+Le tunnel relie `hub.kouzia.com` au CT sans ouvrir aucun port de la box. **Il se fait comme pour l'ERP** (`kouziactl cloudflare`) : un tunnel à jeton, avec la même suite d'écrans.
 
-Dans Cloudflare : Zero Trust > Networks (Réseaux) > Tunnels > Create a tunnel > Cloudflared.
+Dans Cloudflare : Zero Trust > Networks (Réseaux) > Tunnels > Create a tunnel > Cloudflared. Le menu s'appelle Zero Trust, mais le tunnel est gratuit et n'utilise ni Access ni aucune option payante.
 
 1. Nom : `kouziahub` (un tunnel à lui, pas celui de l'ERP).
 2. Copier la commande d'installation affichée (longue suite qui commence par `eyJ`).
@@ -78,26 +78,22 @@ Dans Cloudflare : Zero Trust > Networks (Réseaux) > Tunnels > Create a tunnel >
 
 Dans le CT : `hubctl cloudflare`, puis coller la commande. Rien ne s'affiche pendant le collage, c'est normal.
 
-### 1.4 Cloudflare Access sur hub.kouzia.com
+### 1.4 Cloudflare Access : facultatif
 
-Access est la porte d'entrée : Cloudflare vérifie votre adresse e-mail avant même d'afficher le hub.
+Le hub n'en a pas besoin : il est protégé comme l'ERP, par son login (1.5). Par le tunnel, il ne sert que `hub.kouzia.com` (tout autre nom reçoit une page introuvable) et ajoute ces protections :
 
-Dans Cloudflare : Zero Trust > Access > Applications > Add an application > Self-hosted.
+- 5 essais de connexion au plus par quart d'heure et par adresse IP ;
+- après 5 échecs, le compte se verrouille 15 min, puis 1 h, 4 h et 24 h si cela se répète dans la journée (`hubctl admin` sur le CT le déverrouille) ;
+- chaque connexion, réussie ou refusée, est notée dans Réglages > Journal (adresse IP, date, appareil ; jamais le mot de passe ni le code) ;
+- une notification arrive sur le téléphone à chaque connexion réussie depuis un nouvel appareil.
 
-1. Nom : `Hub Kouzia`, domaine : `hub.kouzia.com`.
-2. Règle : Allow, Include > Emails > votre adresse seule.
-3. Connexion : code reçu par e-mail (One-time PIN).
-4. Relever deux valeurs :
-   - l'AUD : dans l'application, « Application Audience (AUD) Tag » (64 caractères) ;
-   - le domaine d'équipe : Zero Trust > Settings (Réglages), « Team domain » (`<nom>.cloudflareaccess.com`).
-
-Dans le CT : `hubctl secrets access`, saisir les deux valeurs (invisibles à l'écran). Le hub démarre.
+Si vous voulez un jour une porte de plus devant le hub, Cloudflare Access reste possible : application « Self-hosted » sur `hub.kouzia.com` (Zero Trust > Access > Applications), règle Allow sur votre adresse seule, puis `hubctl secrets access` (domaine d'équipe et AUD). Le hub vérifie alors aussi le jeton d'Access.
 
 ### 1.5 Votre compte et le code du téléphone
 
 `hubctl admin` : adresse, mot de passe (12 caractères au moins), puis scanner le code avec l'application d'authentification du téléphone (Google Authenticator, Aegis...). **Noter sur papier les codes de secours** affichés : chacun ouvre une fois la connexion si le téléphone est perdu.
 
-Ouvrir `https://hub.kouzia.com` : Cloudflare demande le code reçu par e-mail, puis le hub demande le mot de passe et le code à 6 chiffres. Sans double authentification, la connexion par Internet est refusée.
+Ouvrir `https://hub.kouzia.com` : le hub demande le mot de passe, puis le code à 6 chiffres. Sans double authentification activée, la connexion par Internet est refusée.
 
 Ensuite, dans le hub, Réglages > Sécurité : « Régénérer les codes de secours » en refait une série (les anciens ne marchent plus). Téléphone perdu et plus de code de secours : `hubctl 2fa-reset` sur le CT, puis `hubctl admin`.
 
@@ -354,7 +350,6 @@ Onglet Versions > « Télécharger la version de production ». La mise en ligne
 | Requêtes Workers et Pages Functions | 100 000 par jour pour tout le compte | Partagées entre la veille et les sites |
 | Worker | 10 ms de calcul par passage, 50 requêtes sortantes, 6 à la fois | La veille contrôle un cinquième des adresses chaque minute (200 au plus), 4 notifications par passage, le reste à la minute suivante |
 | D1 | 100 000 lignes écrites et 5 millions lues par jour | La veille n'écrit que les changements |
-| Utilisateurs Zero Trust (Access) | 50 | Votre adresse en occupe une |
 | Nouveau compte | Création de projets restreinte les 48 premières heures | |
 
 ---
@@ -459,7 +454,7 @@ make dev     # API http://127.0.0.1:3101 et interface http://localhost:5174
 | `hubctl backup --export [sauvegarde]` | Archive chiffrée à copier hors du CT |
 | `hubctl restore [...]` | Restaurer (voir 4.4) |
 | `hubctl cloudflare` | Jeton du tunnel |
-| `hubctl secrets access` | Cloudflare Access (domaine d'équipe, AUD) |
+| `hubctl secrets access` | Cloudflare Access, facultatif (domaine d'équipe, AUD) |
 | `hubctl secrets api` | Jeton API du hub, Account ID, Zone ID |
 | `hubctl secrets erp` | Lien avec l'ERP |
 | `hubctl secrets veille` | Jeton de lecture des zones |

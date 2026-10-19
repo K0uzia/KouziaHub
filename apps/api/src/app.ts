@@ -10,6 +10,7 @@ import { MAX_FILE_BYTES, MAX_FILES_PER_UPLOAD, MAX_PARTS_PER_UPLOAD } from "@/li
 import { accessConfig, getCookieSecure, getTrustedProxies } from "@/lib/env.js";
 import { registerClientIpHook, trustProxyFn } from "@/lib/client-ip.js";
 import { AccessVerifier, registerAccessGuard } from "@/lib/access.js";
+import { registerTunnelHostGuard } from "@/lib/tunnel-host.js";
 import { intlProblems } from "@/lib/intl-check.js";
 import { pendingMigrationCount } from "@/lib/migration-check.js";
 import { originGuardPlugin } from "@/plugins/origin-guard.js";
@@ -39,7 +40,7 @@ export type BuildAppOptions = {
   silent?: boolean;
   /** Sert le build web statique (prod). Défaut true. */
   serveStatic?: boolean;
-  /** Vérificateur Access injecté (tests). Défaut : d'après le .env, null si coupé en dev. */
+  /** Vérificateur Access injecté (tests). Défaut : d'après le .env, null si Access n'est pas renseigné. */
   accessVerifier?: AccessVerifier | null;
   /** Services métier injectés (tests : Cloudflare et ERP factices en mémoire). Défaut : d'après le .env. */
   services?: Services;
@@ -60,6 +61,8 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   });
   // Avant toute route et toute limite de débit : request.ip doit être l'IP réelle.
   registerClientIpHook(app, trustedProxies);
+  // Par le tunnel, seul hub.kouzia.com est servi (avant Access, qui reste facultatif).
+  registerTunnelHostGuard(app);
   const config = accessConfig();
   registerAccessGuard(app, opts.accessVerifier !== undefined ? opts.accessVerifier : config ? new AccessVerifier(config) : null);
 
@@ -114,9 +117,9 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     return payload;
   });
 
-  await app.register(authRoutes);
   const services = opts.services ?? createServices();
   app.addHook("onClose", async () => services.close());
+  await app.register(authRoutes(services.push));
   await app.register(sitesRoutes(services));
   await app.register(filesRoutes(services));
   await app.register(uploadsRoutes(services));
@@ -126,13 +129,14 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   await app.register(pushRoutes(services));
   await app.register(settingsRoutes);
 
-  // État minimal de la veille pour hubctl status : seulement hors tunnel (appel local du CT).
+  // Par le tunnel : état seulement, comme l'ERP. Le détail (migrations, veille, Intl) ne sert qu'à hubctl
+  // status, appel local du CT.
   app.get("/api/health", async (request) => ({
     ok: true,
-    pendingMigrations: pendingMigrationCount(),
     ...(request.viaTunnel
       ? {}
       : {
+          pendingMigrations: pendingMigrationCount(),
           veille: {
             configured: services.monitor.veille.configured,
             lastSeenAt: services.monitor.health.edgeSeenAt ? new Date(services.monitor.health.edgeSeenAt).toISOString() : null,

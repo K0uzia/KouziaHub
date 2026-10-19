@@ -27,7 +27,7 @@ describe("réglages « Rapports »", () => {
 
     const cleared = await patch({ phone: "", website: null });
     expect(cleared.json()).toEqual({ displayName: "Atelier Exemple", email: "contact@exemple.fr", phone: null, website: null });
-    expect(await prisma.hubSetting.count()).toBe(2);
+    expect(await prisma.hubSetting.count({ where: { key: { startsWith: "report." } } })).toBe(2);
   });
 
   it("valeur refusée : 400 rattaché au champ, rien d'enregistré", async () => {
@@ -41,7 +41,7 @@ describe("réglages « Rapports »", () => {
       expect(res.statusCode, `${field}=${value}`).toBe(400);
       expect(res.json()).toMatchObject({ code: "invalid_field", field });
     }
-    expect(await prisma.hubSetting.count()).toBe(0);
+    expect(await prisma.hubSetting.count({ where: { key: { startsWith: "report." } } })).toBe(0);
     const unknown = await patch({ adresse: "1 rue Exemple" });
     expect(unknown.statusCode).toBe(400);
     expect(unknown.json().field).toBeUndefined();

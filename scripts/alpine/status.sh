@@ -85,7 +85,14 @@ elif [ -n "$PENDING" ]; then
 fi
 
 title "Réglages (valeurs jamais affichées)"
-echo "  Cloudflare Access      : domaine $(yes_no CF_ACCESS_TEAM_DOMAIN), AUD $(yes_no CF_ACCESS_AUD)"
+if access_configured; then
+  echo "  Accès                  : Cloudflare Access, puis login du hub + code à 6 chiffres"
+else
+  echo "  Accès                  : login du hub + code à 6 chiffres (sans Cloudflare Access)"
+fi
+if ! env_has HUB_PUBLIC_ORIGIN; then
+  warn "HUB_PUBLIC_ORIGIN vide : rien n'est servi par le tunnel (hubctl install le pose)"
+fi
 if env_has CLOUDFLARE_API_TOKEN; then
   echo "  API Cloudflare         : jeton renseigné, compte $(yes_no CLOUDFLARE_ACCOUNT_ID), zone $(yes_no CLOUDFLARE_ZONE_ID)"
 else

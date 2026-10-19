@@ -121,9 +121,10 @@ EOF
 # --- Cloudflare Access ---
 
 configure_access() {
-  title "Cloudflare Access devant hub.kouzia.com"
+  title "Cloudflare Access devant hub.kouzia.com (facultatif)"
   cat <<EOF
-  Le hub vérifie lui-même le passage par Access. Il lui faut deux valeurs :
+  Facultatif : sans Access, le hub est protégé par son login (mot de passe et code à 6 chiffres),
+  comme l'ERP. Si vous l'ajoutez, le hub vérifie lui-même le passage par Access. Il lui faut :
     - le domaine d'équipe : Zero Trust > Settings (Réglages) > « Team domain »,
       de la forme <nom>.cloudflareaccess.com (le <nom> seul suffit) ;
     - l'AUD : Zero Trust > Access > Applications > l'application hub.kouzia.com >
@@ -361,7 +362,7 @@ configure_chromium() {
 
 restart_if_needed() {
   [ "$NO_RESTART" -eq 0 ] || return 0
-  if access_configured && service_exists "$KH_SERVICE"; then
+  if service_exists "$KH_SERVICE"; then
     restart_app || { show_app_errors; return 1; }
   fi
 }
@@ -396,7 +397,6 @@ case "$SECTION" in
     ;;
   secrets|"")
     [ -f "$KH_ENV_FILE" ] || die ".env absent : lancer « hubctl install »."
-    configure_access
     configure_api
     restart_if_needed
     ;;

@@ -31,6 +31,9 @@ import {
   strictLogin,
 } from "@/lib/admin/two-factor.js";
 import { audit } from "@/lib/audit.js";
+import { describeUserAgent, rememberDevice } from "@/lib/admin/devices.js";
+import { frDay, frTime } from "@/lib/monitor/report-text.js";
+import type { PushService } from "@/lib/push/service.js";
 
 const loginSchema = z.object({
   email: z.string().email(),
@@ -59,11 +62,28 @@ const NEEDS_2FA = {
     "Sur le serveur du hub, lancez « hubctl admin » pour l'activer.",
 };
 
+/**
+ * Limite de débit par IP sur la connexion et le code : 5 essais par quart d'heure en connexion stricte
+ * (tunnel, production : aucun filtre en amont), 10 en local de développement. S'ajoute au verrouillage du
+ * compte (progressif, two-factor.ts), qui vaut quelle que soit l'IP.
+ */
+const AUTH_RATE_LIMIT = { rateLimit: { max: (request: FastifyRequest) => (strictLogin(request) ? 5 : 10), timeWindow: "15 minutes" } };
+
+/** Journal des connexions : IP, provenance, appareil ; jamais le mot de passe ni le code. */
+function where(request: FastifyRequest): string {
+  return `IP ${request.ip}, ${request.viaTunnel ? "par Internet (tunnel)" : "réseau local"}, ${describeUserAgent(request.headers["user-agent"])}`;
+}
+
 // Hash argon2 d'un mot de passe aléatoire : un e-mail inconnu coûte le même temps qu'un mauvais mot de passe.
 let dummyHash: Promise<string> | null = null;
 const getDummyHash = () => (dummyHash ??= hashPassword(`dummy-${Date.now()}-${Math.random()}`));
 
-async function openSession(user: { id: string; email: string; name: string | null }, request: FastifyRequest, reply: FastifyReply) {
+async function openSession(
+  user: { id: string; email: string; name: string | null },
+  request: FastifyRequest,
+  reply: FastifyReply,
+  push: PushService | undefined,
+) {
   await prisma.session.deleteMany({ where: { userId: user.id, expiresAt: { lt: new Date() } } });
   // Rotation : la session éventuelle du navigateur est remplacée.
   await attachUser(request);
@@ -71,43 +91,61 @@ async function openSession(user: { id: string; email: string; name: string | nul
   const session = await createSession(user.id);
   setSessionCookie(request, reply, session.token, session.expiresAt);
   await clearFailures(user.id);
-  await audit({ action: "auth.login", result: "ok" });
+  const { isNew } = await rememberDevice(request, reply);
+  await audit({ action: "auth.login", result: "ok", detail: `${where(request)}${isNew ? ", nouvel appareil" : ""}` });
+  if (isNew && push) {
+    const now = new Date();
+    void push
+      .sendToAll({
+        title: "Nouvelle connexion au hub",
+        body: `${describeUserAgent(request.headers["user-agent"])}, IP ${request.ip}, le ${frDay(now)} à ${frTime(now)}. Pas vous ? Sur le serveur : hubctl 2fa-reset, puis hubctl admin.`,
+        url: "/reglages/journal",
+        tag: `connexion:${now.getTime()}`,
+      })
+      .catch((err) => request.log.error({ err }, "alerte de nouvelle connexion non envoyée"));
+  }
   return { user: { id: user.id, email: user.email, name: user.name } };
 }
 
-export const authRoutes: FastifyPluginAsync = async (app) => {
-  app.post("/api/auth/login", { config: { rateLimit: { max: 10, timeWindow: "15 minutes" } } }, async (request, reply) => {
+export const authRoutes =
+  (push?: PushService): FastifyPluginAsync =>
+  async (app) => {
+  app.post("/api/auth/login", { config: AUTH_RATE_LIMIT }, async (request, reply) => {
     const startedAt = Date.now();
     // Même message et même délai minimal pour tout refus : rien sur l'existence du compte ni son état.
-    const refuse = async (code: 400 | 401) => {
+    const refuse = async (code: 400 | 401, why: string) => {
+      await audit({ action: "auth.login", result: "error", detail: `${why} (${where(request)})` });
       await floor(startedAt);
       return reply.code(code).send(BAD_CREDENTIALS);
     };
     const parsed = loginSchema.safeParse(request.body);
-    if (!parsed.success) return refuse(400);
+    if (!parsed.success) return refuse(400, "demande invalide");
 
     const email = parsed.data.email.toLowerCase().trim();
     const user = await prisma.user.findUnique({ where: { email } });
     if (!user) {
       await verifyPassword(parsed.data.password, await getDummyHash());
-      return refuse(401);
+      return refuse(401, "identifiants refusés");
     }
-    if (isLocked(user, request)) return refuse(401);
+    if (isLocked(user, request)) return refuse(401, "compte verrouillé");
 
     if (!(await verifyPassword(parsed.data.password, user.passwordHash))) {
       await registerFailure(user.id, request);
-      return refuse(401);
+      return refuse(401, "identifiants refusés");
     }
 
     if (isTwoFactorEnabled(user)) {
       await openLoginChallenge(user.id, request, reply);
       return { mfaRequired: true };
     }
-    if (strictLogin(request)) return reply.code(403).send(NEEDS_2FA);
-    return openSession(user, request, reply);
+    if (strictLogin(request)) {
+      await audit({ action: "auth.login", result: "error", detail: `double authentification pas encore activée (${where(request)})` });
+      return reply.code(403).send(NEEDS_2FA);
+    }
+    return openSession(user, request, reply, push);
   });
 
-  app.post("/api/auth/2fa", { config: { rateLimit: { max: 10, timeWindow: "15 minutes" } } }, async (request, reply) => {
+  app.post("/api/auth/2fa", { config: AUTH_RATE_LIMIT }, async (request, reply) => {
     const parsed = secondFactorSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "Code à 6 chiffres attendu." });
 
@@ -126,11 +164,12 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     if (!ok) {
       await failLoginChallenge(challenge.id);
       await registerFailure(user.id, request);
+      await audit({ action: "auth.2fa", result: "error", detail: `code refusé (${where(request)})` });
       return reply.code(401).send(BAD_CODE);
     }
 
     await closeLoginChallenge(user.id, request, reply);
-    return openSession(user, request, reply);
+    return openSession(user, request, reply, push);
   });
 
   app.post("/api/auth/logout", { config: { rateLimit: { max: 30, timeWindow: "15 minutes" } } }, async (request, reply) => {

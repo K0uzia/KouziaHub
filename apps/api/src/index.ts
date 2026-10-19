@@ -1,6 +1,7 @@
 import { assertSecurityEnv, accessConfig, getApiPort, isProduction } from "@/lib/env.js";
 import { enableWal, prisma } from "@/lib/prisma.js";
 import { buildApp } from "@/app.js";
+import { getHubPublicHost } from "@/lib/tunnel-host.js";
 import { createServices, startBackground } from "@/lib/services.js";
 import { intlProblems } from "@/lib/intl-check.js";
 import { checkPendingMigrations, checkPrismaClientUpToDate } from "@/lib/migration-check.js";
@@ -17,7 +18,8 @@ async function main() {
   // Le hub démarre quand même : les PDF ne lisent pas Intl (fr-format.ts).
   for (const problem of intlProblems()) console.error(`[boot] ${problem}`);
 
-  if (!accessConfig()) console.warn("[boot] vérification Cloudflare Access coupée (dev seulement)");
+  if (!accessConfig()) console.log("[boot] accès : login du hub et code à 6 chiffres (sans Cloudflare Access)");
+  if (isProduction() && !getHubPublicHost()) console.error("[boot] HUB_PUBLIC_ORIGIN absent : rien n'est servi par le tunnel");
 
   const stale = checkPrismaClientUpToDate();
   if (stale.length > 0) {

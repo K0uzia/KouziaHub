@@ -4,6 +4,8 @@
  */
 export const ACTION_LABEL: Record<string, string> = {
   "auth.login": "Connexion",
+  "auth.2fa": "Code de connexion refusé",
+  "auth.lock": "Compte verrouillé",
   "site.create": "Création du site",
   "site.update": "Modification du site",
   "site.enable": "Remise en ligne",

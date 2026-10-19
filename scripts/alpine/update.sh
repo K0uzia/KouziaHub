@@ -47,7 +47,7 @@ require_cmd curl sqlite3 npm git
 # Quelle que soit l'erreur, le hub n'est jamais laissé arrêté par une mise à jour interrompue.
 on_exit() {
   _rc=$?
-  if [ "$_rc" -ne 0 ] && service_exists "$KH_SERVICE" && access_configured; then
+  if [ "$_rc" -ne 0 ] && service_exists "$KH_SERVICE"; then
     rc-service "$KH_SERVICE" start >/dev/null 2>&1 || true
   fi
 }
@@ -182,13 +182,9 @@ if [ -n "$(env_get HUB_CHROMIUM_PATH)" ] && ! chromium_installed; then
 fi
 apply_firewall || true
 
-if access_configured; then
-  log "Redémarrage du hub..."
-  rc-service "$KH_SERVICE" start >/dev/null 2>&1 || rc-service "$KH_SERVICE" restart >/dev/null 2>&1 || true
-  wait_health || fail_update "Le hub ne répond pas après la mise à jour."
-else
-  warn "Cloudflare Access n'est pas encore renseigné : le hub reste arrêté (hubctl secrets access)."
-fi
+log "Redémarrage du hub..."
+rc-service "$KH_SERVICE" start >/dev/null 2>&1 || rc-service "$KH_SERVICE" restart >/dev/null 2>&1 || true
+wait_health || fail_update "Le hub ne répond pas après la mise à jour."
 
 state_set last-update "$(date '+%Y-%m-%d %H:%M') $(current_commit)"
 if env_has MONITOR_WORKER_URL && [ "$(veille_src_hash)" != "$(state_get veille-src)" ]; then

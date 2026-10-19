@@ -544,6 +544,8 @@ service_running() {
   service_exists "$1" && rc-service "$1" status >/dev/null 2>&1
 }
 
+# Cloudflare Access est facultatif (décision du 19/10/2026) : le hub démarre sans, protégé par son login
+# (mot de passe et code à 6 chiffres). Sert seulement à l'affichage (hubctl status).
 access_configured() {
   env_has CF_ACCESS_TEAM_DOMAIN && env_has CF_ACCESS_AUD
 }
@@ -566,25 +568,17 @@ stop_app() {
 }
 
 start_app() {
-  if ! access_configured; then
-    warn "Cloudflare Access n'est pas encore renseigné : le hub ne peut pas démarrer (hubctl secrets access)."
-    return 1
-  fi
   rc-service "$KH_SERVICE" start >/dev/null 2>&1 || rc-service "$KH_SERVICE" restart >/dev/null 2>&1 || true
   wait_health
 }
 
 restart_app() {
-  if ! access_configured; then
-    warn "Cloudflare Access n'est pas encore renseigné : le hub reste arrêté (hubctl secrets access)."
-    return 1
-  fi
   log "Redémarrage du hub..."
   rc-service "$KH_SERVICE" restart >/dev/null 2>&1 || true
   wait_health
 }
 
-# wait_health : attend jusqu'à 90 s {"ok":true} sur /api/health (ouvert sans jeton Access).
+# wait_health : attend jusqu'à 90 s {"ok":true} sur /api/health (ouvert sans session).
 wait_health() {
   _tries=90
   _url="$(health_url)"
