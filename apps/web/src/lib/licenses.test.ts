@@ -19,7 +19,13 @@ describe("clés de licence (interface)", () => {
   it("jours restants : dernier jour, à venir, passé", () => {
     expect(remainingText("2026-10-22", "2026-10-22")).toBe("Expire ce soir");
     expect(remainingText("2026-11-03", "2026-10-22")).toBe("Expire dans 12 jours");
-    expect(remainingText("2026-10-21", "2026-10-22")).toBe("Expirée depuis 1 jour");
+  });
+
+  it("expirée : délai de grâce de 15 jours, puis plus rien", () => {
+    expect(remainingText("2026-10-21", "2026-10-22")).toBe("Expirée depuis 1 jour, en grâce jusqu'au 5 novembre 2026");
+    expect(remainingText("2026-10-21", "2026-11-05")).toBe("Expirée depuis 15 jours, en grâce jusqu'au 5 novembre 2026");
+    expect(remainingText("2026-10-21", "2026-11-06")).toBe("Expirée depuis 16 jours");
+    expect(remainingText("2027-02-20", "2027-02-21")).toBe("Expirée depuis 1 jour, en grâce jusqu'au 7 mars 2027");
   });
 
   it("recherche sans accents ni casse, sur l'entreprise, le client et les notes", () => {

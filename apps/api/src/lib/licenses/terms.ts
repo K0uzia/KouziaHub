@@ -5,8 +5,10 @@ export const ENTREPRISE_MAX = 120;
 /** Durées proposées (mois), défaut 12 ; une date libre reste possible dans les bornes. */
 export const LICENSE_MONTHS = [1, 3, 6, 12, 24, 36] as const;
 export const DEFAULT_MONTHS = 12;
-/** Bientôt expirée : 30 jours ou moins, jour d'expiration inclus. */
+/** Bientôt expirée : 30 jours ou moins, jour d'expiration inclus (JOURS_AVERTISSEMENT de Tracebay). */
 export const EXPIRING_DAYS = 30;
+/** Après `expire`, Tracebay permet encore l'écriture pendant 15 jours (JOURS_GRACE_APRES_EXPIRATION), clé invalide. */
+export const GRACE_DAYS = 15;
 /** Expiration au plus tard dix ans après l'émission. */
 const MAX_MONTHS = 120;
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -42,6 +44,11 @@ export function addMonths(day: string, months: number): string {
 /** Jours de a à b (dates de calendrier). */
 export function daysBetween(a: string, b: string): number {
   return Math.round((utcOf(b) - utcOf(a)) / 86_400_000);
+}
+
+/** Jour de calendrier décalé de n jours. */
+export function addDays(day: string, n: number): string {
+  return new Date(utcOf(day) + n * 86_400_000).toISOString().slice(0, 10);
 }
 
 function utcOf(day: string): number {
