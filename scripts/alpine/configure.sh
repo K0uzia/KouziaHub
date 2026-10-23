@@ -107,7 +107,7 @@ EOF
   install_cloudflared
   install -o root -g root -m 755 "${KH_LIB_DIR}/openrc/cloudflared" /etc/init.d/cloudflared
   rc-update add cloudflared default >/dev/null 2>&1 || true
-  rc-service cloudflared restart >/dev/null 2>&1 || rc-service cloudflared start >/dev/null 2>&1 || true
+  rc_service cloudflared restart >/dev/null 2>&1 || rc_service cloudflared start >/dev/null 2>&1 || true
   sleep 3
   if service_running cloudflared; then
     ok "Tunnel démarré. Dans Cloudflare, il doit passer « Healthy » d'ici une minute."

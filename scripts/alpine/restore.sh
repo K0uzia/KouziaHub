@@ -179,7 +179,7 @@ revert_restore() {
     env_fix_perms
   fi
   STOPPED=0
-  rc-service "$KH_SERVICE" start >/dev/null 2>&1 || true
+  rc_service "$KH_SERVICE" start >/dev/null 2>&1 || true
   wait_health || warn "Le hub ne répond pas non plus sur l'état d'avant : hubctl logs erreurs."
   die "Restauration annulée : le hub est revenu à l'état d'avant. Envoyer « hubctl logs erreurs » au développeur."
 }
@@ -224,7 +224,7 @@ fi
 log "Base de données : migrations..."
 db_deploy || revert_restore "Les migrations ont échoué sur la base remise."
 
-rc-service "$KH_SERVICE" start >/dev/null 2>&1 || true
+rc_service "$KH_SERVICE" start >/dev/null 2>&1 || true
 if wait_health; then
   rm -rf "$OLD_DATA"
   STOPPED=0

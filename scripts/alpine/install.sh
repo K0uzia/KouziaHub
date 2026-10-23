@@ -41,7 +41,7 @@ STOPPED=0
 on_exit() {
   _rc=$?
   if [ "$_rc" -ne 0 ] && [ "$STOPPED" -eq 1 ] && service_exists "$KH_SERVICE"; then
-    rc-service "$KH_SERVICE" start >/dev/null 2>&1 || true
+    rc_service "$KH_SERVICE" start >/dev/null 2>&1 || true
   fi
 }
 trap on_exit EXIT
@@ -183,7 +183,7 @@ install_openrc_scripts
 install_system_conf
 apply_firewall || true
 rc-update add crond default >/dev/null 2>&1 || true
-rc-service crond start >/dev/null 2>&1 || true
+rc_service crond start >/dev/null 2>&1 || true
 state_set last-update "$(date '+%Y-%m-%d %H:%M') $(current_commit) (installation)"
 ok "Service ${KH_SERVICE} installé (relance automatique), sauvegarde quotidienne programmée, commande « hubctl » disponible."
 

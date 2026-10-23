@@ -45,6 +45,20 @@ title "Services"
 echo "  Hub (kouziahub)        : $(svc_state "$KH_SERVICE")"
 echo "  Tunnel (cloudflared)   : $(svc_state "$KH_TUNNEL_SERVICE")"
 echo "  Tâches planifiées      : $(svc_state crond)"
+if [ "$(id -u)" -ne 0 ]; then
+  echo "  Verrou des opérations  : inconnu (hubctl status en root)"
+else
+  _holders="$(lock_holders)"
+  if [ -z "$_holders" ]; then
+    echo "  Verrou des opérations  : libre"
+  else
+    warn "Verrou des opérations tenu par :"
+    printf '%s\n' "$_holders" | sed 's/^/    /' >&2
+    if printf '%s\n' "$_holders" | grep -Eqv "$KH_OPS_SCRIPTS_RE"; then
+      warn "Un service a hérité du verrou : le relancer depuis un shell neuf (rc-service <service> restart), jamais supprimer ${KH_LOCK_FILE}."
+    fi
+  fi
+fi
 
 title "Santé"
 URL="$(health_url)"

@@ -215,10 +215,52 @@ ops_lock() {
     if [ "${1:-refuse}" = "cron" ]; then
       return 2
     fi
-    die "Une autre opération du hub est en cours (mise à jour, restauration ou sauvegarde). Réessayer dans quelques minutes."
+    _holders="$(exec 9>&-; lock_holders)"
+    printf '%s\n' "${C_RED}ERREUR${C_RESET} Une autre opération du hub est en cours (mise à jour, restauration ou sauvegarde)." >&2
+    if [ -n "$_holders" ]; then
+      printf '%s\n' "  Verrou ${KH_LOCK_FILE} tenu par :" >&2
+      printf '%s\n' "$_holders" | sed 's/^/    /' >&2
+      if printf '%s\n' "$_holders" | grep -Eqv "$KH_OPS_SCRIPTS_RE"; then
+        printf '%s\n' "  Un service a hérité du verrou (ce n'est pas une opération hubctl) : le relancer depuis un shell neuf," >&2
+        printf '%s\n' "  par exemple « rc-service kouziahub restart » (hub, node), « rc-service cloudflared restart » ou « rc-service crond restart »." >&2
+        printf '%s\n' "  Ne jamais supprimer ${KH_LOCK_FILE} : le verrou resterait tenu par ce processus." >&2
+      else
+        printf '%s\n' "  Réessayer quand elle sera terminée (hubctl logs pour la suivre)." >&2
+      fi
+    else
+      printf '%s\n' "  Réessayer dans quelques minutes." >&2
+    fi
+    exit 1
   fi
   KH_OPS_LOCKED=1
   export KH_OPS_LOCKED
+}
+
+# Scripts d'opération (détenteurs légitimes du verrou), pour distinguer un service qui l'a hérité par erreur.
+KH_OPS_SCRIPTS_RE='(update|install|restore|backup|configure)\.sh|hubctl'
+
+# Processus qui ont le fichier du verrou ouvert (donc le tiennent : un descripteur hérité partage le verrou),
+# une ligne chacun : PID, nom, démarrage, commande. Sous verrou, l'appeler en « $(exec 9>&-; lock_holders) » pour ne pas se compter soi-même.
+lock_holders() {
+  for _fd in /proc/[0-9]*/fd/*; do
+    [ "$(readlink "$_fd" 2>/dev/null)" = "$KH_LOCK_FILE" ] || continue
+    _pid="${_fd#/proc/}"
+    _pid="${_pid%%/*}"
+    printf '%s\n' "$_pid"
+  done 2>/dev/null | sort -un | while IFS= read -r _pid; do
+    [ "$_pid" != "$$" ] || continue
+    # Processus déjà terminé depuis la lecture de son descripteur : ignoré.
+    [ -r "/proc/${_pid}/cmdline" ] || continue
+    _name="$(cat "/proc/${_pid}/comm" 2>/dev/null || echo '?')"
+    _since="$(date -d "@$(stat -c %Y "/proc/${_pid}" 2>/dev/null || echo 0)" '+%Y-%m-%d %H:%M' 2>/dev/null || echo '?')"
+    _cmd="$(tr '\0' ' ' < "/proc/${_pid}/cmdline" 2>/dev/null | cut -c1-120)"
+    printf 'PID %s (%s), depuis %s : %s\n' "$_pid" "$_name" "$_since" "$_cmd"
+  done
+}
+
+# Services lancés pendant une opération : sans le descripteur 9, sinon le démon garde le verrou à vie.
+rc_service() {
+  rc-service "$@" 9>&-
 }
 
 # --- Questions (français simple, valeurs par défaut sûres) ---
@@ -606,7 +648,7 @@ access_configured() {
 stop_app() {
   if service_exists "$KH_SERVICE"; then
     log "Arrêt du hub..."
-    rc-service "$KH_SERVICE" stop >/dev/null 2>&1 || true
+    rc_service "$KH_SERVICE" stop >/dev/null 2>&1 || true
   fi
   _i=0
   while [ "$_i" -lt 15 ] && pgrep -u "$KH_USER" -f 'apps/api/src/index\.ts' >/dev/null 2>&1; do
@@ -621,13 +663,13 @@ stop_app() {
 }
 
 start_app() {
-  rc-service "$KH_SERVICE" start >/dev/null 2>&1 || rc-service "$KH_SERVICE" restart >/dev/null 2>&1 || true
+  rc_service "$KH_SERVICE" start >/dev/null 2>&1 || rc_service "$KH_SERVICE" restart >/dev/null 2>&1 || true
   wait_health
 }
 
 restart_app() {
   log "Redémarrage du hub..."
-  rc-service "$KH_SERVICE" restart >/dev/null 2>&1 || true
+  rc_service "$KH_SERVICE" restart >/dev/null 2>&1 || true
   wait_health
 }
 

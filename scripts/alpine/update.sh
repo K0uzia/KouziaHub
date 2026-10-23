@@ -48,7 +48,7 @@ require_cmd curl sqlite3 npm git
 on_exit() {
   _rc=$?
   if [ "$_rc" -ne 0 ] && service_exists "$KH_SERVICE"; then
-    rc-service "$KH_SERVICE" start >/dev/null 2>&1 || true
+    rc_service "$KH_SERVICE" start >/dev/null 2>&1 || true
   fi
 }
 trap on_exit EXIT
@@ -107,7 +107,7 @@ fail_update() {
     fi
   fi
   echo "  Plus tard : « hubctl rollback » remet la version d'avant ; « hubctl logs erreurs » montre l'erreur."
-  rc-service "$KH_SERVICE" start >/dev/null 2>&1 || true
+  rc_service "$KH_SERVICE" start >/dev/null 2>&1 || true
   exit 1
 }
 
@@ -127,7 +127,7 @@ if [ "$RESUMED" -eq 0 ]; then
   if [ "$SKIP_BACKUP" -eq 0 ] && [ -f "$_db" ]; then
     log "Sauvegarde automatique avant mise à jour..."
     if ! BAK="$(sh "${SCRIPT_DIR}/backup.sh" --tag avant-maj)"; then
-      rc-service "$KH_SERVICE" start >/dev/null 2>&1 || true
+      rc_service "$KH_SERVICE" start >/dev/null 2>&1 || true
       die "La sauvegarde a échoué : mise à jour annulée, rien n'a changé (voir « hubctl logs sauvegarde »)."
     fi
     state_set pre-update-backup "$BAK"
@@ -185,7 +185,7 @@ fi
 apply_firewall || true
 
 log "Redémarrage du hub..."
-rc-service "$KH_SERVICE" start >/dev/null 2>&1 || rc-service "$KH_SERVICE" restart >/dev/null 2>&1 || true
+rc_service "$KH_SERVICE" start >/dev/null 2>&1 || rc_service "$KH_SERVICE" restart >/dev/null 2>&1 || true
 wait_health || fail_update "Le hub ne répond pas après la mise à jour."
 
 state_set last-update "$(date '+%Y-%m-%d %H:%M') $(current_commit)"

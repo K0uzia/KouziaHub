@@ -389,6 +389,8 @@ Le compte du service (`kouziahub`, celui qui fait tourner le hub et manipule les
 
 Si `hubctl update` s'arrête sur « configuration git inattendue » : le dépôt a pu être modifié par le compte du service avant cette protection. Le refaire : `mv /opt/kouziahub/.git /root/git-suspect`, puis `git clone --depth 1 https://github.com/K0uzia/KouziaHub.git /root/hub-neuf && mv /root/hub-neuf/.git /opt/kouziahub/.git`, puis `hubctl update`.
 
+Si une commande s'arrête sur « Une autre opération du hub est en cours » alors que rien ne tourne : le message (et `hubctl status`, ligne « Verrou des opérations ») donne le processus qui tient `/run/kouziahub-ops.lock`. Une opération `hubctl` : attendre la fin. Un service (avant ce correctif, un service démarré pendant une opération héritait du verrou) : le relancer depuis un shell neuf, par exemple `rc-service kouziahub restart`, puis relancer la commande. Ne jamais supprimer le fichier du verrou : le processus le garderait quand même.
+
 ### 7.2 Chromium isolé et son pare-feu
 
 Chromium (vignettes, mesure de vitesse) ne tourne pas sous le compte du service mais sous un compte à lui, `kouziahub-chromium`, sans accès au `.env` ni aux données. Le hub le lance par `/usr/local/lib/kouziahub/chromium-launch`, qui passe par `doas` (outil qui permet de lancer une commande sous un autre compte) avec une seule règle : cette commande, vers ce compte, rien d'autre. Sans ce compte dédié, la mesure de vitesse reste désactivée.
