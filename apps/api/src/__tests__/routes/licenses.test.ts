@@ -44,6 +44,8 @@ describe("page Logiciels : émission des clés Tracebay", () => {
         demoUrl: null,
         releasesUrl: null,
         thumbnailUrl: null,
+        thumbnailFit: null,
+        thumbnailColor: null,
         signing: true,
         counts: { active: 0, expiring: 0, expired: 0 },
         nextExpiry: null,
