@@ -76,6 +76,7 @@ if [ "$_major" -lt "$KH_NODE_MIN" ]; then
   apk add --no-cache nodejs-current npm || die "Node.js ${KH_NODE_MIN} ou plus introuvable : passer le CT en Alpine 3.21 ou plus."
 fi
 require_node_min
+ensure_node_patched || true
 ok "Node $(node -v), npm $(npm -v)"
 intl_fr_ok || warn "Node ne formate pas encore en français (données ICU) : hubctl status après l'installation."
 

@@ -42,6 +42,8 @@ KH_REPO_URL="${KH_REPO_URL:-https://github.com/K0uzia/KouziaHub.git}"
 KH_REPO_BRANCH="${KH_REPO_BRANCH:-main}"
 KH_DEFAULT_PORT=3000
 KH_NODE_MIN=22
+# Dernier correctif de sécurité par ligne maintenue (21/10/2026, CVE-2026-111497, Brotli). Même liste que « engines ».
+KH_NODE_FIXED="22.23.4 24.22.1 26.12.1"
 KH_CLOUDFLARED_BIN=/usr/local/bin/cloudflared
 # Chromium des vignettes et de la mesure de vitesse : compte dédié, sans accès au .env ni aux données.
 KH_CHROMIUM_USER="kouziahub-chromium"
@@ -100,6 +102,57 @@ require_node_min() {
     printf '%s\n' "  Corriger : apk add --no-cache nodejs-current npm   (ou passer le CT en Alpine 3.21 ou plus)" >&2
     exit 1
   fi
+}
+
+# Vrai si le Node installé n'a pas le dernier correctif de sécurité connu (KH_NODE_FIXED : une version par ligne
+# maintenue). Une ligne absente de la liste et plus ancienne que la plus récente (impaire, ou en fin de vie) n'a
+# reçu aucun correctif : elle compte comme vulnérable.
+node_vulnerable() {
+  _v="$(node -p 'process.versions.node' 2>/dev/null || true)"
+  [ -n "$_v" ] || return 0
+  _maj="${_v%%.*}"
+  _top=0
+  for _f in $KH_NODE_FIXED; do
+    [ "${_f%%.*}" -gt "$_top" ] && _top="${_f%%.*}"
+    if [ "${_f%%.*}" = "$_maj" ]; then
+      _vr="${_v#*.}" _fr="${_f#*.}"
+      _vmin="${_vr%%.*}" _fmin="${_fr%%.*}"
+      _vpat="${_vr#*.}" _fpat="${_fr#*.}"
+      [ "$_vmin" -lt "$_fmin" ] && return 0
+      [ "$_vmin" -gt "$_fmin" ] && return 1
+      [ "${_vpat%%[!0-9]*}" -lt "$_fpat" ]
+      return $?
+    fi
+  done
+  [ "$_maj" -le "$_top" ]
+}
+
+# Dernière version publiée de chaque ligne corrigée, pour les messages.
+node_fixed_text() {
+  printf '%s' "$KH_NODE_FIXED" | sed 's/ / ou /g'
+}
+
+# Tente d'amener Node au correctif (paquets nodejs déjà installés seulement), puis le dit clairement.
+# Code 1 : Node reste vulnérable (Alpine ne fournit pas encore la version corrigée).
+ensure_node_patched() {
+  node_vulnerable || return 0
+  log "Node $(node -v 2>/dev/null) a une faille corrigée en $(node_fixed_text) : mise à jour par apk..."
+  _pkgs=""
+  for _p in nodejs nodejs-current npm; do
+    apk info -e "$_p" >/dev/null 2>&1 && _pkgs="$_pkgs $_p"
+  done
+  # Liste vide (Node hors apk) : surtout pas « apk upgrade » seul, qui mettrait tout le système à jour.
+  if [ -n "$_pkgs" ]; then
+    apk update >/dev/null 2>&1 || true
+    # shellcheck disable=SC2086
+    apk upgrade --no-cache $_pkgs >/dev/null 2>&1 || true
+  fi
+  if node_vulnerable; then
+    printf '%s\n' "${C_RED}ALERTE${C_RESET} Node $(node -v 2>/dev/null || echo absent) reste vulnérable : Alpine ne fournit pas encore $(node_fixed_text) (version proposée : $(apk policy nodejs 2>/dev/null | sed -n 's/^  \([0-9][^:]*\):.*/\1/p' | head -n 1))." >&2
+    printf '%s\n' "  Relancer « hubctl update » dès que le paquet arrive (apk policy nodejs), ou passer le CT à une branche d'Alpine qui l'a." >&2
+    return 1
+  fi
+  ok "Node $(node -v) : correctif de sécurité appliqué (redémarrage du hub pour le charger)."
 }
 
 # Jours restants avant l'expiration du jeton GitHub (date saisie à la pose), vide si inconnue.

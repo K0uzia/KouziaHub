@@ -428,7 +428,7 @@ Testés contre des simulations, pas encore sur le vrai compte ni le vrai CT :
 
 ## 9. Développement (PC)
 
-Prérequis : Node.js 22, GNU make (Windows : `choco install make`).
+Prérequis : Node.js 22.23.4, 24.22.1 ou 26.12.1 au moins (correctif de sécurité du 21/10/2026 ; `hubctl status` alerte sur le CT si Node est en retard, `hubctl update` le met à jour par apk), GNU make (Windows : `choco install make`).
 
 ```sh
 make setup   # .env de dev (secrets aléatoires, Access coupé, Cloudflare et ERP simulés), dépendances, base, compte

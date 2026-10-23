@@ -160,6 +160,8 @@ fix_ownership
 install_root_scripts
 # Installation d'avant icu-data-full : posé une fois, chargé au redémarrage plus bas.
 ensure_icu_full || true
+# Correctif de sécurité de Node (KH_NODE_FIXED) : chargé au redémarrage plus bas ; sinon, alerte claire sans bloquer.
+ensure_node_patched || true
 
 if [ "$FORCE_DEPS" -eq 1 ] || deps_needed; then
   npm_ci || fail_update "npm ci a échoué."

@@ -29,6 +29,9 @@ echo "  Machine   : $(hostname) (Alpine $(cat /etc/alpine-release 2>/dev/null ||
 LAST_UPDATE="$(state_get last-update)"
 echo "  Version   : $(current_commit)   dernière mise à jour : ${LAST_UPDATE:-jamais}"
 echo "  Node      : $(node -v 2>/dev/null || echo absent)"
+if node_vulnerable; then
+  printf '%s\n' "  ${C_RED}ALERTE${C_RESET} Node vulnérable (faille corrigée en $(node_fixed_text)) : hubctl update"
+fi
 
 title "Droits des fichiers"
 if ownership_ok; then
