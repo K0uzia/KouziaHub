@@ -157,6 +157,47 @@ ensure_node_patched() {
   ok "Node $(node -v) : correctif de sécurité appliqué (redémarrage du hub pour le charger)."
 }
 
+# Mise à jour complète du système dans la branche d'Alpine installée (/etc/apk/repositories n'est jamais
+# modifié : pas de changement de version). Paquets listés à l'écran et dans system-upgrade.log ; services
+# du CT dont un paquet a changé relancés. Le hub, lui, est relancé et contrôlé par update.sh.
+system_upgrade() {
+  log "Système : apk update puis apk upgrade (même version d'Alpine)..."
+  if ! apk update >/dev/null 2>&1; then
+    warn "apk update a échoué (réseau ou dépôt) : système non mis à jour."
+    return 1
+  fi
+  _list="$(apk version -l '<' 2>/dev/null | sed '1d')"
+  if [ -z "$_list" ]; then
+    ok "Système déjà à jour."
+    return 0
+  fi
+  _slog="${KH_LOG_DIR}/system-upgrade.log"
+  {
+    echo "== $(date '+%Y-%m-%d %H:%M:%S') : apk upgrade =="
+    printf '%s\n' "$_list"
+  } >> "$_slog"
+  printf '%s\n' "$_list" | sed 's/^/  /'
+  if ! apk upgrade --no-cache >> "$_slog" 2>&1; then
+    warn "apk upgrade a échoué : détail dans ${_slog}."
+    return 1
+  fi
+  ok "Système mis à jour ($(printf '%s\n' "$_list" | wc -l | tr -d ' ') paquet(s), liste dans ${_slog})."
+  # Les bibliothèques remplacées (musl, openssl, nftables) ne sont chargées qu'au redémarrage d'un service.
+  if service_running "$KH_TUNNEL_SERVICE"; then
+    log "Tunnel : redémarrage (bibliothèques du système à jour)..."
+    rc_service "$KH_TUNNEL_SERVICE" restart >/dev/null 2>&1 || warn "Le tunnel n'a pas redémarré : hubctl logs tunnel."
+  fi
+  if printf '%s\n' "$_list" | grep -q '^nftables-' && service_exists "$KH_FIREWALL_SERVICE"; then
+    rc_service "$KH_FIREWALL_SERVICE" restart >/dev/null 2>&1 || warn "Pare-feu de Chromium non reposé : hubctl status."
+  fi
+  if printf '%s\n' "$_list" | grep -q '^busybox-'; then
+    rc_service crond restart >/dev/null 2>&1 || true
+  fi
+  if printf '%s\n' "$_list" | grep -q '^chromium-'; then
+    echo "  Chromium mis à jour : la prochaine vignette utilise la nouvelle version (aucun service à relancer)."
+  fi
+}
+
 # Jours restants avant l'expiration du jeton GitHub (date saisie à la pose), vide si inconnue.
 # Calcul par Node (déjà requis) : « date -d » de BusyBox ne lit pas tous les formats.
 github_token_days_left() {

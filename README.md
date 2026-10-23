@@ -183,7 +183,7 @@ Bon à savoir :
 
 ### 4.1 Mettre à jour
 
-`hubctl update` (jeton GitHub posé, voir 1.2) fait tout, dans l'ordre : arrêt du hub, **sauvegarde automatique**, récupération du code sur GitHub, dépendances seulement si elles ont changé, base de données, interface, redémarrage et contrôle que le hub répond. Si le hub ne répond plus, il propose de revenir en arrière. Plus tard, `hubctl rollback` remet la version d'avant la dernière mise à jour (code et données d'alors).
+`hubctl update` (jeton GitHub posé, voir 1.2) fait tout, dans l'ordre : arrêt du hub, **sauvegarde automatique**, récupération du code sur GitHub, **mise à jour du système** (`apk update` puis `apk upgrade` complet, dans la version d'Alpine installée, jamais vers une autre ; paquets listés à l'écran et dans `/var/log/kouziahub/system-upgrade.log`, tunnel relancé, pare-feu reposé si nftables a changé ; `hubctl update --no-system` saute cette étape, que le retour arrière ne défait pas), dépendances seulement si elles ont changé, base de données, interface, redémarrage et contrôle que le hub répond. Si le hub ne répond plus, il propose de revenir en arrière. Plus tard, `hubctl rollback` remet la version d'avant la dernière mise à jour (code et données d'alors).
 
 **Quand la veille Cloudflare change, `hubctl update` le signale : relancer `hubctl veille deploy` avec un nouveau jeton (chapitre 2 b). C'est le cas de cette version** (les requêtes du hub vers la veille sont désormais signées avec leurs paramètres et protégées contre le rejeu ; sans redéploiement, le hub décide seul).
 

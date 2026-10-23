@@ -7,6 +7,7 @@
 #   hubctl update              mise à jour normale
 #   hubctl update --no-git     code déjà copié sur le CT (rsync), pas de GitHub
 #   hubctl update --force      npm ci même si package-lock.json n'a pas changé
+#   hubctl update --no-system  sans « apk upgrade » du système (même version d'Alpine)
 #   hubctl rollback            revenir à la version d'avant la dernière mise à jour
 
 set -eu
@@ -18,6 +19,7 @@ SCRIPT_DIR="$(cd "$(dirname "$SELF")" && pwd)"
 
 DO_GIT=auto
 FORCE_DEPS=0
+NO_SYSTEM=0
 SKIP_BACKUP=0
 ROLLBACK=0
 YES=0
@@ -27,11 +29,12 @@ while [ $# -gt 0 ]; do
     --git) DO_GIT=1; shift ;;
     --no-git) DO_GIT=0; shift ;;
     --force) FORCE_DEPS=1; shift ;;
+    --no-system) NO_SYSTEM=1; shift ;;
     --skip-backup) SKIP_BACKUP=1; shift ;;
     --rollback) ROLLBACK=1; shift ;;
     --yes) YES=1; shift ;;
     --resumed) RESUMED=1; shift ;;
-    -h|--help) sed -n '2,10p' "$SELF" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,11p' "$SELF" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "Option inconnue : $1" ;;
   esac
 done
@@ -149,10 +152,11 @@ if [ "$RESUMED" -eq 0 ]; then
   fix_ownership
   install_root_scripts
   trap - EXIT
-  if [ "$FORCE_DEPS" -eq 1 ]; then
-    exec sh "${KH_LIB_DIR}/update.sh" --resumed --no-git --force
-  fi
-  exec sh "${KH_LIB_DIR}/update.sh" --resumed --no-git
+  _resume="--resumed --no-git"
+  [ "$FORCE_DEPS" -eq 0 ] || _resume="${_resume} --force"
+  [ "$NO_SYSTEM" -eq 0 ] || _resume="${_resume} --no-system"
+  # shellcheck disable=SC2086
+  exec sh "${KH_LIB_DIR}/update.sh" $_resume
 fi
 
 # Reprise des droits (idempotente ; migre une ancienne installation où le compte possédait le code).
@@ -160,7 +164,13 @@ fix_ownership
 install_root_scripts
 # Installation d'avant icu-data-full : posé une fois, chargé au redémarrage plus bas.
 ensure_icu_full || true
-# Correctif de sécurité de Node (KH_NODE_FIXED) : chargé au redémarrage plus bas ; sinon, alerte claire sans bloquer.
+# Système à jour dans sa version d'Alpine (après la sauvegarde d'avant mise à jour, hub arrêté), puis
+# correctif de Node (KH_NODE_FIXED) : chargés au redémarrage plus bas ; sinon, alerte claire sans bloquer.
+if [ "$NO_SYSTEM" -eq 1 ]; then
+  log "Système : mise à jour sautée (--no-system)."
+else
+  system_upgrade || true
+fi
 ensure_node_patched || true
 
 if [ "$FORCE_DEPS" -eq 1 ] || deps_needed; then
