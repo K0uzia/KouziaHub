@@ -171,6 +171,14 @@ export async function deployVersion(services: Services, siteId: string, versionI
         allow: extras.devFilesAllowed,
         csp: extras.siteCsp,
         has404: files.some((f) => f.path === "404.html"),
+        ...(site.allowIndexing
+          ? {
+              indexing: {
+                siteRobots: files.some((f) => f.path === "robots.txt"),
+                sitemap: ["sitemap-index.xml", "sitemap.xml"].find((p) => files.some((f) => f.path === p)) ?? null,
+              },
+            }
+          : {}),
       }),
       ...(config.headersFile !== undefined ? { headersFile: config.headersFile } : {}),
       ...(config.redirectsFile !== undefined ? { redirectsFile: config.redirectsFile } : {}),

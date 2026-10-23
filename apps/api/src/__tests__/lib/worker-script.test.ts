@@ -161,3 +161,42 @@ describe("_worker.js : outillage du projet, CSP et page 404 (retour de productio
     expect(await without.text()).toBe("Not Found");
   });
 });
+
+describe("_worker.js : indexation autorisée (cinquième série, 22/10/2026)", () => {
+  const site = (path: string) => new Request(`https://alpha.kouzia.com${path}`);
+  const pages = {
+    ASSETS: {
+      async fetch(request: Request) {
+        const path = new URL(request.url).pathname;
+        if (path === "/robots.txt") return new Response("User-agent: *\nDisallow: /brouillons/\n", { status: 200, headers: { "Content-Type": "text/plain" } });
+        return new Response("<h1>site</h1>", { status: 200, headers: { "Content-Type": "text/html" } });
+      },
+    },
+  };
+
+  it("désactivée (défaut) : noindex et robots.txt en Disallow, même si le site a son robots.txt", async () => {
+    const w = await loadWorker({});
+    expect((await w.fetch(site("/"), pages)).headers.get("X-Robots-Tag")).toBe("noindex, nofollow");
+    expect(await (await w.fetch(site("/robots.txt"), pages)).text()).toBe("User-agent: *\nDisallow: /\n");
+  });
+
+  it("activée : plus de X-Robots-Tag ; robots.txt généré avec la ligne Sitemap absolue si le sitemap existe", async () => {
+    const w = await loadWorker({ indexing: { siteRobots: false, sitemap: "sitemap-index.xml" } });
+    const home = await w.fetch(site("/"), pages);
+    expect(home.headers.get("X-Robots-Tag")).toBeNull();
+    expect(home.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(await (await w.fetch(site("/robots.txt"), pages)).text()).toBe("User-agent: *\nAllow: /\n\nSitemap: https://alpha.kouzia.com/sitemap-index.xml\n");
+    const noSitemap = await loadWorker({ indexing: { siteRobots: false, sitemap: null } });
+    expect(await (await noSitemap.fetch(site("/robots.txt"), pages)).text()).toBe("User-agent: *\nAllow: /\n");
+  });
+
+  it("activée avec un robots.txt du site : servi tel quel ; pages.dev toujours en 301 et noindex", async () => {
+    const w = await loadWorker({ indexing: { siteRobots: true, sitemap: null } });
+    expect(await (await w.fetch(site("/robots.txt"), pages)).text()).toBe("User-agent: *\nDisallow: /brouillons/\n");
+    const redirect = await w.fetch(new Request("https://kz-alpha.pages.dev/page"), pages);
+    expect(redirect.status).toBe(301);
+    expect(redirect.headers.get("X-Robots-Tag")).toBe("noindex, nofollow");
+    // Les fichiers de développement restent refusés.
+    expect((await w.fetch(site("/package.json"), pages)).status).toBe(403);
+  });
+});

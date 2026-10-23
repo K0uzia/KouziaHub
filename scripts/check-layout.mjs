@@ -95,6 +95,9 @@ const screens = [
   { name: "réglages", path: "/reglages", content: "#contenu > .page-frame" },
   { name: "journal", path: "/reglages/journal?page=2", content: "#contenu > .page-frame" },
   { name: "incidents", path: "/surveillance/incidents", content: "#contenu > .page-frame" },
+  { name: "logiciels", path: "/logiciels", content: "#contenu > .page-frame" },
+  { name: "logiciels : Tracebay", path: "/logiciels/tracebay", content: "#contenu > .page-frame" },
+  { name: "nouvelle clé (modale)", path: "/logiciels/tracebay", content: "[role=dialog]", open: { role: "button", name: "Nouvelle clé" } },
 ];
 if (!site) console.warn("Aucun site : fiche et export non contrôlés.");
 

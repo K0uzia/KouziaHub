@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/Button";
 import { Field, Input } from "@/components/ui/Field";
 import { ClientPicker } from "@/components/sites/ClientPicker";
 import { PurgeFilesCard } from "@/components/sites/PurgeFilesCard";
+import { IndexingCard } from "@/components/sites/IndexingCard";
 
 export function SiteSettingsTab({ site, onSite, onPurged }: { site: SiteDetail; onSite: (s: SiteDetail) => void; onPurged: () => void }) {
   const navigate = useNavigate();
@@ -136,6 +137,8 @@ export function SiteSettingsTab({ site, onSite, onPurged }: { site: SiteDetail; 
           </div>
         )}
       </Card>
+
+      <IndexingCard site={site} onSite={onSite} />
 
       <PurgeFilesCard site={site} onPurged={onPurged} />
 

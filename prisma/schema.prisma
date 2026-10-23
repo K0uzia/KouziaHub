@@ -132,6 +132,8 @@ model Site {
   devFilesAllowed  String?
   /// CSP du site, ajoutée à la CSP minimale de la version de travail et à celle de l'export, null : aucune.
   siteCsp          String?
+  /// Indexation par les moteurs autorisée (cinquième série, 22/10/2026) : faux par défaut (noindex).
+  allowIndexing    Boolean      @default(false)
   thumbnailPath    String?
   /// "capture" ou "upload".
   thumbnailSource  String?
@@ -410,4 +412,39 @@ model HubSetting {
   key       String   @id
   value     String
   updatedAt DateTime @updatedAt
+}
+
+/// Logiciel dont le hub émet les licences (docs/licences-logiciels.md, section 5). Tracebay seul, créé au démarrage.
+model Software {
+  id        String    @id @default(cuid())
+  /// "tracebay". Unique, stable, utilisé dans l'URL.
+  slug      String    @unique
+  name      String
+  /// "TB1". Décide du signeur.
+  format    String
+  createdAt DateTime  @default(now())
+  licenses  License[]
+}
+
+/// Clé de licence émise (registre). Entreprise et dates signées : immuables. Pas de révocation (vérification hors ligne).
+model License {
+  id               String   @id @default(cuid())
+  softwareId       String
+  software         Software @relation(fields: [softwareId], references: [id])
+  /// Nom signé, NFC, 1 à 120 caractères. Immuable.
+  entreprise       String
+  /// Identifiant ERP, même règle que Site.erpClientId. Null si le nom a été saisi librement.
+  erpClientId      String?
+  /// Chiffré avec encrypt() (AES-256-GCM, ENCRYPTION_KEY). Null si vide.
+  contactEncrypted String?
+  /// Chaîne TB1 complète, chiffrée de la même façon. Jamais en clair dans la base.
+  keyEncrypted     String
+  /// AAAA-MM-JJ, heure de Paris. Immuables.
+  emise            String
+  expire           String
+  notes            String?
+  createdAt        DateTime @default(now())
+
+  @@index([softwareId, expire])
+  @@index([erpClientId])
 }

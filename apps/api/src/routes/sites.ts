@@ -40,6 +40,7 @@ const updateSchema = z
     notFoundPage: z.string().max(220).optional(),
     devFilesAllowed: z.array(z.string().max(500)).max(MAX_ALLOWED_PATHS).optional(),
     siteCsp: z.string().max(MAX_CSP_LENGTH).nullable().optional(),
+    allowIndexing: z.boolean().optional(),
   })
   .strict();
 const regenerateSchema = z.object({ force: z.boolean().optional() }).nullish();
@@ -167,6 +168,16 @@ export function sitesRoutes(services: Services): FastifyPluginAsync {
         where: { id },
         data: { label: nextLabel, erpClientId: nextClient, kind: nextClient ? "CLIENT" : "PERSO", finalDomain, canonicalHost, notFoundPage, touchedAt: new Date() },
       });
+      if (parsed.data.allowIndexing !== undefined && parsed.data.allowIndexing !== site.allowIndexing) {
+        await prisma.site.update({ where: { id }, data: { allowIndexing: parsed.data.allowIndexing } });
+        await audit({
+          action: "site.indexing",
+          result: "ok",
+          siteId: id,
+          siteSlug: site.slug,
+          detail: parsed.data.allowIndexing ? "indexation autorisée" : "indexation interdite (noindex)",
+        });
+      }
       await audit({ action: "site.update", result: "ok", siteId: id, siteSlug: site.slug });
       if (profileChanged) await writeServerConfig(services.blobs, id, { reason: "profil modifié" });
       if (profileChanged || nextClient !== site.erpClientId) {

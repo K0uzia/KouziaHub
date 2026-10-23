@@ -14,6 +14,8 @@ const TABLES = [
   "WorkingFile",
   "Operation",
   "Site",
+  "License",
+  "Software",
   "AuditEvent",
   "OrphanCheck",
   "Session",

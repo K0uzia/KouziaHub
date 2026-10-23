@@ -93,8 +93,7 @@ EOF
       return 1
     fi
     RAW=""
-    mkdir -p "$KH_ETC_DIR"
-    chmod 700 "$KH_ETC_DIR"
+    etc_dir_perms
     _tmp="$(mktemp "${KH_ETC_DIR}/.tunnel.XXXXXX")"
     chmod 600 "$_tmp"
     printf '%s\n' "$TOKEN" > "$_tmp"
@@ -252,8 +251,7 @@ EOF
     V=""
     die "Ce n'est pas un jeton fine-grained (${_len} caractères reçus, il commence par github_pat_). Rien n'a changé."
   fi
-  mkdir -p "$KH_ETC_DIR"
-  chmod 700 "$KH_ETC_DIR"
+  etc_dir_perms
   _prev=""
   if [ -s "$KH_GITHUB_TOKEN_FILE" ]; then
     _prev="$(mktemp "${KH_ETC_DIR}/.github-prev.XXXXXX")"
@@ -287,6 +285,57 @@ EOF
   else
     state_set github-token-expires ""
   fi
+}
+
+# --- Clé de signature des licences Tracebay ---
+
+# Paire Ed25519 créée seulement si elle est absente (jamais remplacée : sa perte ou son remplacement rendrait
+# impossibles les clés des versions déjà installées). Seule la clé publique est affichée.
+configure_tracebay() {
+  title "Clé de signature des licences Tracebay"
+  etc_dir_perms
+  if [ -e "$KH_TRACEBAY_KEY_FILE" ]; then
+    ok "Clé déjà en place : jamais remplacée. (Pour revoir la clé publique : hubctl tracebay-keygen --public)"
+  else
+    _tmp="$(mktemp "${KH_ETC_DIR}/.tracebay.XXXXXX")"
+    chmod 600 "$_tmp"
+    # La clé privée va directement dans le fichier temporaire, jamais à l'écran ni dans un journal.
+    if ! KH_KEY_OUT="$_tmp" node --input-type=module -e '
+import { generateKeyPairSync } from "node:crypto";
+import { writeFileSync } from "node:fs";
+const { privateKey } = generateKeyPairSync("ed25519");
+writeFileSync(process.env.KH_KEY_OUT, privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600 });
+'; then
+      rm -f "$_tmp"
+      die "Création de la paire impossible (Node). Rien n'a changé."
+    fi
+    chown "root:${KH_GROUP}" "$_tmp"
+    chmod 640 "$_tmp"
+    mv -n "$_tmp" "$KH_TRACEBAY_KEY_FILE"
+    if [ -e "$_tmp" ]; then
+      rm -f "$_tmp"
+      die "Une clé est apparue entre-temps : elle est gardée, rien n'a été remplacé."
+    fi
+    ok "Paire créée : clé privée dans ${KH_TRACEBAY_KEY_FILE} (root:${KH_GROUP}, 640)."
+    warn "Sauvegarde obligatoire : copiez ce fichier chiffré hors du serveur avant toute émission réelle (sa perte empêche de signer)."
+  fi
+  if [ "$(env_get TRACEBAY_LICENSE_KEY_FILE)" != "$KH_TRACEBAY_KEY_FILE" ]; then
+    env_set TRACEBAY_LICENSE_KEY_FILE "$KH_TRACEBAY_KEY_FILE"
+    ok "TRACEBAY_LICENSE_KEY_FILE posé dans le .env."
+  fi
+  print_tracebay_public
+}
+
+# Clé publique (SPKI PEM), à déposer dans Tracebay Autonome. Calculée depuis la privée, qui n'est jamais affichée.
+print_tracebay_public() {
+  [ -r "$KH_TRACEBAY_KEY_FILE" ] || die "Clé de signature absente : hubctl tracebay-keygen"
+  echo ""
+  echo "  Clé publique à embarquer dans Tracebay (publique, sans secret) :"
+  KH_KEY_IN="$KH_TRACEBAY_KEY_FILE" node --input-type=module -e '
+import { createPrivateKey, createPublicKey } from "node:crypto";
+import { readFileSync } from "node:fs";
+process.stdout.write(createPublicKey(createPrivateKey(readFileSync(process.env.KH_KEY_IN, "utf8"))).export({ type: "spki", format: "pem" }));
+' || die "Clé de signature illisible."
 }
 
 # --- API Cloudflare ---
@@ -394,6 +443,15 @@ case "$SECTION" in
     ;;
   github)
     configure_github
+    ;;
+  tracebay)
+    [ -f "$KH_ENV_FILE" ] || die ".env absent : lancer « hubctl install »."
+    if [ "${2:-}" = "--public" ]; then
+      print_tracebay_public
+    else
+      configure_tracebay
+      restart_if_needed
+    fi
     ;;
   secrets|"")
     [ -f "$KH_ENV_FILE" ] || die ".env absent : lancer « hubctl install »."

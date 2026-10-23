@@ -6,6 +6,7 @@ export function Segmented<T extends string>({
   label,
   className = "",
   wrap = false,
+  stack = false,
   fieldHeight = false,
   disabled = false,
   describedBy,
@@ -18,6 +19,8 @@ export function Segmented<T extends string>({
   className?: string;
   /** Plus de trois choix : grille de deux colonnes au téléphone, en ligne à partir de 640 px. */
   wrap?: boolean;
+  /** Libellés longs : un choix par ligne au téléphone, en ligne à partir de 640 px. */
+  stack?: boolean;
   /** Dès 768 px, même hauteur hors tout qu'un champ (44 px) quand il est aligné avec des champs : boutons de 42 px, sans marge. */
   fieldHeight?: boolean;
   /** Choix indisponible pour l'instant ; describedBy : id du texte qui dit pourquoi. */
@@ -29,7 +32,7 @@ export function Segmented<T extends string>({
       role="group"
       aria-label={label}
       aria-describedby={describedBy}
-      className={`${wrap ? "grid grid-cols-2 sm:inline-flex" : "inline-flex"} rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface)] p-1 ${fieldHeight ? "md:p-0" : ""} ${className}`}
+      className={`${stack ? "grid grid-cols-1 sm:inline-flex" : wrap ? "grid grid-cols-2 sm:inline-flex" : "inline-flex"} rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface)] p-1 ${fieldHeight ? "md:p-0" : ""} ${className}`}
     >
       {options.map((o) => {
         const active = o.id === value;

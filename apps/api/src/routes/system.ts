@@ -12,7 +12,8 @@ import type { Services } from "@/lib/services.js";
 const clientsQuery = z.object({ q: z.string().max(100).optional() });
 const auditQuery = pageQuery.extend({
   siteId: routeParam.optional(),
-  action: z.string().regex(/^[a-z][a-z0-9_.-]{0,63}$/).optional(),
+  // « licence.* » : toutes les actions d'une famille (historique des clés de licence).
+  action: z.string().regex(/^[a-z][a-z0-9_.-]{0,63}$|^[a-z][a-z0-9_-]{0,30}\.\*$/).optional(),
   result: z.enum(["ok", "error"]).optional(),
   from: dayParam.optional(),
   to: dayParam.optional(),
@@ -70,7 +71,7 @@ export function systemRoutes(services: Services): FastifyPluginAsync {
       // Résultat : tout ce qui n'est pas « error » compte comme réussi (même règle que l'affichage).
       const where = {
         ...(q.siteId ? { siteId: q.siteId } : {}),
-        ...(q.action ? { action: q.action } : {}),
+        ...(q.action ? { action: q.action.endsWith(".*") ? { startsWith: q.action.slice(0, -1) } : q.action } : {}),
         ...(q.result === "error" ? { result: "error" } : q.result === "ok" ? { result: { not: "error" } } : {}),
         ...(at ? { at } : {}),
       };

@@ -81,7 +81,8 @@ if [ "$EXPORT" -eq 1 ]; then
     ask_secret P2 "La même, encore une fois"
     [ "$P1" = "$P2" ] || die "Les deux saisies diffèrent. Rien n'a changé."
     [ "${#P1}" -ge 16 ] || die "Trop courte (${#P1} caractères, 16 au moins)."
-    printf '%s\n' "$P1" > "$KH_PASSPHRASE_FILE"
+    # umask 077 : jamais lisible par un autre compte, même un instant (/etc/kouziahub est traversable par le service).
+    (umask 077; printf '%s\n' "$P1" > "$KH_PASSPHRASE_FILE")
     P1="" P2=""
     chown root:root "$KH_PASSPHRASE_FILE"
     chmod 600 "$KH_PASSPHRASE_FILE"

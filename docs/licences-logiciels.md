@@ -123,11 +123,12 @@ Le contact, les notes, l'identifiant ERP et le slug du logiciel. Les modifier ne
 
 ## 4. Clés cryptographiques
 
-Une paire Ed25519 pour Tracebay, générée une fois.
+Une paire Ed25519 pour Tracebay, générée une fois, sur le CT du hub, par `hubctl tracebay-keygen` : la paire n'est créée que si le fichier est absent (jamais remplacée), avec les droits ci-dessous, `TRACEBAY_LICENSE_KEY_FILE` est posé dans le `.env` et seule la publique est affichée (`hubctl tracebay-keygen --public` la réaffiche). Équivalent à la main :
 
 ```bash
 node --input-type=module -e '
-import { generateKeyPairSync, writeFileSync } from "node:crypto";
+import { generateKeyPairSync } from "node:crypto";
+import { writeFileSync } from "node:fs";
 const { publicKey, privateKey } = generateKeyPairSync("ed25519");
 writeFileSync("tracebay-ed25519.pem", privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600 });
 process.stdout.write(publicKey.export({ type: "spki", format: "pem" }));
@@ -356,8 +357,8 @@ La publique de production n'entre dans le dépôt qu'au moment de la version qui
 
 ## 9. Mise en place, dans l'ordre
 
-1. Générer la paire sur le conteneur du hub. Mettre la privée à `/etc/kouziahub/tracebay-ed25519.pem`. Copier la sauvegarde chiffrée hors du serveur avant toute émission réelle.
-2. Poser `TRACEBAY_LICENSE_KEY_FILE` pour le service (fichier d'environnement du conteneur, pas une valeur dans Git). Redémarrer. Le hub démarre même si le fichier manque : il refuse seulement d'émettre.
+1. Sur le conteneur du hub : `hubctl tracebay-keygen` (paire créée dans `/etc/kouziahub/tracebay-ed25519.pem`, `TRACEBAY_LICENSE_KEY_FILE` posé, hub redémarré). Copier la sauvegarde chiffrée hors du serveur avant toute émission réelle : les sauvegardes du hub ne contiennent pas `/etc/kouziahub`.
+2. Le hub démarre même si le fichier manque : il refuse seulement d'émettre.
 3. Livrer la page Logiciels (ce document, sections 5 à 7) et vérifier l'émission avec la clé de développement.
 4. Déposer la publique dans Tracebay Autonome, dans la version qui ajoute le contrôle. Pas avant : les clients déjà en 3.5.0 passeraient en lecture seule à la mise à jour automatique s'ils reçoivent le contrôle sans clé.
 5. Émettre la clé du client dans le hub, la transmettre avec cette version.

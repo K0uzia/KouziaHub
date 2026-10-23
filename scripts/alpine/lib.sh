@@ -37,6 +37,8 @@ KH_ENV_FILE="${KH_APP_DIR}/.env"
 KH_TUNNEL_TOKEN_FILE="${KH_ETC_DIR}/tunnel.token"
 # Jeton GitHub en lecture seule (dépôt privé) : root:root 600, lu seulement par git_fetch_origin.
 KH_GITHUB_TOKEN_FILE="${KH_ETC_DIR}/github-token"
+# Clé privée Ed25519 des licences Tracebay (docs/licences-logiciels.md, section 4) : root:kouziahub 640, jamais remplacée.
+KH_TRACEBAY_KEY_FILE="${KH_ETC_DIR}/tracebay-ed25519.pem"
 KH_LOCK_FILE="${KH_LOCK_FILE:-/run/kouziahub-ops.lock}"
 KH_REPO_URL="${KH_REPO_URL:-https://github.com/K0uzia/KouziaHub.git}"
 KH_REPO_BRANCH="${KH_REPO_BRANCH:-main}"
@@ -486,9 +488,25 @@ fix_service_dirs() {
   mkdir -p "$KH_HOME_DIR" "$KH_LOG_DIR" "$KH_ETC_DIR" "$KH_BACKUP_DIR"
   chown -h "${KH_USER}:${KH_GROUP}" "$KH_HOME_DIR"
   chmod 700 "$KH_HOME_DIR"
-  chown -h root:root "$KH_LOG_DIR" "$KH_ETC_DIR" "$KH_BACKUP_DIR"
+  chown -h root:root "$KH_LOG_DIR" "$KH_BACKUP_DIR"
   chmod 755 "$KH_LOG_DIR"
-  chmod 700 "$KH_ETC_DIR" "$KH_BACKUP_DIR"
+  chmod 700 "$KH_BACKUP_DIR"
+  etc_dir_perms
+}
+
+# /etc/kouziahub : traversable par le groupe du service (710, sans lister), pour qu'il lise la clé de signature
+# Tracebay (640 root:kouziahub). Tout le reste (jetons du tunnel et de GitHub, phrase de passe, règle nftables,
+# fichiers temporaires), lu par root seul, n'a aucun droit de groupe ni d'autres : le dossier traversable ne doit
+# rien ouvrir d'autre.
+etc_dir_perms() {
+  mkdir -p "$KH_ETC_DIR"
+  chown -h "root:${KH_GROUP}" "$KH_ETC_DIR"
+  chmod 710 "$KH_ETC_DIR"
+  find "$KH_ETC_DIR" -mindepth 1 -maxdepth 1 ! -name "$(basename "$KH_TRACEBAY_KEY_FILE")" -exec chmod go-rwx {} +
+  if [ -f "$KH_TRACEBAY_KEY_FILE" ]; then
+    chown -h "root:${KH_GROUP}" "$KH_TRACEBAY_KEY_FILE"
+    chmod 640 "$KH_TRACEBAY_KEY_FILE"
+  fi
 }
 
 # --- git en root : aucun crochet, aucun programme lancé par la configuration du dépôt ---
@@ -856,7 +874,7 @@ write_nft_rules() {
     echo "}"
   } > "$_tmp"
   chown root:root "$_tmp"
-  chmod 644 "$_tmp"
+  chmod 600 "$_tmp"
   mv -f "$_tmp" "$KH_NFT_FILE"
 }
 

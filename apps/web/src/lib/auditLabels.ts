@@ -43,6 +43,14 @@ export const ACTION_LABEL: Record<string, string> = {
   "server-config.generate": "Configuration serveur générée",
   "server-config.skip": "Configuration serveur non générée",
   "settings.reports": "Coordonnées des rapports modifiées",
+  "site.indexing": "Indexation par les moteurs",
+  "licence.emettre": "Clé de licence émise",
+  "licence.modifier": "Clé de licence modifiée",
+};
+
+/** Familles filtrables d'un coup (« licence.* » : émissions et modifications des clés). */
+export const ACTION_FAMILY_LABEL: Record<string, string> = {
+  "licence.*": "Clés de licence (toutes)",
 };
 
 /** Libellé d'une action ; null si la table ne la connaît pas (le code est alors affiché tel quel). */
