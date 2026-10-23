@@ -133,7 +133,7 @@ describe("page Logiciels : nouveau logiciel", () => {
     expect((await send("GET", "/api/logiciels/vide")).statusCode).toBe(404);
   });
 
-  it("vignette envoyée : WebP 640 x 400 privé, puis retirée", async () => {
+  it("vignette envoyée : gardée entière (WebP à son ratio, transparence), cadrage « logo » par défaut, puis retirée", async () => {
     await create();
     const png = await sharp({ create: { width: 1600, height: 1000, channels: 3, background: "#3366cc" } }).png().toBuffer();
     const body = multipart([], [{ field: "image", filename: "atelier.png", content: png, type: "image/png" }]);
@@ -145,10 +145,39 @@ describe("page Logiciels : nouveau logiciel", () => {
     expect([img.statusCode, img.headers["content-type"]]).toEqual([200, "image/webp"]);
     expect(img.headers["cache-control"]).toMatch(/^private/);
     const meta = await sharp(img.rawPayload).metadata();
-    expect([meta.width, meta.height]).toEqual([640, 400]);
+    expect([meta.width, meta.height]).toEqual([960, 600]);
+    expect((res.json() as SoftwareDetail).software).toMatchObject({ thumbnailFit: "logo", thumbnailColor: "#0f1f3d" });
     const removed = await send("DELETE", "/api/logiciels/atelier/vignette");
-    expect((removed.json() as SoftwareDetail).software.thumbnailUrl).toBeNull();
+    expect((removed.json() as SoftwareDetail).software).toMatchObject({ thumbnailUrl: null, thumbnailFit: null, thumbnailColor: null });
     expect((await send("GET", "/api/logiciels/atelier/vignette")).statusCode).toBe(404);
+  });
+
+  it("cadrage : logo, couleur du logo ou capture ; gardé au renvoi ; image d'avant le réglage (déjà recadrée) refusée", async () => {
+    await create();
+    const upload = async (content: Buffer) => {
+      const body = multipart([], [{ field: "image", filename: "logo.png", content, type: "image/png" }]);
+      return (await hub.app.inject({ method: "POST", url: "/api/logiciels/atelier/vignette", headers: { ...hub.headers, ...body.headers }, payload: body.payload })).json() as SoftwareDetail;
+    };
+    const fit = (thumbnailFit: unknown) => send("PATCH", "/api/logiciels/atelier", { thumbnailFit });
+    expect((await fit("logo")).json()).toMatchObject({ code: "thumbnail" });
+    // Logo carré transparent : la transparence reste, la couleur vient des pixels opaques.
+    const logo = await sharp({ create: { width: 400, height: 400, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
+      .composite([{ input: await sharp({ create: { width: 200, height: 200, channels: 4, background: { r: 22, g: 160, b: 133, alpha: 1 } } }).png().toBuffer(), top: 100, left: 100 }])
+      .png()
+      .toBuffer();
+    const sent = await upload(logo);
+    expect(sent.software).toMatchObject({ thumbnailFit: "logo", thumbnailColor: "#073028" });
+    expect((await sharp((await send("GET", sent.software.thumbnailUrl!)).rawPayload).metadata()).hasAlpha).toBe(true);
+    expect(((await fit("capture")).json() as SoftwareDetail).software.thumbnailFit).toBe("capture");
+    expect((await fit("zoom")).statusCode).toBe(400);
+    // Une nouvelle image garde le cadrage choisi.
+    expect((await upload(logo)).software.thumbnailFit).toBe("capture");
+    expect(((await fit("logo-couleur")).json() as SoftwareDetail).software.thumbnailFit).toBe("logo-couleur");
+    // Image d'avant : chemin sans cadrage enregistré.
+    await prisma.software.update({ where: { slug: "atelier" }, data: { thumbnailFit: null } });
+    expect(((await send("GET", "/api/logiciels/atelier")).json() as SoftwareDetail).software.thumbnailFit).toBeNull();
+    expect((await fit("logo")).statusCode).toBe(409);
+    expect((await upload(logo)).software.thumbnailFit).toBe("logo");
   });
 
   it("routes derrière la session", async () => {

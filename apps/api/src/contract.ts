@@ -66,6 +66,8 @@ export type SiteSummary = {
   currentVersion: { id: string; number: number; publishedAt: string | null } | null;
   /** URL de la vignette servie par le hub (/api/sites/:id/thumbnail?v=...), null sans vignette. */
   thumbnailUrl: string | null;
+  /** Point d'intérêt du cadrage (l'image remplit le cadre 16:10), « haut » par défaut. */
+  thumbnailFocus: ThumbnailFocus;
   touchedAt: string;
   createdAt: string;
   /** Surveillance du site (null si aucune cible surveillée). */
@@ -157,6 +159,12 @@ export type CreateSiteInput =
  * Un changement de finalDomain, canonicalHost ou notFoundPage régénère le .htaccess s'il est encore
  * « generated » (sinon il reste tel quel, état renvoyé dans serverConfig).
  */
+/** Point d'intérêt d'une image qui remplit le cadre : neuf positions, du coin haut gauche au coin bas droit. */
+export const THUMBNAIL_FOCUS = ["haut-gauche", "haut", "haut-droite", "gauche", "centre", "droite", "bas-gauche", "bas", "bas-droite"] as const;
+export type ThumbnailFocus = (typeof THUMBNAIL_FOCUS)[number];
+
+// PUT /api/sites/:id/thumbnail/focus  { focus: ThumbnailFocus } : SiteDetail (cadrage seul, sans nouveau traitement)
+
 export type UpdateSiteInput = {
   label?: string | null;
   erpClientId?: string | null;
@@ -680,6 +688,10 @@ export type SoftwareSummary = {
   releasesUrl: string | null;
   /** Vignette servie par le hub (privée), null sans image envoyée. */
   thumbnailUrl: string | null;
+  /** Cadrage à l'affichage ; null avec une image : envoyée avant ce réglage, déjà recadrée (à renvoyer). */
+  thumbnailFit: SoftwareThumbnailFit | null;
+  /** Couleur dominante de l'image, assombrie (#rrggbb), fond du mode « logo-couleur ». */
+  thumbnailColor: string | null;
   /** Clé de signature présente et lisible sur le serveur : émission possible. */
   signing: boolean;
   counts: { active: number; expiring: number; expired: number };
@@ -698,8 +710,14 @@ export type CreateSoftwareInput = {
   releasesUrl?: string | null;
 };
 
-/** Champ vide ou null : effacé (sauf le nom, obligatoire). */
-export type UpdateSoftwareInput = Partial<Pick<CreateSoftwareInput, "name" | "description" | "demoUrl" | "releasesUrl">>;
+/** Logo ou icône entier et centré (fond neutre ou couleur du logo), ou capture d'écran qui remplit le cadre. */
+export const SOFTWARE_THUMBNAIL_FITS = ["logo", "logo-couleur", "capture"] as const;
+export type SoftwareThumbnailFit = (typeof SOFTWARE_THUMBNAIL_FITS)[number];
+
+/** Champ vide ou null : effacé (sauf le nom, obligatoire). thumbnailFit : 409 sans image envoyée depuis ce réglage. */
+export type UpdateSoftwareInput = Partial<Pick<CreateSoftwareInput, "name" | "description" | "demoUrl" | "releasesUrl">> & {
+  thumbnailFit?: SoftwareThumbnailFit;
+};
 
 export type SoftwareField = keyof CreateSoftwareInput;
 /** Identifiant : minuscules, chiffres et tirets, 2 à 32 caractères ; nom du fichier de clé et champ signé « logiciel ». */

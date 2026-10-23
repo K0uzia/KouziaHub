@@ -27,7 +27,7 @@ async function setup(chromiumPath: string | null) {
 }
 
 describe("vignette envoyée (repli)", () => {
-  it("convertit l'image en WebP 640 x 400 servie en privé", async () => {
+  it("garde l'image envoyée à son ratio (WebP, 960 px au plus), servie en privé", async () => {
     const { hub, siteId } = await setup(null);
     const png = await sharp({ create: { width: 1600, height: 1000, channels: 3, background: "#3366cc" } }).png().toBuffer();
     const body = multipart([], [{ field: "image", filename: "capture.png", content: png, type: "image/png" }]);
@@ -41,7 +41,27 @@ describe("vignette envoyée (repli)", () => {
     expect(img.headers["content-type"]).toBe("image/webp");
     expect(img.headers["cache-control"]).toMatch(/^private/);
     const meta = await sharp(img.rawPayload).metadata();
-    expect([meta.format, meta.width, meta.height]).toEqual(["webp", 640, 400]);
+    expect([meta.format, meta.width, meta.height]).toEqual(["webp", 960, 600]);
+    expect(site.thumbnailFocus).toBe("haut");
+  });
+
+  it("image haute gardée entière ; point d'intérêt enregistré sans nouveau traitement, valeur inconnue refusée", async () => {
+    const { hub, siteId } = await setup(null);
+    const tall = await sharp({ create: { width: 1200, height: 2400, channels: 3, background: "#e8eef5" } }).png().toBuffer();
+    const body = multipart([], [{ field: "image", filename: "haute.png", content: tall, type: "image/png" }]);
+    const res = await hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/thumbnail`, headers: { ...hub.headers, ...body.headers }, payload: body.payload });
+    const before = res.json() as SiteDetail;
+    const meta = await sharp((await hub.app.inject({ method: "GET", url: before.thumbnailUrl!, headers: hub.headers })).rawPayload).metadata();
+    expect([meta.width, meta.height]).toEqual([480, 960]);
+    const put = (focus: unknown) => hub.app.inject({ method: "PUT", url: `/api/sites/${siteId}/thumbnail/focus`, headers: hub.headers, payload: { focus } });
+    const ok = await put("centre");
+    expect(ok.statusCode).toBe(200);
+    expect((ok.json() as SiteDetail).thumbnailFocus).toBe("centre");
+    // Même image, même adresse : seul l'affichage change.
+    expect((ok.json() as SiteDetail).thumbnailUrl).toBe(before.thumbnailUrl);
+    expect((await put("milieu")).statusCode).toBe(400);
+    expect((await put("bas-droite")).statusCode).toBe(200);
+    expect(await prisma.auditEvent.count({ where: { action: "thumbnail.focus" } })).toBe(2);
   });
 
   it("refuse un fichier qui n'est pas une image, ou un faux PNG", async () => {

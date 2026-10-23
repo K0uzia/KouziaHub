@@ -138,6 +138,8 @@ model Site {
   /// "capture" ou "upload".
   thumbnailSource  String?
   thumbnailAt      DateTime?
+  /// Point d'intérêt du cadrage à l'affichage ("haut-gauche" à "bas-droite"), null : "haut".
+  thumbnailFocus   String?
   /// Dernière activité visible (fichiers, publication, réglages) : tri « Modifiés récemment ».
   touchedAt        DateTime     @default(now())
   createdAt        DateTime     @default(now())
@@ -430,9 +432,14 @@ model Software {
   demoUrl       String?
   /// Page des versions publiées (https), facultative.
   releasesUrl   String?
-  /// Vignette envoyée (WebP 640 x 400), relative au dossier de données.
-  thumbnailPath String?
-  thumbnailAt   DateTime?
+  /// Vignette envoyée (WebP à son ratio, 960 px au plus), relative au dossier de données.
+  thumbnailPath  String?
+  thumbnailAt    DateTime?
+  /// Cadrage à l'affichage : "logo" (entier, fond neutre), "logo-couleur" (fond thumbnailColor) ou "capture"
+  /// (remplit le cadre). Null avec une image : envoyée avant ce réglage, déjà recadrée en 640 x 400.
+  thumbnailFit   String?
+  /// Couleur dominante de l'image, assombrie (#rrggbb), calculée à l'envoi.
+  thumbnailColor String?
   createdAt     DateTime  @default(now())
   licenses      License[]
 }

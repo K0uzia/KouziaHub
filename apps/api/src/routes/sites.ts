@@ -4,7 +4,7 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import type { Page, ServerConfigPreview, VersionEntry } from "@/contract.js";
+import { THUMBNAIL_FOCUS, type Page, type ServerConfigPreview, type VersionEntry } from "@/contract.js";
 import { badListQuery, pageOf, pageQuery, skipTake } from "@/lib/pagination.js";
 import { buildHtaccess, normalizeFinalDomain, notFoundPageError, pagesDeployConfig } from "@/lib/server-config.js";
 import { generatedHtaccess, profileOf, refreshServerConfigForPublish, writeServerConfig } from "@/lib/server-config-store.js";
@@ -21,7 +21,7 @@ import { snapshotVersion, snapshotWorking } from "@/lib/publish.js";
 import type { Services } from "@/lib/services.js";
 import { catalog, siteDetail, toOperation } from "@/lib/site-view.js";
 import { checkSlug, hubZoneConflict, projectNameFor, suggestSlug } from "@/lib/slug.js";
-import { toThumbnail } from "@/lib/thumbnails.js";
+import { toStoredImage } from "@/lib/thumbnails.js";
 
 const label = z.string().trim().min(1, "Libellé vide.").max(120, "120 caractères au plus.");
 const slugField = z.string().trim().toLowerCase().max(64);
@@ -31,6 +31,7 @@ const createSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("PERSO"), slug: slugField, label }),
 ]);
 
+const focusSchema = z.object({ focus: z.enum(THUMBNAIL_FOCUS) }).strict();
 const updateSchema = z
   .object({
     label: label.nullable().optional(),
@@ -383,14 +384,25 @@ export function sitesRoutes(services: Services): FastifyPluginAsync {
       }
       const buffer = await part.toBuffer();
       if (part.file.truncated) throw new HttpError(413, `Image trop lourde : ${MAX_THUMBNAIL_UPLOAD_BYTES / 1024 / 1024} Mio au plus.`);
+      // Gardée à son ratio : le cadrage (point d'intérêt) se fait à l'affichage.
       let image: Buffer;
       try {
-        image = await toThumbnail(buffer);
+        image = (await toStoredImage(buffer)).image;
       } catch {
         throw new HttpError(400, "Image illisible.");
       }
       await services.thumbnails.save(id, image, "upload");
       await audit({ action: "thumbnail.upload", result: "ok", siteId: id, siteSlug: site.slug });
+      return siteDetail(id, services);
+    });
+
+    app.put("/api/sites/:id/thumbnail/focus", async (request) => {
+      const { id } = idParams.parse(request.params);
+      const parsed = focusSchema.safeParse(request.body ?? {});
+      if (!parsed.success) throw new HttpError(400, "Point d'intérêt inconnu.");
+      const site = await loadSite(id);
+      await prisma.site.update({ where: { id }, data: { thumbnailFocus: parsed.data.focus } });
+      await audit({ action: "thumbnail.focus", result: "ok", siteId: id, siteSlug: site.slug, detail: parsed.data.focus });
       return siteDetail(id, services);
     });
 

@@ -358,7 +358,7 @@ Dialogue « Nouveau logiciel » : nom ; identifiant proposé depuis le nom, modi
 
 ### 7.2 Fiche `/logiciels/:slug`
 
-Même disposition que la fiche d'un site : onglets à gauche (Licences, Vignette, Réglages), synthèse à droite (description, identifiant, format et préfixe, clé de signature, liens, clé publique à copier). En-tête : nom, état, « Ouvrir la démo » si le lien existe, « Nouvelle clé ». Vignette : image envoyée seulement. Réglages : nom, description et liens ; identifiant et préfixe figés ; suppression seulement sans clé émise.
+Même disposition que la fiche d'un site : onglets à gauche (Licences, Vignette, Réglages), synthèse à droite (description, identifiant, format et préfixe, clé de signature, liens, clé publique à copier). En-tête : nom, état, « Ouvrir la démo » si le lien existe, « Nouvelle clé ». Vignette : image envoyée seulement, gardée à son ratio (WebP, 960 px au plus, transparence conservée) ; cadrage à l'affichage, « logo » par défaut (entier, centré, avec une marge, fond neutre du thème ou couleur dominante assombrie, `logo-couleur`) ou « capture » (remplit le cadre). Une image envoyée avant ce réglage (`thumbnailFit` null) était recadrée en 640 x 400 : la fiche invite à la renvoyer. Réglages : nom, description et liens ; identifiant et préfixe figés ; suppression seulement sans clé émise.
 
 Onglet Licences, la page Tracebay d'origine. Bandeau permanent : « Le nom de l'entreprise est écrit dans la clé et imposé sur les documents. Une autre entreprise demande une nouvelle clé. »
 

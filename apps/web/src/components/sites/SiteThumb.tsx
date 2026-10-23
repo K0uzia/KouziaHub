@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faGlobe, type IconDefinition } from "@fortawesome/free-solid-svg-icons";
+import type { ThumbFrame } from "@/lib/thumbFrame";
 
 /**
  * Vignette 16:10 d'un site ou d'un logiciel : image servie par le hub (privée), chargement différé ; sans image ou
@@ -11,6 +12,7 @@ export function SiteThumb({
   className = "",
   eager = false,
   icon = faGlobe,
+  frame,
 }: {
   src: string | null;
   className?: string;
@@ -18,11 +20,17 @@ export function SiteThumb({
   eager?: boolean;
   /** Pictogramme du repli (globe pour un site). */
   icon?: IconDefinition;
+  /** Cadrage (lib/thumbFrame) : sans lui, l'image remplit le cadre depuis le haut. */
+  frame?: ThumbFrame;
 }) {
   const [failed, setFailed] = useState<string | null>(null);
   const show = src && failed !== src;
+  const contain = show && frame?.fit === "contain";
   return (
-    <div className={`thumb ${className}`}>
+    <div
+      className={`thumb ${contain ? "thumb-logo" : ""} ${className}`}
+      style={contain && frame?.background ? { background: frame.background } : undefined}
+    >
       {show ? (
         <img
           src={src}
@@ -32,7 +40,8 @@ export function SiteThumb({
           loading={eager ? "eager" : "lazy"}
           decoding="async"
           onError={() => setFailed(src)}
-          className="h-full w-full object-cover object-top"
+          className={`h-full w-full ${contain ? "object-contain" : "object-cover"}`}
+          style={{ objectPosition: frame?.position ?? "center top" }}
         />
       ) : (
         <div className="thumb-empty" aria-hidden>

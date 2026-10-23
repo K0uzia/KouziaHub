@@ -1,6 +1,6 @@
 import type { Operation as OperationRow, Site } from "@prisma/client";
 import { siteExtras } from "@/lib/site-extras.js";
-import type { CatalogResponse, Notice, Operation, SiteDetail, SiteMonitorBadge, SiteSummary } from "@/contract.js";
+import { THUMBNAIL_FOCUS, type CatalogResponse, type Notice, type Operation, type SiteDetail, type SiteMonitorBadge, type SiteSummary, type ThumbnailFocus } from "@/contract.js";
 import { siteBadges } from "@/lib/monitor/view.js";
 import { prisma } from "@/lib/prisma.js";
 import { findWaitingCertificateOp, parseSteps } from "@/lib/operations.js";
@@ -9,6 +9,11 @@ import type { Services } from "@/lib/services.js";
 import { HttpError } from "@/lib/http.js";
 import { FAIL_CLOSED_FINDING } from "@/lib/orphans.js";
 import { serverConfigState } from "@/lib/server-config-store.js";
+
+/** Point d'intérêt enregistré, « haut » s'il est absent ou inconnu (cadrage d'avant ce réglage). */
+export function focusOf(value: string | null): ThumbnailFocus {
+  return (THUMBNAIL_FOCUS as readonly string[]).includes(value ?? "") ? (value as ThumbnailFocus) : "haut";
+}
 
 export function toOperation(op: OperationRow): Operation {
   return {
@@ -79,6 +84,7 @@ export async function toSummary(
     workingDirty: site.workingDirty,
     currentVersion: current ? { id: current.id, number: current.number, publishedAt: current.publishedAt?.toISOString() ?? null } : null,
     thumbnailUrl: site.thumbnailPath && site.thumbnailAt ? `/api/sites/${site.id}/thumbnail?v=${site.thumbnailAt.getTime()}` : null,
+    thumbnailFocus: focusOf(site.thumbnailFocus),
     touchedAt: site.touchedAt.toISOString(),
     createdAt: site.createdAt.toISOString(),
     monitor,

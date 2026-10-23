@@ -2,12 +2,14 @@ import { useEffect, useId, useRef, useState } from "react";
 import { toast } from "sonner";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faCamera, faImage } from "@fortawesome/free-solid-svg-icons";
-import type { SiteDetail } from "@hub/contract";
+import type { SiteDetail, ThumbnailFocus } from "@hub/contract";
 import { api, errorMessage, upload } from "@/lib/api";
 import { useSystem } from "@/lib/system";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { SiteThumb } from "@/components/sites/SiteThumb";
+import { FocusPicker } from "@/components/sites/FocusPicker";
+import { siteFrame } from "@/lib/thumbFrame";
 
 /** La capture tourne en arrière-plan : la fiche est relue un moment, jusqu'à la nouvelle vignette. */
 const CAPTURE_WATCH_MS = 3000;
@@ -26,7 +28,10 @@ export function ThumbnailTab({
   const ids = useId();
   const system = useSystem();
   const input = useRef<HTMLInputElement>(null);
-  const [busy, setBusy] = useState<"capture" | "upload" | null>(null);
+  const [busy, setBusy] = useState<"capture" | "upload" | "focus" | null>(null);
+  // Point d'intérêt en cours de choix : l'aperçu le suit avant l'enregistrement.
+  const [draft, setDraft] = useState<ThumbnailFocus | null>(null);
+  const focus = draft ?? site.thumbnailFocus;
   const [watching, setWatching] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const captureOff = system ? !system.thumbnails.capture : false;
@@ -95,6 +100,19 @@ export function ThumbnailTab({
     }
   }
 
+  async function saveFocus() {
+    setBusy("focus");
+    try {
+      onSite(await api<SiteDetail>(`/api/sites/${site.id}/thumbnail/focus`, { method: "PUT", json: { focus } }));
+      setDraft(null);
+      toast.success("Cadrage enregistré");
+    } catch (err) {
+      toast.error(errorMessage(err, "Enregistrement impossible."));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   const captureWhy = captureOff
     ? "La capture automatique n'est pas disponible sur ce serveur : envoyez une image."
     : notServed
@@ -112,7 +130,7 @@ export function ThumbnailTab({
             : "Pas encore de vignette : elle est capturée après la première publication."}
       </p>
       <div className="mt-4 max-w-xl overflow-hidden rounded-[var(--radius)] border border-[var(--border)]">
-        <SiteThumb src={site.thumbnailUrl} eager />
+        <SiteThumb src={site.thumbnailUrl} frame={siteFrame(site, focus)} eager />
       </div>
       {watching !== null ? (
         <p role="status" className="mt-2 text-sm text-[var(--muted)]">
@@ -149,7 +167,20 @@ export function ThumbnailTab({
           {captureWhy}
         </p>
       ) : null}
-      <p className="mt-2 text-xs text-[var(--muted)]">Image PNG, JPEG ou WebP, 10 Mo au plus, recadrée au format 16:10.</p>
+      <p className="mt-2 text-xs text-[var(--muted)]">Image PNG, JPEG ou WebP, 10 Mo au plus, gardée entière : le cadre 16:10 en montre la partie autour du point d'intérêt.</p>
+      {site.thumbnailUrl ? (
+        <div className="mt-5 space-y-3 border-t border-[var(--border)] pt-4">
+          <FocusPicker value={focus} onChange={setDraft} disabled={busy !== null} />
+          <p className="text-sm text-[var(--muted)]">
+            {site.thumbnailSource === "capture"
+              ? "La capture est prise au format du cadre (1280 x 800) : elle n'est pas recadrée. Le point d'intérêt compte pour une image envoyée."
+              : "L'aperçu suit le point choisi ; la carte du catalogue l'affiche une fois enregistré."}
+          </p>
+          <Button variant="secondary" onClick={() => void saveFocus()} disabled={busy !== null || focus === site.thumbnailFocus}>
+            {busy === "focus" ? "Enregistrement…" : "Enregistrer le cadrage"}
+          </Button>
+        </div>
+      ) : null}
       {error ? (
         <p role="alert" className="mt-2 text-sm text-[var(--danger)]">
           {error}
