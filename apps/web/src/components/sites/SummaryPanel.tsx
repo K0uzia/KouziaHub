@@ -8,8 +8,9 @@ import { formatBytes, formatDateTime, plural } from "@/lib/format";
 import { Badge, Card } from "@/components/ui/Card";
 import { Switch } from "@/components/ui/Switch";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { IndexingSwitch } from "@/components/sites/IndexingSwitch";
 
-/** Panneau de synthèse de la fiche : adresse, client, version servie, fichiers de travail, interrupteur. */
+/** Panneau de synthèse de la fiche : adresse, client, version servie, fichiers de travail, mise en ligne et indexation. */
 export function SummaryPanel({ site, onSite }: { site: SiteDetail; onSite: (s: SiteDetail) => void }) {
   const noteId = useId();
   const [confirmOff, setConfirmOff] = useState(false);
@@ -111,6 +112,7 @@ export function SummaryPanel({ site, onSite }: { site: SiteDetail; onSite: (s: S
           {note}
         </p>
       </div>
+      <IndexingSwitch site={site} onSite={onSite} />
 
       <ConfirmDialog
         open={confirmOff}

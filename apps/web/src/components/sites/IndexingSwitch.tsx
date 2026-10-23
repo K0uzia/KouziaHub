@@ -2,16 +2,16 @@ import { useId, useState } from "react";
 import { toast } from "sonner";
 import type { SiteDetail } from "@hub/contract";
 import { api, errorMessage } from "@/lib/api";
-import { Card } from "@/components/ui/Card";
 import { Switch } from "@/components/ui/Switch";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
 /**
- * Indexation par les moteurs (cinquième série, 22/10/2026), désactivée par défaut. Le réglage vit dans le Worker du
- * déploiement : la version en ligne est republiée aussitôt pour l'appliquer.
+ * Indexation par les moteurs (cinquième série, 22/10/2026), désactivée par défaut, sous l'interrupteur de mise en
+ * ligne du panneau de synthèse. Le réglage vit dans le Worker du déploiement : la version en ligne est republiée
+ * aussitôt pour l'appliquer.
  */
-export function IndexingCard({ site, onSite }: { site: SiteDetail; onSite: (s: SiteDetail) => void }) {
-  const ids = useId();
+export function IndexingSwitch({ site, onSite }: { site: SiteDetail; onSite: (s: SiteDetail) => void }) {
+  const noteId = useId();
   const [pending, setPending] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const running = site.operation?.status === "RUNNING";
@@ -43,23 +43,20 @@ export function IndexingCard({ site, onSite }: { site: SiteDetail; onSite: (s: S
   }
 
   return (
-    <Card className="p-4 sm:p-5">
-      <h2 className="text-base font-semibold">Indexation par les moteurs</h2>
-      <div className="mt-3">
-        <Switch
-          checked={site.allowIndexing}
-          onChange={(next) => setPending(next)}
-          label="Autoriser l'indexation par les moteurs"
-          stateLabels={{ on: "Autorisée", off: "Interdite (par défaut)" }}
-          disabled={locked || busy}
-          describedBy={`${ids}-effect`}
-        />
-      </div>
-      <p id={`${ids}-effect`} className="mt-2 max-w-[65ch] text-sm text-[var(--muted)]">
+    <div className="mt-4 border-t border-[var(--border)] pt-3">
+      <Switch
+        checked={site.allowIndexing}
+        onChange={(next) => setPending(next)}
+        label="Indexation par les moteurs"
+        stateLabels={{ on: "Autorisée", off: "Interdite" }}
+        disabled={locked || busy}
+        describedBy={noteId}
+      />
+      <p id={noteId} className="mt-1 text-xs text-[var(--muted)]">
         {site.allowIndexing
-          ? `Google et les autres moteurs peuvent référencer ${site.hostname} : plus d'en-tête noindex, et le robots.txt du site est servi (sinon un robots.txt qui autorise tout, avec le plan du site s'il existe).`
-          : `Version de travail : ${site.hostname} demande aux moteurs de ne pas l'indexer (en-tête noindex, robots.txt qui interdit tout). À activer seulement si ce sous-domaine doit apparaître dans les résultats de recherche.`}{" "}
-        Les adresses pages.dev restent redirigées et jamais indexées.
+          ? "Google et les autres moteurs peuvent référencer le site : plus de noindex, le robots.txt du site est servi."
+          : "Version de travail, non indexée (noindex). À autoriser seulement si ce sous-domaine doit apparaître dans les recherches."}{" "}
+        Les adresses pages.dev ne sont jamais indexées.
       </p>
 
       <ConfirmDialog
@@ -69,7 +66,7 @@ export function IndexingCard({ site, onSite }: { site: SiteDetail; onSite: (s: S
           <div className="space-y-2">
             <p>
               {pending
-                ? `${site.hostname} pourra apparaître dans Google et les autres moteurs de recherche.`
+                ? `${site.hostname} pourra apparaître dans Google et les autres moteurs de recherche : plus d'en-tête noindex, et le robots.txt du site est servi (sinon un robots.txt qui autorise tout, avec le plan du site s'il existe).`
                 : `${site.hostname} demandera de nouveau aux moteurs de ne pas l'indexer. Les pages déjà référencées disparaissent des résultats au fil des passages des robots.`}
             </p>
             <p>
@@ -84,6 +81,6 @@ export function IndexingCard({ site, onSite }: { site: SiteDetail; onSite: (s: S
         onConfirm={() => pending !== null && void apply(pending)}
         onClose={() => setPending(null)}
       />
-    </Card>
+    </div>
   );
 }
