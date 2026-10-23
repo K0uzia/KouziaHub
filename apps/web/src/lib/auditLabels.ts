@@ -46,11 +46,16 @@ export const ACTION_LABEL: Record<string, string> = {
   "site.indexing": "Indexation par les moteurs",
   "licence.emettre": "Clé de licence émise",
   "licence.modifier": "Clé de licence modifiée",
+  "logiciel.creer": "Logiciel ajouté",
+  "logiciel.modifier": "Logiciel modifié",
+  "logiciel.vignette": "Vignette du logiciel",
+  "logiciel.supprimer": "Logiciel supprimé",
 };
 
 /** Familles filtrables d'un coup (« licence.* » : émissions et modifications des clés). */
 export const ACTION_FAMILY_LABEL: Record<string, string> = {
   "licence.*": "Clés de licence (toutes)",
+  "logiciel.*": "Logiciels (fiches)",
 };
 
 /** Libellé d'une action ; null si la table ne la connaît pas (le code est alors affiché tel quel). */

@@ -333,14 +333,17 @@ Onglet Versions > « Télécharger la version de production ». La mise en ligne
 - **Vider les fichiers de travail** : retire tous les fichiers de l'onglet Fichiers ; le site en ligne et les versions restent. Case « Supprimer aussi les anciennes versions » (la version en ligne est toujours gardée ; saisie du sous-domaine demandée). Le `.htaccess` part aussi : le recréer dans l'onglet Serveur.
 - **Supprimer le site** : saisir le sous-domaine pour confirmer. L'adresse cesse de répondre, le projet Cloudflare est retiré, fichiers et versions sont supprimés. Définitif.
 
-### 5.11 Logiciels : clés de licence (Tracebay)
+### 5.11 Logiciels : clés de licence
 
-Menu **Logiciels**, puis **Tracebay**. Le hub signe les clés de licence (format TB1, Ed25519) ; Tracebay les vérifie hors ligne avec la clé publique. Détail du format et des règles : `docs/licences-logiciels.md`.
+Menu **Logiciels** : le catalogue des logiciels vendus sous licence, présenté comme celui des sites (cartes avec vignette, état, licences en cours et prochaine expiration ; recherche, filtre d'état, vue Cartes ou Liste). Le hub signe les clés de licence (Ed25519) ; chaque logiciel les vérifie hors ligne avec sa clé publique. Tracebay garde son format TB1 ; un logiciel ajouté signe au format générique KZ1, avec son propre préfixe et son identifiant signé. Détail du format et des règles : `docs/licences-logiciels.md`.
+
+- **Nouveau logiciel** : nom, identifiant (proposé depuis le nom, il ne change plus), préfixe des clés (proposé, `TB1` réservé, il ne change plus), description, lien de démo ou de site et page des versions publiées, facultatifs. Ensuite, sur le serveur : `hubctl licence-keygen <identifiant>` crée sa clé de signature (jamais depuis l'interface).
+- **Fiche** : onglets **Licences** (ci-dessous), **Vignette** (image envoyée, recadrée en 16:10) et **Réglages** (nom, description, liens ; suppression seulement si aucune clé n'a été émise, jamais Tracebay). La synthèse montre l'identifiant, le format, l'état de la clé de signature, les liens et la clé publique à copier dans le logiciel.
 
 - **Liste** : entreprise, client de l'ERP, émission, expiration et état (valide, expire bientôt à 30 jours ou moins, expirée), filtres par état et recherche sans accents.
 - **Nouvelle clé** : client de l'ERP facultatif (il propose le nom), nom de l'entreprise (écrit dans la clé et imposé sur les documents : il ne se modifie plus), durée de 1 à 36 mois (12 par défaut) ou une date de fin, contact et notes facultatifs (chiffrés sur le hub, jamais dans la clé), aperçu, puis la clé avec « Copier la clé ».
 - **Détail d'une clé** : la clé à copier, le client, le contact et les notes (modifiables), l'historique des clés du même client ou de la même entreprise, le lien vers le journal des clés. Pour changer le nom ou la date : **Renouveler** (nouvelle clé préremplie) ; l'ancienne reste valable jusqu'à son expiration. Il n'y a ni révocation ni suppression.
-- Sans clé de signature sur le serveur, la liste reste lisible et l'émission est refusée : lancer `hubctl tracebay-keygen` (section 10).
+- Sans clé de signature sur le serveur, la liste reste lisible et l'émission est refusée : lancer `hubctl licence-keygen <identifiant>` (section 10).
 
 ### 5.12 Réglages (du hub)
 
@@ -393,7 +396,7 @@ Le compte du service (`kouziahub`, celui qui fait tourner le hub et manipule les
 | `/etc/init.d/kouziahub`, `cloudflared`, `kouziahub-firewall`, `/etc/conf.d/kouziahub` | root:root | 755 / 644 | root | OpenRC |
 | `/etc/periodic/daily/kouziahub-backup` | root:root | 755 | root | crond, vers la copie root de `backup.sh` |
 | `/etc/kouziahub` (`tunnel.token`, `backup-pass`, `github-token`, `nftables.nft`) | root:kouziahub | 710 (le service traverse sans lister) ; fichiers root 600 | root | root |
-| `/etc/kouziahub/tracebay-ed25519.pem` | root:kouziahub | 640 | root (`hubctl tracebay-keygen`, une fois, jamais remplacée) | service : lit (signe les licences). Hors des sauvegardes du hub : copie chiffrée à faire à part |
+| `/etc/kouziahub/<identifiant>-ed25519.pem` (Tracebay : `tracebay-ed25519.pem`) | root:kouziahub | 640 | root (`hubctl licence-keygen <identifiant>`, une fois par logiciel, jamais remplacée) | service : lit (signe les licences de ce logiciel). Hors des sauvegardes du hub : copie chiffrée à faire à part |
 | `/var/backup/kouziahub` (et `export/`) | root:root | 700 ; fichiers 600 | root | root |
 | `/etc/doas.d/kouziahub-chromium.conf` | root:root | 400 | root | doas |
 | `/var/lib/kouziahub-chromium` | kouziahub-chromium | 700 | Chromium (profils jetables) | Chromium |
@@ -479,7 +482,8 @@ make dev     # API http://127.0.0.1:3101 et interface http://localhost:5174
 | `hubctl secrets erp` | Lien avec l'ERP |
 | `hubctl secrets veille` | Jeton de lecture des zones |
 | `hubctl secrets github` | Jeton GitHub en lecture seule (dépôt privé, nécessaire à `hubctl update`) |
-| `hubctl tracebay-keygen` | Clé de signature des licences Tracebay : créée seulement si elle est absente (jamais remplacée), pose `TRACEBAY_LICENSE_KEY_FILE` dans le `.env`, affiche la clé publique. `--public` : réaffiche la clé publique |
+| `hubctl licence-keygen <identifiant>` | Clé de signature des licences d'un logiciel : créée seulement si elle est absente (jamais remplacée), pose `LICENSE_KEY_DIR` dans le `.env` (pour Tracebay : `TRACEBAY_LICENSE_KEY_FILE`), affiche la clé publique. `--public` : réaffiche la clé publique |
+| `hubctl tracebay-keygen` | Même chose que `hubctl licence-keygen tracebay` |
 | `hubctl chromium` | Installer Chromium (compte dédié et pare-feu) |
 | `hubctl admin` | Créer le compte ou changer le mot de passe, puis double authentification |
 | `hubctl 2fa-reset` | Couper la double authentification (téléphone perdu), puis `hubctl admin` |

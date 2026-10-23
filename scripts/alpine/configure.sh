@@ -8,6 +8,7 @@
 #   hubctl secrets github    jeton GitHub en lecture seule (dépôt privé, pour hubctl update)
 #   hubctl secrets           les deux
 #   hubctl chromium          installer Chromium pour les vignettes automatiques (facultatif)
+#   hubctl licence-keygen <slug> [--public]  clé de signature des licences d'un logiciel (jamais remplacée)
 
 set -eu
 
@@ -287,17 +288,21 @@ EOF
   fi
 }
 
-# --- Clé de signature des licences Tracebay ---
+# --- Clés de signature des licences (une paire par logiciel) ---
 
 # Paire Ed25519 créée seulement si elle est absente (jamais remplacée : sa perte ou son remplacement rendrait
-# impossibles les clés des versions déjà installées). Seule la clé publique est affichée.
-configure_tracebay() {
-  title "Clé de signature des licences Tracebay"
+# impossibles les clés des versions déjà installées). Seule la clé publique est affichée. Tracebay garde son
+# fichier et TRACEBAY_LICENSE_KEY_FILE ; les autres logiciels sont lus dans LICENSE_KEY_DIR.
+configure_licence_key() {
+  _slug="$1"
+  valid_software_slug "$_slug" || die "Identifiant de logiciel invalide : ${_slug} (celui de la fiche du hub, ex. tracebay)."
+  _key="$(licence_key_file "$_slug")"
+  title "Clé de signature des licences : ${_slug}"
   etc_dir_perms
-  if [ -e "$KH_TRACEBAY_KEY_FILE" ]; then
-    ok "Clé déjà en place : jamais remplacée. (Pour revoir la clé publique : hubctl tracebay-keygen --public)"
+  if [ -e "$_key" ]; then
+    ok "Clé déjà en place : jamais remplacée. (Pour revoir la clé publique : hubctl licence-keygen ${_slug} --public)"
   else
-    _tmp="$(mktemp "${KH_ETC_DIR}/.tracebay.XXXXXX")"
+    _tmp="$(mktemp "${KH_ETC_DIR}/.licence.XXXXXX")"
     chmod 600 "$_tmp"
     # La clé privée va directement dans le fichier temporaire, jamais à l'écran ni dans un journal.
     if ! KH_KEY_OUT="$_tmp" node --input-type=module -e '
@@ -311,27 +316,34 @@ writeFileSync(process.env.KH_KEY_OUT, privateKey.export({ type: "pkcs8", format:
     fi
     chown "root:${KH_GROUP}" "$_tmp"
     chmod 640 "$_tmp"
-    mv -n "$_tmp" "$KH_TRACEBAY_KEY_FILE"
+    mv -n "$_tmp" "$_key"
     if [ -e "$_tmp" ]; then
       rm -f "$_tmp"
       die "Une clé est apparue entre-temps : elle est gardée, rien n'a été remplacé."
     fi
-    ok "Paire créée : clé privée dans ${KH_TRACEBAY_KEY_FILE} (root:${KH_GROUP}, 640)."
+    ok "Paire créée : clé privée dans ${_key} (root:${KH_GROUP}, 640)."
     warn "Sauvegarde obligatoire : copiez ce fichier chiffré hors du serveur avant toute émission réelle (sa perte empêche de signer)."
   fi
-  if [ "$(env_get TRACEBAY_LICENSE_KEY_FILE)" != "$KH_TRACEBAY_KEY_FILE" ]; then
-    env_set TRACEBAY_LICENSE_KEY_FILE "$KH_TRACEBAY_KEY_FILE"
-    ok "TRACEBAY_LICENSE_KEY_FILE posé dans le .env."
+  if [ "$_slug" = "tracebay" ]; then
+    if [ "$(env_get TRACEBAY_LICENSE_KEY_FILE)" != "$KH_TRACEBAY_KEY_FILE" ]; then
+      env_set TRACEBAY_LICENSE_KEY_FILE "$KH_TRACEBAY_KEY_FILE"
+      ok "TRACEBAY_LICENSE_KEY_FILE posé dans le .env."
+    fi
+  elif [ "$(env_get LICENSE_KEY_DIR)" != "$KH_ETC_DIR" ]; then
+    env_set LICENSE_KEY_DIR "$KH_ETC_DIR"
+    ok "LICENSE_KEY_DIR posé dans le .env."
   fi
-  print_tracebay_public
+  print_licence_public "$_slug"
 }
 
-# Clé publique (SPKI PEM), à déposer dans Tracebay Autonome. Calculée depuis la privée, qui n'est jamais affichée.
-print_tracebay_public() {
-  [ -r "$KH_TRACEBAY_KEY_FILE" ] || die "Clé de signature absente : hubctl tracebay-keygen"
+# Clé publique (SPKI PEM), à embarquer dans le logiciel. Calculée depuis la privée, qui n'est jamais affichée.
+print_licence_public() {
+  valid_software_slug "$1" || die "Identifiant de logiciel invalide : $1"
+  _key="$(licence_key_file "$1")"
+  [ -r "$_key" ] || die "Clé de signature absente : hubctl licence-keygen $1"
   echo ""
-  echo "  Clé publique à embarquer dans Tracebay (publique, sans secret) :"
-  KH_KEY_IN="$KH_TRACEBAY_KEY_FILE" node --input-type=module -e '
+  echo "  Clé publique à embarquer dans le logiciel $1 (publique, sans secret) :"
+  KH_KEY_IN="$_key" node --input-type=module -e '
 import { createPrivateKey, createPublicKey } from "node:crypto";
 import { readFileSync } from "node:fs";
 process.stdout.write(createPublicKey(createPrivateKey(readFileSync(process.env.KH_KEY_IN, "utf8"))).export({ type: "spki", format: "pem" }));
@@ -444,12 +456,14 @@ case "$SECTION" in
   github)
     configure_github
     ;;
-  tracebay)
+  licence)
+    # configure.sh licence <slug> [--public] ; « tracebay-keygen » de hubctl passe par ici avec le slug tracebay.
     [ -f "$KH_ENV_FILE" ] || die ".env absent : lancer « hubctl install »."
-    if [ "${2:-}" = "--public" ]; then
-      print_tracebay_public
+    [ -n "${2:-}" ] || die "Identifiant du logiciel attendu : hubctl licence-keygen <slug> (celui de sa fiche dans le hub)."
+    if [ "${3:-}" = "--public" ]; then
+      print_licence_public "$2"
     else
-      configure_tracebay
+      configure_licence_key "$2"
       restart_if_needed
     fi
     ;;

@@ -414,16 +414,27 @@ model HubSetting {
   updatedAt DateTime @updatedAt
 }
 
-/// Logiciel dont le hub émet les licences (docs/licences-logiciels.md, section 5). Tracebay seul, créé au démarrage.
+/// Logiciel dont le hub émet les licences (docs/licences-logiciels.md, section 5). Tracebay créé au démarrage, les
+/// autres par « Nouveau logiciel ».
 model Software {
-  id        String    @id @default(cuid())
-  /// "tracebay". Unique, stable, utilisé dans l'URL.
-  slug      String    @unique
-  name      String
-  /// "TB1". Décide du signeur.
-  format    String
-  createdAt DateTime  @default(now())
-  licenses  License[]
+  id            String    @id @default(cuid())
+  /// "tracebay". Unique, immuable : URL, champ signé « logiciel » et fichier de clé privée <slug>-ed25519.pem.
+  slug          String    @unique
+  name          String
+  /// "TB1" (Tracebay seul) ou "KZ1" (format générique). Décide du signeur. Immuable.
+  format        String
+  /// Préfixe de la clé : "TB1" pour Tracebay, choisi à la création sinon. Unique, immuable.
+  keyPrefix     String?   @unique
+  description   String?
+  /// Démo ou site du logiciel (https).
+  demoUrl       String?
+  /// Page des versions publiées (https), facultative.
+  releasesUrl   String?
+  /// Vignette envoyée (WebP 640 x 400), relative au dossier de données.
+  thumbnailPath String?
+  thumbnailAt   DateTime?
+  createdAt     DateTime  @default(now())
+  licenses      License[]
 }
 
 /// Clé de licence émise (registre). Entreprise et dates signées : immuables. Pas de révocation (vérification hors ligne).

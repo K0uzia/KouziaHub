@@ -158,7 +158,7 @@ export function NewLicenseDialog({
 
         <Field
           label="Nom de l'entreprise"
-          hint="Écrit dans la clé et imposé sur les documents de Tracebay. Vérifiez l'orthographe : il ne se modifie plus."
+          hint={`Écrit dans la clé et imposé sur les documents de ${softwareName}. Vérifiez l'orthographe : il ne se modifie plus.`}
           error={entrepriseError ?? undefined}
         >
           <Input

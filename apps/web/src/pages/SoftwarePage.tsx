@@ -1,20 +1,24 @@
 import { useId, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faChevronRight, faKey, faMagnifyingGlass, faPlus } from "@fortawesome/free-solid-svg-icons";
+import { faArrowUpRightFromSquare, faPlus } from "@fortawesome/free-solid-svg-icons";
 import type { LicenseDetail, LicenseSummary, SoftwareDetail } from "@hub/contract";
-import { foldText, formatDay } from "@/lib/format";
-import { LICENCE_JOURNAL, matchesLicense, remainingText, STATUS, STATUS_FILTERS, type StatusFilter } from "@/lib/licenses";
+import { keygenCommand } from "@/lib/software";
 import { useResource } from "@/lib/useResource";
 import { useTitle } from "@/lib/useTitle";
-import { Badge, Card, EmptyState, PageHeader } from "@/components/ui/Card";
-import { Button } from "@/components/ui/Button";
+import { Card, EmptyState, PageHeader } from "@/components/ui/Card";
+import { Button, buttonClass } from "@/components/ui/Button";
 import { Banner } from "@/components/ui/Banner";
-import { StatStrip } from "@/components/ui/StatStrip";
-import { FilterBar, FilterSegment } from "@/components/ui/ListFilters";
-import { inputClass } from "@/components/ui/Field";
+import { Tabs, useTabParam } from "@/components/ui/Tabs";
 import { NewLicenseDialog, type LicensePrefill } from "@/components/licenses/NewLicenseDialog";
 import { LicenseDialog } from "@/components/licenses/LicenseDialog";
+import { LicensesTab } from "@/components/licenses/LicensesTab";
+import { SoftwareBadges } from "@/components/licenses/SoftwareCard";
+import { SoftwareSummaryPanel } from "@/components/licenses/SoftwareSummaryPanel";
+import { SoftwareThumbnailTab } from "@/components/licenses/SoftwareThumbnailTab";
+import { SoftwareSettingsTab } from "@/components/licenses/SoftwareSettingsTab";
+
+const TAB_IDS = ["licences", "vignette", "reglages"] as const;
 
 function summaryOf(l: LicenseDetail): LicenseSummary {
   const { cle: _cle, contact: _contact, ...summary } = l;
@@ -24,28 +28,17 @@ function summaryOf(l: LicenseDetail): LicenseSummary {
 /** Même tri que le serveur : expiration la plus proche d'abord, puis entreprise. */
 const byExpiry = (a: LicenseSummary, b: LicenseSummary) => a.expire.localeCompare(b.expire) || a.entreprise.localeCompare(b.entreprise, "fr");
 
-/** Clés de licence d'un logiciel : indicateurs, filtres, liste ; détail, émission et renouvellement en fenêtre. */
+/** Fiche d'un logiciel, sur le modèle de la fiche d'un site : onglets (licences, vignette, réglages) et synthèse. */
 export function SoftwarePage() {
   const { slug = "" } = useParams();
   const detail = useResource<SoftwareDetail>(`/api/logiciels/${encodeURIComponent(slug)}`);
   const d = detail.data;
   useTitle(d ? `${d.software.name}, licences` : "Logiciels");
-  const [params, setParams] = useSearchParams();
-  const searchId = useId();
+  const [tab, setTab] = useTabParam(TAB_IDS, "licences");
   const signingId = useId();
   const [openId, setOpenId] = useState<string | null>(null);
   const [newOpen, setNewOpen] = useState(false);
   const [prefill, setPrefill] = useState<LicensePrefill | null>(null);
-
-  const status = (STATUS_FILTERS as readonly string[]).includes(params.get("etat") ?? "") ? (params.get("etat") as StatusFilter) : "all";
-  const query = params.get("q") ?? "";
-
-  function setParam(key: string, value: string, fallback: string) {
-    const next = new URLSearchParams(params);
-    if (!value || value === fallback) next.delete(key);
-    else next.set(key, value);
-    setParams(next, { replace: true });
-  }
 
   function upsert(l: LicenseDetail) {
     const s = summaryOf(l);
@@ -63,7 +56,7 @@ export function SoftwarePage() {
   if (detail.loading) {
     return (
       <p role="status" className="py-16 text-center text-sm text-[var(--muted)]">
-        Lecture des clés…
+        Lecture du logiciel…
       </p>
     );
   }
@@ -82,15 +75,8 @@ export function SoftwarePage() {
     );
   }
 
-  const all = d.licenses;
-  const q = foldText(query.trim());
-  const searched = all.filter((l) => matchesLicense(l, q));
-  const shown = searched.filter((l) => status === "all" || l.status === status);
-  const counts = d.software.counts;
-  const total = counts.active + counts.expiring + counts.expired;
-  const filtered = status !== "all" || q !== "";
-  const countOf = (s: StatusFilter) => (s === "all" ? searched.length : searched.filter((l) => l.status === s).length);
-
+  const s = d.software;
+  const total = s.counts.active + s.counts.expiring + s.counts.expired;
   const newButton = (
     <Button onClick={() => openNew(null)} disabled={!d.signing} aria-describedby={d.signing ? undefined : signingId}>
       <FontAwesomeIcon icon={faPlus} className="h-3.5 w-3.5" aria-hidden />
@@ -102,123 +88,70 @@ export function SoftwarePage() {
     <>
       <PageHeader
         back={{ to: "/logiciels", label: "Logiciels" }}
-        title={d.software.name}
-        subtitle={`Clés de licence au format ${d.software.format}, signées par le hub.`}
-        actions={newButton}
+        title={s.name}
+        subtitle={
+          <span className="flex flex-wrap items-center gap-2">
+            <SoftwareBadges software={s} />
+            <span className="break-all font-mono">clés {s.keyPrefix}</span>
+          </span>
+        }
+        actions={
+          <>
+            {s.demoUrl ? (
+              <a href={s.demoUrl} target="_blank" rel="noopener noreferrer" className={buttonClass("secondary")}>
+                <FontAwesomeIcon icon={faArrowUpRightFromSquare} className="h-3.5 w-3.5" aria-hidden />
+                Ouvrir la démo
+                <span className="sr-only">(nouvel onglet)</span>
+              </a>
+            ) : null}
+            {newButton}
+          </>
+        }
       />
 
-      <div className="space-y-5">
-        {d.signing ? null : (
-          <Banner level="warning" id={signingId}>
-            La clé de signature n'est pas en place sur le serveur. Les clés déjà émises restent consultables. Sur le serveur :{" "}
-            <code className="font-mono">hubctl tracebay-keygen</code>.
-          </Banner>
-        )}
-        <Banner level="info">
-          Le nom de l'entreprise est écrit dans la clé et imposé sur les documents. Une autre entreprise demande une nouvelle clé.
-        </Banner>
-
-        <StatStrip
-          dense
-          items={[
-            { label: "Valides", value: counts.active, tone: counts.active ? "success" : "default" },
-            { label: "Expirent bientôt", shortLabel: "Bientôt", value: counts.expiring, tone: counts.expiring ? "warning" : "default", hint: "30 jours ou moins" },
-            { label: "Expirées", value: counts.expired, tone: counts.expired ? "danger" : "default" },
-            { label: "Total", value: total },
-          ]}
-        />
-
-        <FilterBar>
-          <FilterSegment
-            label="État"
-            value={status}
-            onChange={(v) => setParam("etat", v, "all")}
-            wrap
-            options={STATUS_FILTERS.map((s) => ({ id: s, label: s === "all" ? "Toutes" : s === "active" ? "Valides" : s === "expiring" ? "Bientôt" : "Expirées", count: countOf(s) }))}
-          />
-          <div className="min-w-0 flex-[1_1_16rem] space-y-1.5 sm:max-w-sm">
-            <label htmlFor={searchId} className="block text-sm font-medium text-[var(--text)]">
-              Rechercher
-            </label>
-            <div className="relative">
-              <FontAwesomeIcon icon={faMagnifyingGlass} className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--muted)]" aria-hidden />
-              <input
-                id={searchId}
-                type="search"
-                value={query}
-                autoComplete="off"
-                placeholder="Entreprise, client ou note"
-                onChange={(e) => setParam("q", e.target.value, "")}
-                className={`${inputClass} pl-9`}
-              />
-            </div>
-          </div>
-          {filtered ? (
-            <Button variant="ghost" onClick={() => setParams(new URLSearchParams(), { replace: true })}>
-              Effacer les filtres
-            </Button>
-          ) : null}
-        </FilterBar>
-
-        <p className="sr-only" role="status">
-          {`${shown.length} clé${shown.length > 1 ? "s" : ""} affichée${shown.length > 1 ? "s" : ""}`}
-        </p>
-
-        <Card>
-          {all.length === 0 ? (
-            <EmptyState
-              icon={<FontAwesomeIcon icon={faKey} className="h-5 w-5" aria-hidden />}
-              title="Aucune clé pour l'instant."
-              hint={d.signing ? "La première clé émise apparaîtra ici, avec sa date d'expiration." : undefined}
-              action={d.signing ? newButton : undefined}
-            />
-          ) : shown.length === 0 ? (
-            <EmptyState
-              title="Aucune clé pour ces filtres."
-              action={<Button variant="secondary" onClick={() => setParams(new URLSearchParams(), { replace: true })}>Effacer les filtres</Button>}
-            />
-          ) : (
-            <ul className="divide-y divide-[var(--border)]">
-              {shown.map((l) => (
-                <li key={l.id}>
-                  <button
-                    type="button"
-                    onClick={() => setOpenId(l.id)}
-                    className="flex min-h-11 w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--surface-hover)] sm:px-5"
-                  >
-                    <span className="grid min-w-0 flex-1 gap-x-6 gap-y-1 md:grid-cols-[minmax(0,2fr)_minmax(0,1.5fr)_auto] md:items-center">
-                      <span className="min-w-0">
-                        <span className="block break-words text-sm font-semibold text-[var(--text)]">{l.entreprise}</span>
-                        <span className="block truncate text-xs text-[var(--muted)]">
-                          {l.erpClientId ? (l.clientName ?? "Client de l'ERP non lu") : "Sans client de l'ERP"}
-                          {l.notes ? `, ${l.notes}` : ""}
-                        </span>
-                      </span>
-                      <span className="text-xs text-[var(--muted)] md:text-sm">
-                        Du {formatDay(l.emise)} au {formatDay(l.expire)}
-                      </span>
-                      <span className="flex flex-wrap items-center gap-2 md:justify-end">
-                        <Badge tone={STATUS[l.status].tone}>{STATUS[l.status].label}</Badge>
-                        <span className="text-xs text-[var(--muted)]">{remainingText(l.expire, d.today)}</span>
-                      </span>
-                    </span>
-                    <FontAwesomeIcon icon={faChevronRight} className="h-3.5 w-3.5 shrink-0 text-[var(--muted)]" aria-hidden />
-                  </button>
-                </li>
-              ))}
-            </ul>
+      <div className="grid min-w-0 gap-5 lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start">
+        <div className="min-w-0 space-y-5">
+          {d.signing ? null : (
+            <Banner level="warning" id={signingId}>
+              La clé de signature de {s.name} n'est pas en place sur le serveur. Les clés déjà émises restent consultables. Sur le serveur :{" "}
+              <code className="break-words font-mono">{keygenCommand(s.slug)}</code>.
+            </Banner>
           )}
-        </Card>
+          {detail.error ? (
+            <Banner level="warning" action={<Button variant="ghost" onClick={() => void detail.reload()}>Réessayer</Button>}>
+              Dernière actualisation impossible : {detail.error}
+            </Banner>
+          ) : null}
 
-        <Link to={LICENCE_JOURNAL} className="link inline-flex min-h-11 items-center text-sm font-medium">
-          Journal des clés de licence
-        </Link>
+          <Tabs
+            label="Sections du logiciel"
+            value={tab}
+            onChange={setTab}
+            tabs={[
+              { id: "licences", label: "Licences", count: total },
+              { id: "vignette", label: "Vignette" },
+              { id: "reglages", label: "Réglages" },
+            ]}
+          >
+            {tab === "licences" ? (
+              <LicensesTab detail={d} newButton={newButton} onOpen={setOpenId} />
+            ) : tab === "vignette" ? (
+              <SoftwareThumbnailTab detail={d} onDetail={detail.setData} />
+            ) : (
+              <SoftwareSettingsTab key={s.slug} detail={d} onDetail={detail.setData} />
+            )}
+          </Tabs>
+        </div>
+
+        <aside aria-label="Synthèse du logiciel" className="min-w-0 lg:sticky lg:top-0">
+          <SoftwareSummaryPanel detail={d} />
+        </aside>
       </div>
 
       <LicenseDialog
         licenseId={openId}
-        softwareSlug={d.software.slug}
-        all={all}
+        softwareSlug={s.slug}
+        all={d.licenses}
         today={d.today}
         canEmit={d.signing}
         onClose={() => setOpenId(null)}
@@ -228,15 +161,7 @@ export function SoftwarePage() {
           openNew({ entreprise: l.entreprise, client: l.erpClientId ? { id: l.erpClientId, name: l.clientName } : null, contact: l.contact, renewOf: l.expire })
         }
       />
-      <NewLicenseDialog
-        open={newOpen}
-        onClose={() => setNewOpen(false)}
-        softwareSlug={d.software.slug}
-        softwareName={d.software.name}
-        today={d.today}
-        prefill={prefill}
-        onCreated={upsert}
-      />
+      <NewLicenseDialog open={newOpen} onClose={() => setNewOpen(false)} softwareSlug={s.slug} softwareName={s.name} today={d.today} prefill={prefill} onCreated={upsert} />
     </>
   );
 }

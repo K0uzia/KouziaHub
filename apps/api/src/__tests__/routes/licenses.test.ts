@@ -34,10 +34,24 @@ const emit = (payload: Record<string, unknown>) => hub.app.inject({ method: "POS
 describe("page Logiciels : émission des clés Tracebay", () => {
   it("catalogue : Tracebay créé au premier accès, compteurs à zéro ; logiciel inconnu en 404", async () => {
     const res = await get<SoftwareCatalog>("/api/logiciels");
-    expect(res.body.software).toEqual([{ slug: "tracebay", name: "Tracebay", format: "TB1", counts: { active: 0, expiring: 0, expired: 0 } }]);
+    expect(res.body.software).toEqual([
+      {
+        slug: "tracebay",
+        name: "Tracebay",
+        format: "TB1",
+        keyPrefix: "TB1",
+        description: null,
+        demoUrl: null,
+        releasesUrl: null,
+        thumbnailUrl: null,
+        signing: true,
+        counts: { active: 0, expiring: 0, expired: 0 },
+        nextExpiry: null,
+      },
+    ]);
     expect((await get("/api/logiciels/inconnu")).status).toBe(404);
     const detail = await get<SoftwareDetail>("/api/logiciels/tracebay");
-    expect(detail.body).toMatchObject({ signing: true, today: parisToday(), licenses: [] });
+    expect(detail.body).toMatchObject({ signing: true, publicKey: publicKey.export({ type: "spki", format: "pem" }).toString(), today: parisToday(), licenses: [] });
   });
 
   it("émet une clé signée (accents, guillemet, client ERP), vérifiable avec la publique ; la liste ne contient pas la clé", async () => {
@@ -132,6 +146,7 @@ describe("page Logiciels : émission des clés Tracebay", () => {
     const detail = (await get<SoftwareDetail>("/api/logiciels/tracebay")).body;
     expect(detail.licenses.map((l) => l.entreprise)).toEqual(["Ancienne", "Court", "Abeille", "Zèbre"]);
     expect(detail.software.counts).toEqual({ active: 2, expiring: 1, expired: 1 });
+    expect(detail.software.nextExpiry).toEqual({ expire: parisToday(), entreprise: "Court" });
   });
 
   it("routes derrière la session", async () => {
