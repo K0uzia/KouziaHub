@@ -117,6 +117,10 @@ Fuseau unique : `Europe/Paris`. Pas d'heure dans la clé.
 
 L'application compare des dates de calendrier, pas des instants. Une date système antérieure à la dernière date déjà vue est traitée comme expirée (horloge reculée, côté application seulement, mémorisée dans `licence.json`).
 
+Délai de grâce : après la date `expire`, l'application permet encore l'écriture pendant `JOURS_GRACE_APRES_EXPIRATION` jours (15, constante du code), avec un bandeau rouge, puis passe en lecture seule. Avertissement à `JOURS_AVERTISSEMENT` jours (30) avant `expire`. Pendant la grâce, la licence n'est plus valide : le nom imposé ne s'applique plus.
+
+Les installations antérieures à la 3.7.0 qui ont déjà des données sont exemptées, sans limite de durée, tant qu'aucune clé n'a été saisie.
+
 ### 3.6 Ce qui n'est pas dans la clé
 
 Le contact, les notes, l'identifiant ERP et le slug du logiciel. Les modifier ne demande pas une nouvelle signature.
@@ -216,7 +220,7 @@ type SoftwareSummary = {
 type SoftwareCatalog = { software: SoftwareSummary[] };
 ```
 
-Le statut n'est pas stocké. Il se calcule au jour de Paris : `expired` si ce jour est après `expire`, `expiring` s'il reste 30 jours ou moins (jour `expire` inclus), `active` sinon.
+Le statut n'est pas stocké. Il se calcule au jour de Paris : `expired` si ce jour est après `expire`, `expiring` s'il reste 30 jours ou moins (jour `expire` inclus), `active` sinon. Une clé `expired` depuis 15 jours ou moins (§ 3.5) affiche en plus « en grâce jusqu'au » et la date `expire` plus 15 jours ; le statut reste `expired`.
 
 ### 6.2 Fiche
 
@@ -311,7 +315,7 @@ Bandeau si l'émission est indisponible (réponse 503 au chargement d'un drapeau
 
 Filtres et recherche comme le catalogue des sites. Bouton « Nouvelle clé ».
 
-Chaque ligne : entreprise, nom du client s'il est rattaché, émission, expiration, badge de statut. Clic : la clé s'ouvre (panneau ou dialogue), champ monospace en lecture seule, bouton « Copier ». Toast « Clé copiée ». Notes et contact affichés. Contact absent de la liste, visible seulement dans ce détail.
+Chaque ligne : entreprise, nom du client s'il est rattaché, émission, expiration, badge de statut, jours restants (« en grâce jusqu'au … » pendant les 15 jours de grâce). Clic : la clé s'ouvre (panneau ou dialogue), champ monospace en lecture seule, bouton « Copier ». Toast « Clé copiée ». Notes et contact affichés. Contact absent de la liste, visible seulement dans ce détail.
 
 Ligne sans clé : « Aucune clé pour l'instant. »
 
@@ -360,7 +364,7 @@ La publique de production n'entre dans le dépôt qu'au moment de la version qui
 1. Sur le conteneur du hub : `hubctl tracebay-keygen` (paire créée dans `/etc/kouziahub/tracebay-ed25519.pem`, `TRACEBAY_LICENSE_KEY_FILE` posé, hub redémarré). Copier la sauvegarde chiffrée hors du serveur avant toute émission réelle : les sauvegardes du hub ne contiennent pas `/etc/kouziahub`.
 2. Le hub démarre même si le fichier manque : il refuse seulement d'émettre.
 3. Livrer la page Logiciels (ce document, sections 5 à 7) et vérifier l'émission avec la clé de développement.
-4. Déposer la publique dans Tracebay Autonome, dans la version qui ajoute le contrôle. Pas avant : les clients déjà en 3.5.0 passeraient en lecture seule à la mise à jour automatique s'ils reçoivent le contrôle sans clé.
+4. Déposer la publique dans Tracebay Autonome, dans la version qui ajoute le contrôle. Les installations antérieures à la 3.7.0 qui ont déjà des données restent exemptées tant qu'aucune clé n'a été saisie (§ 3.5) : la mise à jour automatique ne les fait pas passer en lecture seule.
 5. Émettre la clé du client dans le hub, la transmettre avec cette version.
 
 Aucune route du hub n'est ajoutée au filtre d'hôte public. Tout reste derrière la session, comme `/api/sites`.

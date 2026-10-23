@@ -1,5 +1,5 @@
 import type { LicenseStatus, LicenseSummary } from "@hub/contract";
-import { daysBetween } from "@hub/license-terms";
+import { addDays, daysBetween, GRACE_DAYS } from "@hub/license-terms";
 import type { BadgeTone } from "@/components/ui/Card";
 import { foldText, formatDay, plural } from "@/lib/format";
 
@@ -12,12 +12,16 @@ export const STATUS: Record<LicenseStatus, { label: string; tone: BadgeTone }> =
 export type StatusFilter = "all" | LicenseStatus;
 export const STATUS_FILTERS: readonly StatusFilter[] = ["all", "active", "expiring", "expired"];
 
-/** « Expire ce soir » (dernier jour valable), « Expire dans 12 jours », « Expirée depuis 3 jours ». */
+/**
+ * « Expire ce soir » (dernier jour valable), « Expire dans 12 jours », « Expirée depuis 3 jours, en grâce jusqu'au
+ * 6 novembre 2027 » (Tracebay écrit encore GRACE_DAYS jours après `expire`), puis « Expirée depuis 20 jours ».
+ */
 export function remainingText(expire: string, today: string): string {
   const days = daysBetween(today, expire);
   if (days === 0) return "Expire ce soir";
   if (days > 0) return `Expire dans ${plural(days, "jour", "jours")}`;
-  return `Expirée depuis ${plural(-days, "jour", "jours")}`;
+  const since = `Expirée depuis ${plural(-days, "jour", "jours")}`;
+  return -days <= GRACE_DAYS ? `${since}, en grâce jusqu'au ${formatDay(addDays(expire, GRACE_DAYS))}` : since;
 }
 
 /** Période de validité en toutes lettres. */
