@@ -328,10 +328,20 @@ Onglet Versions > « Télécharger la version de production ». La mise en ligne
 ### 5.10 Onglet Réglages du site, et suppression
 
 - Libellé du site, client lié (changer, ou lier un site perso à un client).
+- **Indexation par les moteurs** (désactivée par défaut) : désactivée, le site demande aux moteurs de ne pas l'indexer (en-tête `X-Robots-Tag: noindex, nofollow`, `robots.txt` en `Disallow: /`). Activée, plus d'en-tête `noindex` sur `<client>.kouzia.com` ; le `robots.txt` du site est servi tel quel, sinon un `robots.txt` qui autorise tout, avec la ligne `Sitemap:` si le site contient `sitemap-index.xml` ou `sitemap.xml`. Les adresses `pages.dev` restent redirigées et `noindex`. Le réglage vit dans le déploiement : la version en ligne est republiée aussitôt (une nouvelle version apparaît dans l'onglet Versions). Attention : une règle de transformation Cloudflare qui ajoute `X-Robots-Tag` sur `*.kouzia.com` l'emporterait ; la retirer ou en exclure ce sous-domaine.
 - **Vider les fichiers de travail** : retire tous les fichiers de l'onglet Fichiers ; le site en ligne et les versions restent. Case « Supprimer aussi les anciennes versions » (la version en ligne est toujours gardée ; saisie du sous-domaine demandée). Le `.htaccess` part aussi : le recréer dans l'onglet Serveur.
 - **Supprimer le site** : saisir le sous-domaine pour confirmer. L'adresse cesse de répondre, le projet Cloudflare est retiré, fichiers et versions sont supprimés. Définitif.
 
-### 5.11 Réglages (du hub)
+### 5.11 Logiciels : clés de licence (Tracebay)
+
+Menu **Logiciels**, puis **Tracebay**. Le hub signe les clés de licence (format TB1, Ed25519) ; Tracebay les vérifie hors ligne avec la clé publique. Détail du format et des règles : `docs/licences-logiciels.md`.
+
+- **Liste** : entreprise, client de l'ERP, émission, expiration et état (valide, expire bientôt à 30 jours ou moins, expirée), filtres par état et recherche sans accents.
+- **Nouvelle clé** : client de l'ERP facultatif (il propose le nom), nom de l'entreprise (écrit dans la clé et imposé sur les documents : il ne se modifie plus), durée de 1 à 36 mois (12 par défaut) ou une date de fin, contact et notes facultatifs (chiffrés sur le hub, jamais dans la clé), aperçu, puis la clé avec « Copier la clé ».
+- **Détail d'une clé** : la clé à copier, le client, le contact et les notes (modifiables), l'historique des clés du même client ou de la même entreprise, le lien vers le journal des clés. Pour changer le nom ou la date : **Renouveler** (nouvelle clé préremplie) ; l'ancienne reste valable jusqu'à son expiration. Il n'y a ni révocation ni suppression.
+- Sans clé de signature sur le serveur, la liste reste lisible et l'émission est refusée : lancer `hubctl tracebay-keygen` (section 10).
+
+### 5.12 Réglages (du hub)
 
 | Section | Contenu |
 |---|---|
@@ -381,7 +391,8 @@ Le compte du service (`kouziahub`, celui qui fait tourner le hub et manipule les
 | `/usr/local/bin/hubctl` | root | lien vers la copie ci-dessus | root | root |
 | `/etc/init.d/kouziahub`, `cloudflared`, `kouziahub-firewall`, `/etc/conf.d/kouziahub` | root:root | 755 / 644 | root | OpenRC |
 | `/etc/periodic/daily/kouziahub-backup` | root:root | 755 | root | crond, vers la copie root de `backup.sh` |
-| `/etc/kouziahub` (`tunnel.token`, `backup-pass`, `nftables.nft`) | root:root | 700 ; secrets 600 | root | root |
+| `/etc/kouziahub` (`tunnel.token`, `backup-pass`, `github-token`, `nftables.nft`) | root:kouziahub | 710 (le service traverse sans lister) ; fichiers root 600 | root | root |
+| `/etc/kouziahub/tracebay-ed25519.pem` | root:kouziahub | 640 | root (`hubctl tracebay-keygen`, une fois, jamais remplacée) | service : lit (signe les licences). Hors des sauvegardes du hub : copie chiffrée à faire à part |
 | `/var/backup/kouziahub` (et `export/`) | root:root | 700 ; fichiers 600 | root | root |
 | `/etc/doas.d/kouziahub-chromium.conf` | root:root | 400 | root | doas |
 | `/var/lib/kouziahub-chromium` | kouziahub-chromium | 700 | Chromium (profils jetables) | Chromium |
@@ -467,6 +478,7 @@ make dev     # API http://127.0.0.1:3101 et interface http://localhost:5174
 | `hubctl secrets erp` | Lien avec l'ERP |
 | `hubctl secrets veille` | Jeton de lecture des zones |
 | `hubctl secrets github` | Jeton GitHub en lecture seule (dépôt privé, nécessaire à `hubctl update`) |
+| `hubctl tracebay-keygen` | Clé de signature des licences Tracebay : créée seulement si elle est absente (jamais remplacée), pose `TRACEBAY_LICENSE_KEY_FILE` dans le `.env`, affiche la clé publique. `--public` : réaffiche la clé publique |
 | `hubctl chromium` | Installer Chromium (compte dédié et pare-feu) |
 | `hubctl admin` | Créer le compte ou changer le mot de passe, puis double authentification |
 | `hubctl 2fa-reset` | Couper la double authentification (téléphone perdu), puis `hubctl admin` |

@@ -96,6 +96,8 @@ Trois couches, de la plus proche du contenu à la plus large :
 
 Note : `Disallow` empêche l'exploration, donc le robot ne voit pas l'en-tête `noindex`. Ce n'est pas gênant ici, puisque rien n'est lisible sans le code.
 
+Option « Indexation » par site (cinquième série, 22/10/2026), désactivée par défaut : activée, le Worker ne pose plus `X-Robots-Tag` sur le sous-domaine et sert le `robots.txt` du site s'il existe, sinon `Allow: /` avec la ligne `Sitemap:` quand le site contient `sitemap-index.xml` ou `sitemap.xml`. Les réponses `pages.dev` (301) gardent `noindex`. La couche 2 (règle de transformation sur la zone) l'emporterait : ne pas la créer, ou en exclure les sous-domaines indexables.
+
 ### 1.6 Accès à `hub.kouzia.com` : comme l'ERP, sans Cloudflare Access
 
 **Décision d'Alexandre du 19/10/2026** (relayée par le superviseur) : ni Cloudflare Access ni Zero Trust devant le hub. Le hub fonctionne comme l'ERP : tunnel Cloudflare à jeton (même procédure que `kouziactl cloudflare`), protection par le login du hub seul, mot de passe et code TOTP obligatoires.

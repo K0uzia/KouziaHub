@@ -34,17 +34,30 @@ export type WorkerOptions = {
   csp?: string | null;
   /** Le déploiement contient 404.html : toute réponse 404 sert cette page, avec le statut 404. */
   has404?: boolean;
+  /**
+   * Indexation autorisée (cinquième série) : plus de X-Robots-Tag sur le sous-domaine, robots.txt du site servi tel
+   * quel, sinon « Allow: / » avec la ligne Sitemap. Les adresses pages.dev restent en 301 et noindex.
+   */
+  indexing?: { siteRobots: boolean; sitemap: string | null };
 };
 
 export function buildWorkerScript(hostname: string, options: WorkerOptions = {}): string {
   const host = hostname.toLowerCase();
   // Cache posé aussi par le worker : _headers ne s'appliquerait peut-être pas derrière env.ASSETS.fetch.
   const cache = options.cacheRules === false ? [] : CACHE_RULES.map((r) => [r.pattern, r.cacheControl]);
-  const headers = { ...SITE_HEADERS, "Content-Security-Policy": mergeCsp(MINIMAL_SITE_CSP, options.csp) };
+  const headers: Record<string, string> = { ...SITE_HEADERS, "Content-Security-Policy": mergeCsp(MINIMAL_SITE_CSP, options.csp) };
+  // Réponses des adresses pages.dev (301) : toujours noindex, même si le site est indexable.
+  const redirectHeaders = { ...headers };
+  if (options.indexing) delete headers["X-Robots-Tag"];
+  const robots = options.indexing
+    ? `User-agent: *\nAllow: /\n${options.indexing.sitemap ? `\nSitemap: https://${host}/${options.indexing.sitemap}\n` : ""}`
+    : NOINDEX_ROBOTS;
   return `// Généré par le hub Kouzia : ne pas modifier.
 const HOST = ${JSON.stringify(host)};
-const ROBOTS = ${JSON.stringify(NOINDEX_ROBOTS)};
+const ROBOTS = ${JSON.stringify(robots)};
+const SITE_ROBOTS = ${JSON.stringify(options.indexing?.siteRobots === true)};
 const HEADERS = ${JSON.stringify(headers)};
+const REDIRECT_HEADERS = ${JSON.stringify(redirectHeaders)};
 const CACHE = ${JSON.stringify(cache)}.map(([pattern, value]) => [new RegExp(pattern, "i"), value]);
 const TOOLING = ${JSON.stringify(DEV_TOOLING)};
 const TOOLING_PATTERNS = TOOLING.patterns.map((p) => new RegExp(p, "i"));
@@ -77,9 +90,9 @@ function isForbidden(pathname) {
   return tooling && !allowed(rel);
 }
 
-function withHeaders(response) {
+function withHeaders(response, headers = HEADERS) {
   const out = new Response(response.body, response);
-  for (const [name, value] of Object.entries(HEADERS)) out.headers.set(name, value);
+  for (const [name, value] of Object.entries(headers)) out.headers.set(name, value);
   return out;
 }
 
@@ -87,9 +100,9 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.hostname !== HOST) {
-      return withHeaders(new Response(null, { status: 301, headers: { Location: "https://" + HOST + url.pathname + url.search } }));
+      return withHeaders(new Response(null, { status: 301, headers: { Location: "https://" + HOST + url.pathname + url.search } }), REDIRECT_HEADERS);
     }
-    if (url.pathname === "/robots.txt") {
+    if (url.pathname === "/robots.txt" && !SITE_ROBOTS) {
       return withHeaders(new Response(ROBOTS, { status: 200, headers: { "Content-Type": "text/plain; charset=utf-8" } }));
     }
     if (isForbidden(url.pathname)) {

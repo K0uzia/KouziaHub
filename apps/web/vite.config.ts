@@ -16,6 +16,7 @@ export default defineConfig({
       // Règles des chemins partagées avec le serveur (fichiers écartés avant l'envoi) : module sans code serveur.
       "@hub/site-paths": path.resolve(__dirname, "../api/src/lib/site-paths.ts"),
       "@hub/version-check": path.resolve(__dirname, "../api/src/lib/version-check.ts"),
+      "@hub/license-terms": path.resolve(__dirname, "../api/src/lib/licenses/terms.ts"),
     },
   },
   build: {

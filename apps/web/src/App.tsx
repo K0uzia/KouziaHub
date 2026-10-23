@@ -14,6 +14,8 @@ const MonitorPage = lazy(() => import("@/pages/MonitorPage").then((m) => ({ defa
 const MonitorTargetPage = lazy(() => import("@/pages/MonitorTargetPage").then((m) => ({ default: m.MonitorTargetPage })));
 const SettingsPage = lazy(() => import("@/pages/SettingsPage").then((m) => ({ default: m.SettingsPage })));
 const AuditPage = lazy(() => import("@/pages/AuditPage").then((m) => ({ default: m.AuditPage })));
+const SoftwareListPage = lazy(() => import("@/pages/SoftwareListPage").then((m) => ({ default: m.SoftwareListPage })));
+const SoftwarePage = lazy(() => import("@/pages/SoftwarePage").then((m) => ({ default: m.SoftwarePage })));
 const IncidentsPage = lazy(() => import("@/pages/IncidentsPage").then((m) => ({ default: m.IncidentsPage })));
 
 function Loading() {
@@ -90,6 +92,22 @@ export default function App() {
           element={
             <Suspense fallback={<Loading />}>
               <MonitorTargetPage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/logiciels"
+          element={
+            <Suspense fallback={<Loading />}>
+              <SoftwareListPage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/logiciels/:slug"
+          element={
+            <Suspense fallback={<Loading />}>
+              <SoftwarePage />
             </Suspense>
           }
         />

@@ -121,6 +121,8 @@ export type SiteDetail = SiteSummary & {
   devFilesAllowed: string[];
   /** CSP du site (version de travail et .htaccess de l'export), null : CSP par défaut. */
   siteCsp: string | null;
+  /** Indexation autorisée : plus de noindex, robots.txt qui autorise (appliqué au prochain déploiement). */
+  allowIndexing: boolean;
 };
 
 export type CatalogResponse = {
@@ -165,6 +167,8 @@ export type UpdateSiteInput = {
   devFilesAllowed?: string[];
   /** CSP du site, null ou vide : CSP par défaut. */
   siteCsp?: string | null;
+  /** Autoriser l'indexation par les moteurs (cinquième série, 22/10/2026), appliquée à la prochaine publication. */
+  allowIndexing?: boolean;
 };
 
 export type WorkingFileEntry = { path: string; size: number; updatedAt: string; sha256: string };
@@ -648,3 +652,68 @@ export function checkReportField(field: keyof ReportSettings, raw: string | null
   }
   return { ok: true, value: `https://${url.hostname.toLowerCase()}${url.pathname === "/" ? "" : url.pathname}${url.search}` };
 }
+
+// --- Logiciels : licences Tracebay (docs/licences-logiciels.md, section 6) ---
+// GET   /api/logiciels                         : SoftwareCatalog
+// GET   /api/logiciels/:slug                   : SoftwareDetail (liste des clés, sans la chaîne TB1)
+// POST  /api/logiciels/:slug/cles              : LicenseDetail, 201 (503 sans clé de signature ; 503 erp_unavailable)
+// GET   /api/logiciels/:slug/cles/:id          : LicenseDetail (clé et contact déchiffrés)
+// PATCH /api/logiciels/:slug/cles/:id          : LicenseDetail (notes, contact, client ERP seulement)
+// Pas de DELETE, pas de révocation : la vérification se fait hors ligne, l'expiration tient lieu de fin de droit.
+
+/** Calculé au jour de Paris : expirée le lendemain de « expire », bientôt expirée à 30 jours ou moins (jour inclus). */
+export type LicenseStatus = "active" | "expiring" | "expired";
+
+export type SoftwareSummary = {
+  slug: string;
+  name: string;
+  format: string;
+  counts: { active: number; expiring: number; expired: number };
+};
+
+export type SoftwareCatalog = { software: SoftwareSummary[] };
+
+export type LicenseSummary = {
+  id: string;
+  entreprise: string;
+  erpClientId: string | null;
+  /** Nom lu dans l'ERP, null si non rattaché ou ERP indisponible. */
+  clientName: string | null;
+  /** AAAA-MM-JJ, heure de Paris. */
+  emise: string;
+  expire: string;
+  status: LicenseStatus;
+  notes: string | null;
+  createdAt: string;
+};
+
+export type SoftwareDetail = {
+  software: SoftwareSummary;
+  /** Clé de signature présente et lisible sur le serveur : émission possible. */
+  signing: boolean;
+  /** Jour de Paris du serveur (date d'émission d'une nouvelle clé). */
+  today: string;
+  licenses: LicenseSummary[];
+};
+
+export type LicenseDetail = LicenseSummary & {
+  /** Chaîne TB1 complète, en clair seulement dans ce détail. */
+  cle: string;
+  contact: string | null;
+};
+
+export type CreateLicenseInput = {
+  entreprise: string;
+  erpClientId?: string | null;
+  contact?: string | null;
+  notes?: string | null;
+  /** Un des deux, pas les deux. */
+  months?: number;
+  expire?: string;
+};
+
+export type UpdateLicenseInput = {
+  notes?: string | null;
+  contact?: string | null;
+  erpClientId?: string | null;
+};

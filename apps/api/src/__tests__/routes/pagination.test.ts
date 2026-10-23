@@ -97,6 +97,12 @@ describe("journal paginé (GET /api/audit)", () => {
     expect(push.body.total).toBe(3);
     const none = await get<Page<AuditEntry>>("/api/audit?action=site.delete");
     expect(none.body).toEqual({ items: [], total: 0, page: 1, pageSize: 20 });
+
+    // Famille : « site.* » couvre site.update, pas push.test ; motif mal formé refusé.
+    const family = await get<Page<AuditEntry>>("/api/audit?action=site.*&pageSize=100");
+    expect(family.body.total).toBe(42);
+    expect((await get("/api/audit?action=site.*.*")).status).toBe(400);
+    expect((await get("/api/audit?action=*")).status).toBe(400);
   });
 });
 

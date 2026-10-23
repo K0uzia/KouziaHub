@@ -54,3 +54,15 @@ export function formatAgo(iso: string | null | undefined, now = Date.now()): str
 export function plural(count: number, one: string, many: string): string {
   return `${formatDecimal(count, 0)} ${count > 1 ? many : one}`;
 }
+
+const dayFmt = new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
+
+/** Jour de calendrier (AAAA-MM-JJ, sans heure) : 22 octobre 2026, quel que soit le fuseau du navigateur. */
+export function formatDay(day: string): string {
+  return frenchSpaces(dayFmt.format(new Date(`${day}T00:00:00Z`)));
+}
+
+/** Texte comparé sans accents ni casse (recherche dans une liste). */
+export function foldText(text: string): string {
+  return text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+}

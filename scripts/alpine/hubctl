@@ -48,6 +48,7 @@ Réglages (rien n'est affiché à l'écran)
   secrets [api|erp|access]    API Cloudflare (jeton, compte, zone), lien ERP, Cloudflare Access (facultatif)
   secrets veille              jeton de lecture des zones Cloudflare (détection des domaines à surveiller)
   secrets github              jeton GitHub en lecture seule (dépôt privé : nécessaire à update)
+  tracebay-keygen [--public]  clé de signature des licences Tracebay (créée si absente, jamais remplacée)
   chromium                    installer Chromium pour les vignettes automatiques
   admin                       créer le compte ou changer le mot de passe, puis double authentification
   2fa-reset                   couper la double authentification (téléphone perdu), puis : hubctl admin
@@ -87,6 +88,10 @@ run_cmd() {
       ;;
     secrets)
       sh "${SCRIPT_DIR}/configure.sh" "${1:-secrets}"
+      ;;
+    tracebay-keygen)
+      require_root
+      sh "${SCRIPT_DIR}/configure.sh" tracebay "${1:-}"
       ;;
     push-keys)
       require_root

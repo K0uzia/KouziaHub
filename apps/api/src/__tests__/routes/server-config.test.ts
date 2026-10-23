@@ -383,3 +383,34 @@ describe("fichiers de développement et CSP du site (retour de production du 19/
     expect(await prisma.site.findUniqueOrThrow({ where: { id: siteId }, select: { devFilesAllowed: true, siteCsp: true } })).toEqual({ devFilesAllowed: null, siteCsp: null });
   });
 });
+
+describe("option « Autoriser l'indexation » (cinquième série, 22/10/2026)", () => {
+  it("désactivée par défaut ; activée, le déploiement suivant n'a plus de noindex et pointe vers le sitemap ; journalisée", async () => {
+    expect((await detail()).allowIndexing).toBe(false);
+    await uploadFiles(hub, siteId, [
+      { filename: "index.html", content: "<!doctype html><title>Tracebay</title><h1>Tracebay</h1>" },
+      { filename: "sitemap-index.xml", content: "<sitemapindex/>" },
+    ]);
+    const publish = async () => {
+      const res = await hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/publish`, headers: hub.headers, payload: {} });
+      await settle(hub);
+      return res;
+    };
+    expect((await publish()).statusCode).toBe(200);
+    expect(hub.cf.deployments("kz-alpha").at(-1)!.workerJs).toContain('"X-Robots-Tag":"noindex, nofollow"');
+
+    expect((await patch({ allowIndexing: "oui" })).statusCode).toBe(400);
+    const on = await patch({ allowIndexing: true });
+    expect(on.json()).toMatchObject({ allowIndexing: true });
+    expect(await prisma.auditEvent.findFirst({ where: { action: "site.indexing", siteId } })).toMatchObject({ detail: "indexation autorisée" });
+    const site = await detail();
+    const republished = await hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/versions/${site.currentVersion!.id}/publish`, headers: hub.headers });
+    await settle(hub);
+    expect(republished.statusCode).toBe(200);
+    const worker = hub.cf.deployments("kz-alpha").at(-1)!.workerJs;
+    expect(worker).not.toContain('"HEADERS":');
+    expect(worker).toMatch(/const HEADERS = \{(?![^}]*X-Robots-Tag)[^}]*\};/);
+    expect(worker).toContain("Sitemap: https://alpha.kouzia.com/sitemap-index.xml");
+    expect(worker).toMatch(/const REDIRECT_HEADERS = \{[^}]*"X-Robots-Tag":"noindex, nofollow"/);
+  });
+});

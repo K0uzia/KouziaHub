@@ -166,7 +166,7 @@ export function ZipUpload({
 
         <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-start">
           <div className="min-w-0 flex-1 space-y-1.5">
-            <Segmented options={MODES} value={mode} onChange={setMode} label="Mode d'envoi du zip" className="w-full sm:w-auto" />
+            <Segmented options={MODES} value={mode} onChange={setMode} label="Mode d'envoi du zip" stack className="w-full sm:w-auto" />
             <p className="text-sm text-[var(--muted)]">{MODE_HINT[mode]}</p>
           </div>
           <Button onClick={() => input.current?.click()} disabled={!!progress || busy} aria-describedby={error ? `${ids}-error` : undefined}>

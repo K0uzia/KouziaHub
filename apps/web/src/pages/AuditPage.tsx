@@ -3,7 +3,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faCircleCheck, faCircleXmark } from "@fortawesome/free-solid-svg-icons";
 import type { AuditEntry, Page } from "@hub/contract";
 import { formatDateTime } from "@/lib/format";
-import { ACTION_LABEL, actionLabel } from "@/lib/auditLabels";
+import { ACTION_FAMILY_LABEL, ACTION_LABEL, actionLabel } from "@/lib/auditLabels";
 import { useResource } from "@/lib/useResource";
 import { useTitle } from "@/lib/useTitle";
 import { apiQuery, useUrlList } from "@/lib/urlList";
@@ -22,7 +22,7 @@ const RESULTS = [
 ] as const;
 const ACTIONS = [
   { id: "", label: "Toutes les actions" },
-  ...Object.entries(ACTION_LABEL)
+  ...Object.entries({ ...ACTION_LABEL, ...ACTION_FAMILY_LABEL })
     .map(([id, label]) => ({ id, label }))
     .sort((a, b) => a.label.localeCompare(b.label, "fr")),
 ];

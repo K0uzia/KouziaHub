@@ -40,6 +40,8 @@ else
   warn "Un fichier du code est modifiable par le compte du service : lancer « hubctl update » (reprise des droits)"
 fi
 echo "  .env                   : $(stat -c '%U:%G %a' "$KH_ENV_FILE" 2>/dev/null || echo absent) (attendu root:${KH_GROUP} 640)"
+echo "  /etc/kouziahub         : $(stat -c '%U:%G %a' "$KH_ETC_DIR" 2>/dev/null || echo absent) (attendu root:${KH_GROUP} 710)"
+echo "  Clé Tracebay           : $(stat -c '%U:%G %a' "$KH_TRACEBAY_KEY_FILE" 2>/dev/null || echo "absente : émission des licences impossible (hubctl tracebay-keygen)") (attendu root:${KH_GROUP} 640)"
 
 title "Services"
 echo "  Hub (kouziahub)        : $(svc_state "$KH_SERVICE")"

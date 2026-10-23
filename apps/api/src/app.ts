@@ -20,6 +20,7 @@ import { logSerializers } from "@/lib/log-redact.js";
 import { registerInputGuards } from "@/lib/http-input.js";
 import { createServices, type Services } from "@/lib/services.js";
 import { sitesRoutes } from "@/routes/sites.js";
+import { licensesRoutes } from "@/routes/licenses.js";
 import { filesRoutes } from "@/routes/files.js";
 import { uploadsRoutes } from "@/routes/uploads.js";
 import { maintenanceRoutes } from "@/routes/maintenance.js";
@@ -121,6 +122,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   app.addHook("onClose", async () => services.close());
   await app.register(authRoutes(services.push));
   await app.register(sitesRoutes(services));
+  await app.register(licensesRoutes(services));
   await app.register(filesRoutes(services));
   await app.register(uploadsRoutes(services));
   await app.register(maintenanceRoutes(services));

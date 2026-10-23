@@ -114,6 +114,7 @@ export async function siteDetail(siteId: string, services: Services): Promise<Si
     notFoundPage: site.notFoundPage,
     serverConfig: await serverConfigState(site),
     ...(await siteExtras(site.id)),
+    allowIndexing: site.allowIndexing,
   };
 }
 

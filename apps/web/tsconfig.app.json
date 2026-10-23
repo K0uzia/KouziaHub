@@ -21,7 +21,8 @@
       "@/*": ["./src/*"],
       "@hub/contract": ["../api/src/contract.ts"],
       "@hub/site-paths": ["../api/src/lib/site-paths.ts"],
-      "@hub/version-check": ["../api/src/lib/version-check.ts"]
+      "@hub/version-check": ["../api/src/lib/version-check.ts"],
+      "@hub/license-terms": ["../api/src/lib/licenses/terms.ts"]
     }
   },
   "include": ["src"]
