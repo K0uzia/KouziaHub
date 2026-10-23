@@ -28,6 +28,7 @@ Installation et mise à jour
   install                     installer ou réparer (rejouable, garde .env et données)
   update                      mettre à jour (sauvegarde automatique avant, retour arrière si souci)
   update --no-git             code déjà copié sur le CT (rsync), sans GitHub
+  update --no-system          sans la mise à jour du système (apk upgrade, même version d'Alpine)
   update --force              réinstaller les dépendances même si rien n'a changé
   rollback                    revenir à la version d'avant la dernière mise à jour
 
