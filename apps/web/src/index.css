@@ -91,6 +91,8 @@
   --page-narrow: clamp(56rem, 50vw, 72rem);
   --card-min: 17rem;
   --thumb-ratio: 16 / 10;
+  /* Marge d'un logo dans son cadre (pourcentages de la largeur du cadre). */
+  --thumb-logo-pad: 9% 14%;
   /* Grilles bento de la surveillance : largeur minimale d'une tuile (3 colonnes au PC, 2 sur tablette,
      1 au téléphone, par auto-fit) ; variante large pour la page pleine largeur. */
   --tile-min: 16rem;
@@ -514,6 +516,12 @@ option:hover {
   overflow: hidden;
 }
 
+/* Logo ou icône : entier et centré, avec une marge, sur le fond neutre du thème (couleur du logo : style en ligne). */
+.thumb-logo {
+  padding: var(--thumb-logo-pad);
+  background: var(--surface-raised);
+}
+
 .thumb-empty {
   display: grid;
   width: 100%;
@@ -523,6 +531,40 @@ option:hover {
   background:
     radial-gradient(ellipse 70% 60% at 50% 0%, var(--primary-soft), transparent 70%),
     var(--surface-raised);
+}
+
+/* Point d'intérêt d'une vignette : case de 44 px, point plein sur la position choisie. */
+.focus-cell {
+  display: grid;
+  width: var(--tap);
+  height: var(--tap);
+  place-items: center;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease);
+}
+
+.focus-cell:hover {
+  background: var(--surface-raised);
+}
+
+.focus-cell:has(:focus-visible) {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
+.focus-dot {
+  width: 0.625rem;
+  height: 0.625rem;
+  border: 1px solid var(--muted);
+  border-radius: 50%;
+}
+
+.focus-cell:has(:checked) .focus-dot {
+  width: 1rem;
+  height: 1rem;
+  border-color: var(--primary);
+  background: var(--primary);
 }
 
 /* Carte du catalogue : la carte entière est cliquable par le lien étiré du titre. */

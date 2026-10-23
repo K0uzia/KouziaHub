@@ -43,6 +43,43 @@ export async function toThumbnail(input: Buffer): Promise<Buffer> {
     .toBuffer();
 }
 
+/** Côté le plus long d'une image envoyée, gardée à son ratio : le cadrage se fait à l'affichage. */
+export const STORED_MAX = 960;
+
+/**
+ * Image envoyée (vignette d'un site ou d'un logiciel) : WebP à son ratio, réduite à 960 px au plus, transparence
+ * gardée, sans recadrage. Couleur dominante des pixels opaques, assombrie (fond d'un logo), null si tout est
+ * transparent.
+ */
+export async function toStoredImage(input: Buffer): Promise<{ image: Buffer; color: string | null }> {
+  const base = sharp(input, { limitInputPixels: 50_000_000 }).rotate();
+  const image = await base.clone().resize(STORED_MAX, STORED_MAX, { fit: "inside", withoutEnlargement: true }).webp({ quality: 82, alphaQuality: 90 }).toBuffer();
+  const { data } = await base.clone().resize(32, 32, { fit: "inside" }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  return { image, color: dominantColor(data) };
+}
+
+/** Teinte la plus fréquente (cases de 32 niveaux par canal) parmi les pixels opaques, moyennée puis assombrie. */
+export function dominantColor(rgba: Buffer): string | null {
+  const buckets = new Map<number, { n: number; r: number; g: number; b: number }>();
+  for (let i = 0; i + 3 < rgba.length; i += 4) {
+    if (rgba[i + 3]! < 128) continue;
+    const [r, g, b] = [rgba[i]!, rgba[i + 1]!, rgba[i + 2]!];
+    const key = ((r >> 5) << 6) | ((g >> 5) << 3) | (b >> 5);
+    const cell = buckets.get(key) ?? { n: 0, r: 0, g: 0, b: 0 };
+    cell.n++;
+    cell.r += r;
+    cell.g += g;
+    cell.b += b;
+    buckets.set(key, cell);
+  }
+  let best: { n: number; r: number; g: number; b: number } | null = null;
+  for (const cell of buckets.values()) if (!best || cell.n > best.n) best = cell;
+  if (!best) return null;
+  // Assombrie à 30 % : un fond sombre de la même teinte, sur lequel le logo garde son contraste.
+  const hex = (sum: number) => Math.round((sum / best!.n) * 0.3).toString(16).padStart(2, "0");
+  return `#${hex(best.r)}${hex(best.g)}${hex(best.b)}`;
+}
+
 /**
  * Vignettes : capture de la version publiée par Chromium sans aucun réseau extérieur (serveur éphémère
  * sur 127.0.0.1, toute autre requête abandonnée), une capture à la fois, jamais bloquante.

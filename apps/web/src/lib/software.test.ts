@@ -12,6 +12,8 @@ const base: SoftwareSummary = {
   demoUrl: null,
   releasesUrl: null,
   thumbnailUrl: null,
+  thumbnailFit: null,
+  thumbnailColor: null,
   signing: true,
   counts: { active: 2, expiring: 1, expired: 0 },
   nextExpiry: { expire: "2026-11-01", entreprise: "Atelier Nord" },

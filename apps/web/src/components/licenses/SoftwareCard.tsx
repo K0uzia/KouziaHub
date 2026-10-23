@@ -5,6 +5,7 @@ import { formatDay, plural } from "@/lib/format";
 import { SOFTWARE_STATE, stateOf, validCount } from "@/lib/software";
 import { Badge } from "@/components/ui/Card";
 import { SiteThumb } from "@/components/sites/SiteThumb";
+import { softwareFrame } from "@/lib/thumbFrame";
 
 /** Badge d'état d'un logiciel, avec l'échéance proche à côté (même place que sur une carte de site). */
 export function SoftwareBadges({ software }: { software: SoftwareSummary }) {
@@ -31,7 +32,7 @@ export function SoftwareCard({ software }: { software: SoftwareSummary }) {
   const valid = validCount(software);
   return (
     <article className="site-card group">
-      <SiteThumb src={software.thumbnailUrl} icon={faCube} className="rounded-t-[calc(var(--radius-lg)-1px)]" />
+      <SiteThumb src={software.thumbnailUrl} icon={faCube} frame={softwareFrame(software)} className="rounded-t-[calc(var(--radius-lg)-1px)]" />
       <div className="flex min-w-0 flex-1 flex-col gap-2 p-4">
         <h3 className="min-w-0 text-base font-semibold leading-snug text-[var(--text)]">
           <Link to={`/logiciels/${software.slug}`} className="site-card-link break-words">

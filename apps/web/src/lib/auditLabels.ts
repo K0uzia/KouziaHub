@@ -23,6 +23,7 @@ export const ACTION_LABEL: Record<string, string> = {
   "files.clean-dev": "Fichiers de développement retirés",
   "thumbnail.upload": "Vignette envoyée",
   "thumbnail.capture": "Capture de la vignette",
+  "thumbnail.focus": "Cadrage de la vignette",
   "orphan.delete": "Suppression d'un enregistrement DNS orphelin",
   "monitor.target.create": "Adresse ajoutée à la surveillance",
   "monitor.target.update": "Surveillance modifiée",

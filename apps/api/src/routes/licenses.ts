@@ -7,12 +7,14 @@ import { Prisma, type License, type Software } from "@prisma/client";
 import { z } from "zod";
 import {
   checkSoftwareField,
+  SOFTWARE_THUMBNAIL_FITS,
   type LicenseDetail,
   type LicenseSummary,
   type SoftwareCatalog,
   type SoftwareDetail,
   type SoftwareField,
   type SoftwareSummary,
+  type SoftwareThumbnailFit,
 } from "@/contract.js";
 import { audit } from "@/lib/audit.js";
 import { requireAuth } from "@/lib/auth.js";
@@ -27,7 +29,7 @@ import { publicPemOf, signingKey } from "@/lib/licenses/signer.js";
 import { prisma } from "@/lib/prisma.js";
 import type { Services } from "@/lib/services.js";
 import { erpNames } from "@/lib/site-view.js";
-import { toThumbnail } from "@/lib/thumbnails.js";
+import { toStoredImage } from "@/lib/thumbnails.js";
 
 // Page Logiciels : fiches et registre des clés de licence (docs/licences-logiciels.md, sections 5 et 6). Le hub signe,
 // chaque logiciel vérifie hors ligne. Pas de révocation : changer le nom ou la date, c'est émettre une nouvelle clé.
@@ -54,7 +56,11 @@ const updateSchema = z.object({ notes: text(2000), contact: text(1000), erpClien
 const softwareCreateSchema = z
   .object({ name: z.string().max(1000), slug: z.string().max(100), keyPrefix: z.string().max(100), description: text(5000), demoUrl: text(2000), releasesUrl: text(2000) })
   .strict();
-const softwareUpdateSchema = z.object({ name: z.string().max(1000).optional(), description: text(5000), demoUrl: text(2000), releasesUrl: text(2000) }).strict();
+const softwareUpdateSchema = z
+  .object({ name: z.string().max(1000).optional(), description: text(5000), demoUrl: text(2000), releasesUrl: text(2000), thumbnailFit: z.enum(SOFTWARE_THUMBNAIL_FITS).optional() })
+  .strict();
+
+const fitOf = (value: string | null): SoftwareThumbnailFit | null => ((SOFTWARE_THUMBNAIL_FITS as readonly string[]).includes(value ?? "") ? (value as SoftwareThumbnailFit) : null);
 
 /** Champ contrôlé par la règle partagée avec le formulaire ; 400 avec le champ en code. */
 function field(name: SoftwareField, raw: string | null | undefined): string | null {
@@ -115,6 +121,8 @@ async function softwareSummary(software: Software, today: string, signing: boole
     demoUrl: software.demoUrl,
     releasesUrl: software.releasesUrl,
     thumbnailUrl: software.thumbnailPath ? `/api/logiciels/${software.slug}/vignette?v=${software.thumbnailAt?.getTime() ?? 0}` : null,
+    thumbnailFit: software.thumbnailPath ? fitOf(software.thumbnailFit) : null,
+    thumbnailColor: software.thumbnailPath ? software.thumbnailColor : null,
     signing,
     counts,
     nextExpiry: next,
@@ -202,13 +210,18 @@ export function licensesRoutes(services: Services): FastifyPluginAsync {
     app.patch("/api/logiciels/:slug", async (request): Promise<SoftwareDetail> => {
       const { slug } = slugParams.parse(request.params);
       const parsed = softwareUpdateSchema.safeParse(request.body ?? {});
-      if (!parsed.success) throw new HttpError(400, "Seuls le nom, la description et les liens se modifient : l'identifiant et le préfixe sont dans les clés émises.");
+      if (!parsed.success) throw new HttpError(400, "Seuls le nom, la description, les liens et le cadrage de la vignette se modifient : l'identifiant et le préfixe sont dans les clés émises.");
       const software = await softwareOf(slug);
       const data: Prisma.SoftwareUpdateInput = {};
       if (parsed.data.name !== undefined) data.name = field("name", parsed.data.name)!;
       if (parsed.data.description !== undefined) data.description = field("description", parsed.data.description);
       if (parsed.data.demoUrl !== undefined) data.demoUrl = field("demoUrl", parsed.data.demoUrl);
       if (parsed.data.releasesUrl !== undefined) data.releasesUrl = field("releasesUrl", parsed.data.releasesUrl);
+      if (parsed.data.thumbnailFit !== undefined) {
+        // Image d'avant ce réglage : déjà recadrée en 640 x 400, son cadrage ne se change pas.
+        if (!software.thumbnailPath || !fitOf(software.thumbnailFit)) throw new HttpError(409, "Envoyez d'abord l'image (l'original) : le cadrage s'applique à une image gardée entière.", "thumbnail");
+        data.thumbnailFit = parsed.data.thumbnailFit;
+      }
       const updated = await prisma.software.update({ where: { id: software.id }, data });
       await audit({ action: "logiciel.modifier", result: "ok", detail: `${software.slug} : ${Object.keys(data).join(", ") || "aucun champ"}` });
       return softwareDetail(services, updated);
@@ -254,18 +267,25 @@ export function licensesRoutes(services: Services): FastifyPluginAsync {
       }
       const buffer = await part.toBuffer();
       if (part.file.truncated) throw new HttpError(413, `Image trop lourde : ${MAX_THUMBNAIL_UPLOAD_BYTES / 1024 / 1024} Mio au plus.`);
-      let image: Buffer;
+      let stored: { image: Buffer; color: string | null };
       try {
-        image = await toThumbnail(buffer);
+        stored = await toStoredImage(buffer);
       } catch {
         throw new HttpError(400, "Image illisible.");
       }
       // Nom tiré de l'id (stable, sans caractère libre), écrit puis renommé : jamais de fichier à moitié écrit.
       const name = `software-${software.id}.webp`;
       await mkdir(thumbDir, { recursive: true });
-      await writeFile(path.join(thumbDir, `${name}.tmp`), image);
+      await writeFile(path.join(thumbDir, `${name}.tmp`), stored.image);
       await rename(path.join(thumbDir, `${name}.tmp`), path.join(thumbDir, name));
-      const updated = await prisma.software.update({ where: { id: software.id }, data: { thumbnailPath: `thumbnails/${name}`, thumbnailAt: new Date() } });
+      const updated = await prisma.software.update({ where: { id: software.id }, data: {
+          thumbnailPath: `thumbnails/${name}`,
+          thumbnailAt: new Date(),
+          // Cadrage gardé d'une image à l'autre ; « logo » pour une première image (ou une image d'avant ce réglage).
+          thumbnailFit: fitOf(software.thumbnailFit) ?? "logo",
+          thumbnailColor: stored.color,
+        },
+      });
       await audit({ action: "logiciel.vignette", result: "ok", detail: `${software.slug} : image envoyée` });
       return softwareDetail(services, updated);
     });
@@ -274,7 +294,7 @@ export function licensesRoutes(services: Services): FastifyPluginAsync {
       const { slug } = slugParams.parse(request.params);
       const software = await softwareOf(slug);
       if (software.thumbnailPath) await rm(path.join(services.dataDir, software.thumbnailPath), { force: true });
-      const updated = await prisma.software.update({ where: { id: software.id }, data: { thumbnailPath: null, thumbnailAt: null } });
+      const updated = await prisma.software.update({ where: { id: software.id }, data: { thumbnailPath: null, thumbnailAt: null, thumbnailFit: null, thumbnailColor: null } });
       await audit({ action: "logiciel.vignette", result: "ok", detail: `${software.slug} : image retirée` });
       return softwareDetail(services, updated);
     });
