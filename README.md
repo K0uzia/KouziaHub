@@ -245,7 +245,9 @@ La version de travail n'est jamais indexée par les moteurs de recherche, et l'a
 
 ### 5.3 Fiche d'un site
 
-À droite (en dessous sur téléphone), le panneau **Synthèse** : adresse, client (lien vers sa fiche dans l'ERP), version servie, fichiers de travail, et l'interrupteur **« Site accessible »**. Puis six onglets : Fichiers, Versions, Surveillance, Vignette, Serveur, Réglages.
+À droite (en dessous sur téléphone), le panneau **Synthèse** : adresse, client (lien vers sa fiche dans l'ERP), version servie, fichiers de travail, l'interrupteur **« Site accessible »** et, juste dessous, l'interrupteur **« Indexation par les moteurs »**. Puis six onglets : Fichiers, Versions, Surveillance, Vignette, Serveur, Réglages.
+
+**Indexation par les moteurs** (désactivée par défaut, confirmation avant tout changement) : désactivée, le site demande aux moteurs de ne pas l'indexer (en-tête `X-Robots-Tag: noindex, nofollow`, `robots.txt` en `Disallow: /`). Activée, plus d'en-tête `noindex` sur `<client>.kouzia.com` ; le `robots.txt` du site est servi tel quel, sinon un `robots.txt` qui autorise tout, avec la ligne `Sitemap:` si le site contient `sitemap-index.xml` ou `sitemap.xml`. Les adresses `pages.dev` restent redirigées et `noindex`. Le réglage vit dans le déploiement : la version en ligne est republiée aussitôt (une nouvelle version apparaît dans l'onglet Versions). Attention : une règle de transformation Cloudflare qui ajoute `X-Robots-Tag` sur `*.kouzia.com` l'emporterait ; la retirer ou en exclure ce sous-domaine.
 
 **En ligne ou hors ligne.** Couper le site retire son adresse : elle ne répond plus du tout, mais fichiers et versions sont gardés. La remise en ligne prend quelques minutes (nouveau certificat).
 
@@ -328,7 +330,6 @@ Onglet Versions > « Télécharger la version de production ». La mise en ligne
 ### 5.10 Onglet Réglages du site, et suppression
 
 - Libellé du site, client lié (changer, ou lier un site perso à un client).
-- **Indexation par les moteurs** (désactivée par défaut) : désactivée, le site demande aux moteurs de ne pas l'indexer (en-tête `X-Robots-Tag: noindex, nofollow`, `robots.txt` en `Disallow: /`). Activée, plus d'en-tête `noindex` sur `<client>.kouzia.com` ; le `robots.txt` du site est servi tel quel, sinon un `robots.txt` qui autorise tout, avec la ligne `Sitemap:` si le site contient `sitemap-index.xml` ou `sitemap.xml`. Les adresses `pages.dev` restent redirigées et `noindex`. Le réglage vit dans le déploiement : la version en ligne est republiée aussitôt (une nouvelle version apparaît dans l'onglet Versions). Attention : une règle de transformation Cloudflare qui ajoute `X-Robots-Tag` sur `*.kouzia.com` l'emporterait ; la retirer ou en exclure ce sous-domaine.
 - **Vider les fichiers de travail** : retire tous les fichiers de l'onglet Fichiers ; le site en ligne et les versions restent. Case « Supprimer aussi les anciennes versions » (la version en ligne est toujours gardée ; saisie du sous-domaine demandée). Le `.htaccess` part aussi : le recréer dans l'onglet Serveur.
 - **Supprimer le site** : saisir le sous-domaine pour confirmer. L'adresse cesse de répondre, le projet Cloudflare est retiré, fichiers et versions sont supprimés. Définitif.
 
