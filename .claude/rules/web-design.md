@@ -25,6 +25,7 @@
 - `prefers-reduced-motion: reduce` : animations et défilement doux coupés.
 - Interdit : parallaxe, défilement détourné, boucle décorative, `filter: blur` sur grande surface.
 - Interdit : la bordure gauche épaisse et colorée comme accent d'une carte, d'un encadré, d'un bandeau ou d'une tuile (cliché des interfaces générées), à l'écran comme dans les PDF et les e-mails. La hiérarchie passe par la taille, la graisse, l'espace, un fond ou un contour complet de 1 px. Seule exception : le filet d'une citation de message (blockquote).
+- Interdit : le tiret cadratin déguisé (autre cliché des interfaces générées) : trait court en `::before`/`::after` devant un sur-titre, un intitulé ou une puce, `content` en tiret (y compris par échappement), image ou SVG de tiret. À la place : rien, une petite forme pleine ou une icône. Les filets fonctionnels (séparateur, fil d'étapes, poignée, frise) restent permis.
 
 ## Icônes et contenu
 
