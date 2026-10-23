@@ -1,6 +1,6 @@
 import { Field, Textarea } from "@/components/ui/Field";
 
-/** Clé TB1 en lecture seule, sélectionnable d'un geste (copie à la main si le presse-papiers est refusé). */
+/** Clé signée (TB1 ou préfixe du logiciel) en lecture seule, sélectionnable d'un geste (copie à la main si le presse-papiers est refusé). */
 export function KeyBox({ value }: { value: string }) {
   return (
     <Field label="Clé de licence">

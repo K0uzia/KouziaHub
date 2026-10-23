@@ -4,6 +4,8 @@ Décision du 22 octobre 2026. Le hub émet et conserve les clés de licence. Tra
 
 Texte identique dans Tracebay Autonome, `docs/LICENCE-HUB.md`. Les deux fichiers se mettent à jour ensemble. Le comportement de l'application (fenêtre d'activation, lecture seule, horloge) reste décrit dans Tracebay Autonome, `docs/LICENCE.md`.
 
+Mise à jour du 23 octobre 2026 : le hub gère d'autres logiciels que Tracebay (« Nouveau logiciel »), chacun avec sa propre paire Ed25519 et le format générique KZ1 (§ 3.7). Tracebay garde exactement son format TB1 et sa clé : aucune licence déjà émise ne change.
+
 Ce document remplace l'idée d'un service Fastify et PostgreSQL séparé. Rien de ce service n'est écrit. Le hub a déjà le login, l'annuaire ERP, le journal et le chiffrement au repos.
 
 ## 1. Principe du branchement
@@ -36,8 +38,9 @@ Même geste que le catalogue des sites. Autre objet.
 | Sites, déjà en place | Logiciels |
 |---|---|
 | Entrée « Sites » dans la barre | Entrée « Logiciels », route `/logiciels` |
-| Carte du catalogue | Une carte par logiciel (Tracebay seul au départ) |
-| Fiche `/sites/:id` | Fiche `/logiciels/:slug` : liste des clés |
+| Carte du catalogue | Une carte par logiciel : vignette, état, licences en cours, prochaine expiration |
+| Nouveau site | Nouveau logiciel : nom, identifiant, préfixe des clés, description, liens |
+| Fiche `/sites/:id` | Fiche `/logiciels/:slug` : onglets Licences, Vignette, Réglages, et synthèse |
 | Nouveau site : client ERP ou nom libre | Nouvelle clé : client ERP (le nom est prérempli) ou nom libre |
 | En ligne, hors ligne, erreur | Active, bientôt expirée, expirée |
 | Journal `site.create` | Journal `licence.emettre` |
@@ -123,11 +126,38 @@ Les installations antérieures à la 3.7.0 qui ont déjà des données sont exem
 
 ### 3.6 Ce qui n'est pas dans la clé
 
-Le contact, les notes, l'identifiant ERP et le slug du logiciel. Les modifier ne demande pas une nouvelle signature.
+Le contact, les notes et l'identifiant ERP. Les modifier ne demande pas une nouvelle signature. Le slug du logiciel n'est pas dans une clé TB1 ; il est signé dans une clé KZ1 (§ 3.7).
+
+### 3.7 Format générique KZ1 (logiciels autres que Tracebay)
+
+Même construction que TB1 (§ 3.1 à 3.5 : base64url sans padding, JSON canonique, Ed25519, nom d'entreprise, dates), avec deux différences.
+
+Texte : `<PRÉFIXE>.<données>.<signature>`. Le préfixe est choisi à la création du logiciel : 2 à 8 caractères, une majuscule puis des majuscules ou des chiffres (`ATL1`). `TB1` et `KZ1` sont réservés. Le préfixe est unique dans le hub et ne change plus.
+
+Données signées, exactement ces clés, dans cet ordre :
+
+```json
+{"v":1,"logiciel":"atelier","id":"clxyz","entreprise":"Atelier Nord","emise":"2026-10-23","expire":"2027-10-23"}
+```
+
+| Champ | Règle |
+|---|---|
+| `logiciel` | Identifiant (slug) du logiciel dans le hub : 2 à 32 caractères, minuscules, chiffres, tirets isolés. Immuable. |
+| autres | Comme TB1 (§ 3.2). |
+
+Vérification côté logiciel, dans cet ordre, toute étape en échec refuse la clé :
+
+1. Trois segments, le premier égal au préfixe attendu, sinon `format`.
+2. JSON relu identique octet pour octet à sa forme canonique, `v` égal à 1, champs bien formés, sinon `format`.
+3. Signature Ed25519 valide avec la clé publique embarquée, sinon `signature`.
+4. `logiciel` égal à l'identifiant attendu, constante du logiciel, sinon `logiciel`. Une clé émise pour un logiciel ne valide jamais un autre, même si une paire était un jour partagée par erreur.
+5. Dates comme TB1 (§ 3.5).
+
+Référence : `apps/api/src/lib/licenses/kz1.ts` (`signKz1`, `verifyKz1`) et ses tests.
 
 ## 4. Clés cryptographiques
 
-Une paire Ed25519 pour Tracebay, générée une fois, sur le CT du hub, par `hubctl tracebay-keygen` : la paire n'est créée que si le fichier est absent (jamais remplacée), avec les droits ci-dessous, `TRACEBAY_LICENSE_KEY_FILE` est posé dans le `.env` et seule la publique est affichée (`hubctl tracebay-keygen --public` la réaffiche). Équivalent à la main :
+Une paire Ed25519 par logiciel, générée une fois, sur le CT du hub, par `hubctl licence-keygen <slug>` (`hubctl tracebay-keygen` reste l'équivalent de `hubctl licence-keygen tracebay`) : la paire n'est créée que si le fichier est absent (jamais remplacée), avec les droits ci-dessous, et seule la publique est affichée (`--public` la réaffiche). Pour Tracebay, `TRACEBAY_LICENSE_KEY_FILE` est posé dans le `.env` ; pour les autres, `LICENSE_KEY_DIR` (sans lui, le hub cherche dans le dossier du fichier de Tracebay). L'interface web ne crée jamais de clé et la privée ne passe jamais par le navigateur : la fiche montre seulement la publique, recalculée depuis la privée. Équivalent à la main :
 
 ```bash
 node --input-type=module -e '
@@ -143,12 +173,12 @@ La commande écrit la privée dans le fichier indiqué et n'imprime que la publi
 
 | Élément | Où | Règle |
 |---|---|---|
-| Clé privée PKCS#8 PEM | `/etc/kouziahub/tracebay-ed25519.pem`, propriétaire `root:kouziahub`, mode `640` | Hors dépôt, hors `.env`, hors image, hors sauvegarde en clair. Sauvegarde chiffrée ailleurs obligatoire. Sa perte empêche de signer pour les versions déjà installées. |
-| Chemin | Variable `TRACEBAY_LICENSE_KEY_FILE` | Absente ou fichier illisible : la liste des clés reste lisible, l'émission répond 503 avec un message explicite. |
-| Clé publique SPKI PEM | Dépôt Tracebay Autonome, constante du processus principal, livrée avec l'application | Publique. Elle vérifie, elle ne signe pas. |
+| Clé privée PKCS#8 PEM | `/etc/kouziahub/<slug>-ed25519.pem` (Tracebay : `tracebay-ed25519.pem`, inchangé), propriétaire `root:kouziahub`, mode `640` | Hors dépôt, hors `.env`, hors image, hors sauvegarde en clair. Sauvegarde chiffrée ailleurs obligatoire. Sa perte empêche de signer pour les versions déjà installées. |
+| Chemin | `TRACEBAY_LICENSE_KEY_FILE` pour Tracebay, `LICENSE_KEY_DIR/<slug>-ed25519.pem` pour les autres | Absente ou fichier illisible : la liste des clés reste lisible, l'émission de ce logiciel répond 503 avec un message explicite. |
+| Clé publique SPKI PEM | Dépôt du logiciel, constante du processus principal, livrée avec l'application. Affichée aussi dans la synthèse de sa fiche | Publique. Elle vérifie, elle ne signe pas. |
 | Clé de développement | Fichier gitignoré, produit par l'installation locale du hub | Jamais celle de production. Les tests génèrent une paire en mémoire et ne lisent pas ce fichier. |
 
-Une rotation de la publique impose une nouvelle version de Tracebay et de nouvelles clés pour tous les clients. Le format le dira plus tard par `v` si une seconde paire doit coexister. Pour l'instant, une seule paire, `v = 1`.
+Une rotation de la publique impose une nouvelle version du logiciel et de nouvelles clés pour tous ses clients. Le format le dira plus tard par `v` si une seconde paire doit coexister. Pour l'instant, une seule paire, `v = 1`.
 
 Le hub signe dans son propre processus, derrière le login déjà en place. Conséquence assumée : une compromission du hub permettrait de fabriquer des licences Tracebay valides jusqu'à une rotation. Un signeur séparé, joignable seulement sur le réseau local du Proxmox (comme l'ERP), reste possible plus tard. Il n'est pas nécessaire pour ce branchement.
 
@@ -158,14 +188,22 @@ Migration dans `prisma/migrations/`, sur le modèle des migrations déjà datée
 
 ```prisma
 model Software {
-  id          String    @id @default(cuid())
-  /// "tracebay". Unique, stable, utilisé dans l'URL.
-  slug        String    @unique
-  name        String
-  /// "TB1". Décide du signeur.
-  format      String
-  createdAt   DateTime  @default(now())
-  licenses    License[]
+  id            String    @id @default(cuid())
+  /// "tracebay". Unique, immuable : URL, champ signé « logiciel » (KZ1), fichier de clé privée.
+  slug          String    @unique
+  name          String
+  /// "TB1" (Tracebay seul) ou "KZ1". Décide du signeur. Immuable.
+  format        String
+  /// Préfixe des clés : "TB1" pour Tracebay, choisi à la création sinon. Unique, immuable.
+  keyPrefix     String?   @unique
+  description   String?
+  demoUrl       String?
+  releasesUrl   String?
+  /// Vignette envoyée (WebP 640 x 400), relative au dossier de données.
+  thumbnailPath String?
+  thumbnailAt   DateTime?
+  createdAt     DateTime  @default(now())
+  licenses      License[]
 }
 
 model License {
@@ -191,9 +229,9 @@ model License {
 }
 ```
 
-Au démarrage, si aucune ligne `slug = tracebay` n'existe, le hub la crée (`name` « Tracebay », `format` « TB1 »). Pas d'écran pour ajouter un logiciel : un second logiciel a besoin de son propre format de signature.
+Au démarrage, si aucune ligne `slug = tracebay` n'existe, le hub la crée (`name` « Tracebay », `format` et `keyPrefix` « TB1 »). Migration `20261023100000_logiciels_generiques` : colonnes facultatives ajoutées, `keyPrefix` posé à `TB1` sur la ligne Tracebay, rien d'autre ne change. Les autres logiciels se créent par « Nouveau logiciel » (`format` « KZ1 »). Un logiciel se supprime seulement s'il n'a aucune clé émise ; Tracebay jamais.
 
-`AuditEvent` ne change pas. L'émission écrit `action: "licence.emettre"`, `result: "ok"`, `siteId` et `siteSlug` à null, `detail` du type `tracebay : Atelier Nord, expire le 2027-10-22`. Jamais la clé, jamais le contact, jamais un nom de fichier de clé privée. Libellé à ajouter dans `ACTION_LABEL` : « Clé de licence émise ».
+`AuditEvent` ne change pas. L'émission écrit `action: "licence.emettre"`, `result: "ok"`, `siteId` et `siteSlug` à null, `detail` du type `tracebay : Atelier Nord, expire le 2027-10-22`. Jamais la clé, jamais le contact, jamais un nom de fichier de clé privée. Libellé à ajouter dans `ACTION_LABEL` : « Clé de licence émise ». Les fiches journalisent `logiciel.creer`, `logiciel.modifier`, `logiciel.vignette` et `logiciel.supprimer`.
 
 Le contact est une donnée personnelle (souvent une adresse). Il est chiffré comme les secrets TOTP. L'entreprise reste en clair : elle est déjà dans les PDF du client, et la recherche du catalogue en a besoin.
 
@@ -213,12 +251,21 @@ type LicenseStatus = "active" | "expiring" | "expired";
 type SoftwareSummary = {
   slug: string;
   name: string;
-  format: string;
+  format: string; // "TB1" ou "KZ1"
+  keyPrefix: string;
+  description: string | null;
+  demoUrl: string | null;
+  releasesUrl: string | null;
+  thumbnailUrl: string | null;
+  signing: boolean; // clé de signature lisible sur le serveur
   counts: { active: number; expiring: number; expired: number };
+  nextExpiry: { expire: string; entreprise: string } | null; // prochaine clé non expirée
 };
 
-type SoftwareCatalog = { software: SoftwareSummary[] };
+type SoftwareCatalog = { software: SoftwareSummary[]; today: string };
 ```
+
+Fiches : `POST /api/logiciels` (nom, slug, keyPrefix, description, demoUrl, releasesUrl ; 201, 409 si le slug ou le préfixe est pris, `code` = champ), `PATCH /api/logiciels/:slug` (nom, description et liens seulement), `DELETE /api/logiciels/:slug` (204, 409 si une clé a été émise, Tracebay jamais), vignette par `GET`, `POST` (multipart) et `DELETE` sur `/api/logiciels/:slug/vignette`. Règles des champs partagées avec le formulaire : `checkSoftwareField` dans le contrat. Adresses en `https://` seulement.
 
 Le statut n'est pas stocké. Il se calcule au jour de Paris : `expired` si ce jour est après `expire`, `expiring` s'il reste 30 jours ou moins (jour `expire` inclus), `active` sinon. Une clé `expired` depuis 15 jours ou moins (§ 3.5) affiche en plus « en grâce jusqu'au » et la date `expire` plus 15 jours ; le statut reste `expired`.
 
@@ -226,7 +273,7 @@ Le statut n'est pas stocké. Il se calcule au jour de Paris : `expired` si ce jo
 
 `GET /api/logiciels/:slug`
 
-404 si le slug est inconnu. La réponse contient le logiciel, les compteurs, et la liste des clés sans la chaîne `TB1` :
+404 si le slug est inconnu. La réponse contient le logiciel, les compteurs, `signing`, `publicKey` (SPKI PEM, null sans clé de signature) et la liste des clés sans la chaîne signée :
 
 ```ts
 type LicenseSummary = {
@@ -301,15 +348,21 @@ Même composants que les sites : `PageHeader`, `Card`, `EmptyState`, `StatStrip`
 
 ### 7.1 Catalogue `/logiciels`
 
-Titre « Logiciels ». Une carte Tracebay : nom, trois compteurs (actives, bientôt expirées, expirées). Clic vers `/logiciels/tracebay`.
+Même page que le catalogue des sites. Titre « Logiciels », bouton « Nouveau logiciel ». `StatStrip` : logiciels, licences en cours, expirent bientôt, expirées. Bandeau si un logiciel n'a pas de clé de signature, avec un lien qui filtre. Recherche (nom, identifiant, préfixe, description), filtre d'état (signature prête, clé de signature absente, licences à renouveler), vue Cartes ou Liste, tout dans l'URL.
+
+Carte : vignette 16:10 (repli sobre sans image), nom, description sur deux lignes, badge d'état (« Signature prête » ou « Clé de signature absente ») et échéance proche, licences en cours, prochaine expiration. La carte entière mène à la fiche.
 
 État vide impossible dès que l'amorçage a créé Tracebay. Si la liste échoue : bandeau d'erreur et « Réessayer », comme le catalogue des sites.
 
-### 7.2 Fiche `/logiciels/tracebay`
+Dialogue « Nouveau logiciel » : nom ; identifiant proposé depuis le nom, modifiable ; préfixe proposé depuis l'identifiant (`ATE1`), modifiable ; description, démo ou site, page des versions publiées, facultatifs. Après la création, la fiche s'ouvre et rappelle la commande `hubctl licence-keygen <slug>`. La vignette s'envoie ensuite depuis la fiche.
 
-Titre « Tracebay ». Bandeau permanent : « Le nom de l'entreprise est écrit dans la clé et imposé sur les documents. Une autre entreprise demande une nouvelle clé. »
+### 7.2 Fiche `/logiciels/:slug`
 
-Bandeau si l'émission est indisponible (réponse 503 au chargement d'un drapeau, ou erreur à la création) : « La clé de signature n'est pas en place sur le serveur. Les clés déjà émises restent consultables. »
+Même disposition que la fiche d'un site : onglets à gauche (Licences, Vignette, Réglages), synthèse à droite (description, identifiant, format et préfixe, clé de signature, liens, clé publique à copier). En-tête : nom, état, « Ouvrir la démo » si le lien existe, « Nouvelle clé ». Vignette : image envoyée seulement. Réglages : nom, description et liens ; identifiant et préfixe figés ; suppression seulement sans clé émise.
+
+Onglet Licences, la page Tracebay d'origine. Bandeau permanent : « Le nom de l'entreprise est écrit dans la clé et imposé sur les documents. Une autre entreprise demande une nouvelle clé. »
+
+Bandeau si l'émission est indisponible (réponse 503 au chargement d'un drapeau, ou erreur à la création) : « La clé de signature n'est pas en place sur le serveur. Les clés déjà émises restent consultables. », avec la commande `hubctl licence-keygen <slug>`.
 
 `StatStrip` : actives, bientôt expirées, expirées, total.
 
@@ -337,6 +390,8 @@ Notes, contact et client ERP se modifient sur le détail. L'entreprise, les date
 
 ## 8. Côté Tracebay Autonome
 
+Un autre logiciel vérifie ses clés KZ1 de la même façon, avec sa propre publique et son identifiant attendu (§ 3.7, raison supplémentaire `logiciel`).
+
 L'application ne gagne aucune URL vers le hub. Le module de vérification est une fonction pure, testée par `npm run test:local`, sans fenêtre et sans réseau.
 
 Entrée : la chaîne collée, la clé publique embarquée, la date du jour (injectée par les tests), la dernière date vue.
@@ -361,6 +416,8 @@ La publique de production n'entre dans le dépôt qu'au moment de la version qui
 
 ## 9. Mise en place, dans l'ordre
 
+Pour un autre logiciel : « Nouveau logiciel » dans le hub, puis `hubctl licence-keygen <slug>` sur le conteneur, sauvegarde chiffrée de `/etc/kouziahub/<slug>-ed25519.pem`, publique déposée dans le logiciel (vérification KZ1, § 3.7). Pour Tracebay, dans l'ordre :
+
 1. Sur le conteneur du hub : `hubctl tracebay-keygen` (paire créée dans `/etc/kouziahub/tracebay-ed25519.pem`, `TRACEBAY_LICENSE_KEY_FILE` posé, hub redémarré). Copier la sauvegarde chiffrée hors du serveur avant toute émission réelle : les sauvegardes du hub ne contiennent pas `/etc/kouziahub`.
 2. Le hub démarre même si le fichier manque : il refuse seulement d'émettre.
 3. Livrer la page Logiciels (ce document, sections 5 à 7) et vérifier l'émission avec la clé de développement.
@@ -380,6 +437,7 @@ Sur le modèle de `apps/api/src/__tests__/routes/sites.test.ts` et des tests de 
 - La liste ne contient pas `cle`. Le GET d'une clé la contient et déchiffre.
 - Le PATCH refuse `entreprise`.
 - Le journal de l'émission ne contient pas la chaîne `TB1` ni le contact.
+- KZ1 : préfixe, JSON canonique, refus d'une clé d'un autre logiciel (`logiciel`) ou d'une autre paire (`signature`) ; création, champs refusés, doublons en 409, PATCH sans identifiant ni préfixe, suppression seulement sans clé, vignette (`software.test.ts`, `kz1.test.ts`).
 - Une base copiée ne montre pas la clé en clair (colonne `keyEncrypted`).
 
 ## 11. Hors de ce branchement
@@ -387,6 +445,5 @@ Sur le modèle de `apps/api/src/__tests__/routes/sites.test.ts` et des tests de 
 - Envoyer la clé par e-mail depuis le hub.
 - Savoir quels postes l'ont activée.
 - Révoquer avant l'expiration.
-- Un second logiciel, tant que son format de signature n'est pas décidé.
 - Un signeur hors du processus du hub.
 - Faire lire au hub la clé publique embarquée dans les installeurs de `Tracebay-Releases`.

@@ -41,7 +41,13 @@ else
 fi
 echo "  .env                   : $(stat -c '%U:%G %a' "$KH_ENV_FILE" 2>/dev/null || echo absent) (attendu root:${KH_GROUP} 640)"
 echo "  /etc/kouziahub         : $(stat -c '%U:%G %a' "$KH_ETC_DIR" 2>/dev/null || echo absent) (attendu root:${KH_GROUP} 710)"
-echo "  Clé Tracebay           : $(stat -c '%U:%G %a' "$KH_TRACEBAY_KEY_FILE" 2>/dev/null || echo "absente : émission des licences impossible (hubctl tracebay-keygen)") (attendu root:${KH_GROUP} 640)"
+echo "  Clé Tracebay           : $(stat -c '%U:%G %a' "$KH_TRACEBAY_KEY_FILE" 2>/dev/null || echo "absente : émission des licences impossible (hubctl licence-keygen tracebay)") (attendu root:${KH_GROUP} 640)"
+# Autres logiciels : une clé par fichier <slug>-ed25519.pem (la liste du dossier demande root).
+for _k in "$KH_ETC_DIR"/$KH_LICENCE_KEY_GLOB; do
+  if [ ! -f "$_k" ] || [ "$_k" = "$KH_TRACEBAY_KEY_FILE" ]; then continue; fi
+  _n="$(basename "$_k" -ed25519.pem)"
+  printf '  Clé %-19s: %s (attendu root:%s 640)\n' "$_n" "$(stat -c '%U:%G %a' "$_k")" "$KH_GROUP"
+done
 
 title "Services"
 echo "  Hub (kouziahub)        : $(svc_state "$KH_SERVICE")"

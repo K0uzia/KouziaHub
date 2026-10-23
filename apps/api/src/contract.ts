@@ -653,13 +653,17 @@ export function checkReportField(field: keyof ReportSettings, raw: string | null
   return { ok: true, value: `https://${url.hostname.toLowerCase()}${url.pathname === "/" ? "" : url.pathname}${url.search}` };
 }
 
-// --- Logiciels : licences Tracebay (docs/licences-logiciels.md, section 6) ---
-// GET   /api/logiciels                         : SoftwareCatalog
-// GET   /api/logiciels/:slug                   : SoftwareDetail (liste des clés, sans la chaîne TB1)
-// POST  /api/logiciels/:slug/cles              : LicenseDetail, 201 (503 sans clé de signature ; 503 erp_unavailable)
-// GET   /api/logiciels/:slug/cles/:id          : LicenseDetail (clé et contact déchiffrés)
-// PATCH /api/logiciels/:slug/cles/:id          : LicenseDetail (notes, contact, client ERP seulement)
-// Pas de DELETE, pas de révocation : la vérification se fait hors ligne, l'expiration tient lieu de fin de droit.
+// --- Logiciels : licences signées par le hub (docs/licences-logiciels.md, sections 6 et 7) ---
+// GET    /api/logiciels                         : SoftwareCatalog
+// POST   /api/logiciels  CreateSoftwareInput    : SoftwareDetail, 201 (409 slug ou keyPrefix déjà pris, code = champ)
+// GET    /api/logiciels/:slug                   : SoftwareDetail (liste des clés, sans la chaîne signée)
+// PATCH  /api/logiciels/:slug  UpdateSoftwareInput : SoftwareDetail (identifiant, format et préfixe immuables)
+// DELETE /api/logiciels/:slug                   : 204 (409 si une clé a été émise ; Tracebay jamais)
+// GET    /api/logiciels/:slug/vignette          : image/webp ; POST (multipart) : SoftwareDetail ; DELETE : SoftwareDetail
+// POST   /api/logiciels/:slug/cles              : LicenseDetail, 201 (503 sans clé de signature ; 503 erp_unavailable)
+// GET    /api/logiciels/:slug/cles/:id          : LicenseDetail (clé et contact déchiffrés)
+// PATCH  /api/logiciels/:slug/cles/:id          : LicenseDetail (notes, contact, client ERP seulement)
+// Pas de révocation : la vérification se fait hors ligne, l'expiration tient lieu de fin de droit.
 
 /** Calculé au jour de Paris : expirée le lendemain de « expire », bientôt expirée à 30 jours ou moins (jour inclus). */
 export type LicenseStatus = "active" | "expiring" | "expired";
@@ -667,11 +671,80 @@ export type LicenseStatus = "active" | "expiring" | "expired";
 export type SoftwareSummary = {
   slug: string;
   name: string;
+  /** "TB1" (Tracebay) ou "KZ1" (format générique, champ « logiciel » signé). */
   format: string;
+  /** Début de chaque clé émise ("TB1", "ATL1"...). */
+  keyPrefix: string;
+  description: string | null;
+  demoUrl: string | null;
+  releasesUrl: string | null;
+  /** Vignette servie par le hub (privée), null sans image envoyée. */
+  thumbnailUrl: string | null;
+  /** Clé de signature présente et lisible sur le serveur : émission possible. */
+  signing: boolean;
   counts: { active: number; expiring: number; expired: number };
+  /** Prochaine clé à expirer parmi les non expirées, null s'il n'y en a pas. */
+  nextExpiry: { expire: string; entreprise: string } | null;
 };
 
-export type SoftwareCatalog = { software: SoftwareSummary[] };
+export type SoftwareCatalog = { software: SoftwareSummary[]; today: string };
+
+export type CreateSoftwareInput = {
+  name: string;
+  slug: string;
+  keyPrefix: string;
+  description?: string | null;
+  demoUrl?: string | null;
+  releasesUrl?: string | null;
+};
+
+/** Champ vide ou null : effacé (sauf le nom, obligatoire). */
+export type UpdateSoftwareInput = Partial<Pick<CreateSoftwareInput, "name" | "description" | "demoUrl" | "releasesUrl">>;
+
+export type SoftwareField = keyof CreateSoftwareInput;
+/** Identifiant : minuscules, chiffres et tirets, 2 à 32 caractères ; nom du fichier de clé et champ signé « logiciel ». */
+export const SOFTWARE_SLUG_RE = /^[a-z][a-z0-9-]{0,30}[a-z0-9]$/;
+/** Préfixe des clés : 2 à 8 caractères, majuscule d'abord. TB1 et KZ1 réservés. */
+export const KEY_PREFIX_RE = /^[A-Z][A-Z0-9]{1,7}$/;
+export const RESERVED_KEY_PREFIXES: readonly string[] = ["TB1", "KZ1"];
+
+/**
+ * Contrôle d'un champ de la fiche logiciel, partagé par l'API et le formulaire. Vide : null (effacé), sauf nom,
+ * identifiant et préfixe, obligatoires. Adresses en https:// seulement.
+ */
+export function checkSoftwareField(field: SoftwareField, raw: string | null | undefined): { ok: true; value: string | null } | { ok: false; error: string } {
+  const value = (raw ?? "").trim();
+  const visible = field === "description" ? value.replace(/[\n\r\t]/g, " ") : value;
+  if (/[\u0000-\u001f\u007f]/.test(visible)) return { ok: false, error: "Caractères de contrôle interdits." };
+  if (field === "name") {
+    if (!value) return { ok: false, error: "Le nom est obligatoire." };
+    return value.length > 80 ? { ok: false, error: "80 caractères au plus." } : { ok: true, value };
+  }
+  if (field === "slug") {
+    if (!value) return { ok: false, error: "L'identifiant est obligatoire." };
+    return SOFTWARE_SLUG_RE.test(value) && !value.includes("--")
+      ? { ok: true, value }
+      : { ok: false, error: "2 à 32 caractères : minuscules, chiffres et tirets, en commençant par une lettre." };
+  }
+  if (field === "keyPrefix") {
+    if (!value) return { ok: false, error: "Le préfixe est obligatoire." };
+    if (RESERVED_KEY_PREFIXES.includes(value)) return { ok: false, error: `${value} est réservé : choisissez un autre préfixe.` };
+    return KEY_PREFIX_RE.test(value) ? { ok: true, value } : { ok: false, error: "2 à 8 caractères : majuscules et chiffres, en commençant par une lettre." };
+  }
+  if (!value) return { ok: true, value: null };
+  if (field === "description") return value.length > 500 ? { ok: false, error: "500 caractères au plus." } : { ok: true, value };
+  if (!/^https:\/\//i.test(value)) return { ok: false, error: "L'adresse doit commencer par https://." };
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return { ok: false, error: "Adresse invalide (exemple : https://www.domaine.fr)." };
+  }
+  if (value.length > 300 || url.username || url.password || !/^[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$/i.test(url.hostname)) {
+    return { ok: false, error: "Adresse invalide (exemple : https://www.domaine.fr)." };
+  }
+  return { ok: true, value: url.href };
+}
 
 export type LicenseSummary = {
   id: string;
@@ -691,13 +764,15 @@ export type SoftwareDetail = {
   software: SoftwareSummary;
   /** Clé de signature présente et lisible sur le serveur : émission possible. */
   signing: boolean;
+  /** Clé publique SPKI PEM à embarquer dans le logiciel, null sans clé de signature. */
+  publicKey: string | null;
   /** Jour de Paris du serveur (date d'émission d'une nouvelle clé). */
   today: string;
   licenses: LicenseSummary[];
 };
 
 export type LicenseDetail = LicenseSummary & {
-  /** Chaîne TB1 complète, en clair seulement dans ce détail. */
+  /** Clé signée complète (TB1 ou préfixe du logiciel), en clair seulement dans ce détail. */
   cle: string;
   contact: string | null;
 };

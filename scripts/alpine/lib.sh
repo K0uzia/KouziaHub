@@ -37,8 +37,10 @@ KH_ENV_FILE="${KH_APP_DIR}/.env"
 KH_TUNNEL_TOKEN_FILE="${KH_ETC_DIR}/tunnel.token"
 # Jeton GitHub en lecture seule (dépôt privé) : root:root 600, lu seulement par git_fetch_origin.
 KH_GITHUB_TOKEN_FILE="${KH_ETC_DIR}/github-token"
-# Clé privée Ed25519 des licences Tracebay (docs/licences-logiciels.md, section 4) : root:kouziahub 640, jamais remplacée.
+# Clés privées Ed25519 des licences, une par logiciel (docs/licences-logiciels.md, section 4) : <slug>-ed25519.pem,
+# root:kouziahub 640, jamais remplacées. Tracebay garde son fichier historique, de la même forme.
 KH_TRACEBAY_KEY_FILE="${KH_ETC_DIR}/tracebay-ed25519.pem"
+KH_LICENCE_KEY_GLOB="*-ed25519.pem"
 KH_LOCK_FILE="${KH_LOCK_FILE:-/run/kouziahub-ops.lock}"
 KH_REPO_URL="${KH_REPO_URL:-https://github.com/K0uzia/KouziaHub.git}"
 KH_REPO_BRANCH="${KH_REPO_BRANCH:-main}"
@@ -535,19 +537,26 @@ fix_service_dirs() {
   etc_dir_perms
 }
 
-# /etc/kouziahub : traversable par le groupe du service (710, sans lister), pour qu'il lise la clé de signature
-# Tracebay (640 root:kouziahub). Tout le reste (jetons du tunnel et de GitHub, phrase de passe, règle nftables,
-# fichiers temporaires), lu par root seul, n'a aucun droit de groupe ni d'autres : le dossier traversable ne doit
-# rien ouvrir d'autre.
+# /etc/kouziahub : traversable par le groupe du service (710, sans lister), pour qu'il lise les clés de signature
+# des licences (<slug>-ed25519.pem, 640 root:kouziahub, fichiers ordinaires seulement). Tout le reste (jetons du
+# tunnel et de GitHub, phrase de passe, règle nftables, fichiers temporaires), lu par root seul, n'a aucun droit de
+# groupe ni d'autres : le dossier traversable ne doit rien ouvrir d'autre.
 etc_dir_perms() {
   mkdir -p "$KH_ETC_DIR"
   chown -h "root:${KH_GROUP}" "$KH_ETC_DIR"
   chmod 710 "$KH_ETC_DIR"
-  find "$KH_ETC_DIR" -mindepth 1 -maxdepth 1 ! -name "$(basename "$KH_TRACEBAY_KEY_FILE")" -exec chmod go-rwx {} +
-  if [ -f "$KH_TRACEBAY_KEY_FILE" ]; then
-    chown -h "root:${KH_GROUP}" "$KH_TRACEBAY_KEY_FILE"
-    chmod 640 "$KH_TRACEBAY_KEY_FILE"
-  fi
+  find "$KH_ETC_DIR" -mindepth 1 -maxdepth 1 ! \( -type f -name "$KH_LICENCE_KEY_GLOB" \) -exec chmod go-rwx {} +
+  find "$KH_ETC_DIR" -mindepth 1 -maxdepth 1 -type f -name "$KH_LICENCE_KEY_GLOB" -exec chown "root:${KH_GROUP}" {} + -exec chmod 640 {} +
+}
+
+# Identifiant d'un logiciel (même règle que l'API) : 2 à 32 caractères, minuscules, chiffres, tirets isolés.
+valid_software_slug() {
+  printf '%s' "$1" | grep -Eqx '[a-z][a-z0-9-]{0,30}[a-z0-9]' && case "$1" in *--*) return 1 ;; esac
+}
+
+# licence_key_file <slug> : chemin de la clé privée d'un logiciel.
+licence_key_file() {
+  printf '%s/%s-ed25519.pem' "$KH_ETC_DIR" "$1"
 }
 
 # --- git en root : aucun crochet, aucun programme lancé par la configuration du dépôt ---
