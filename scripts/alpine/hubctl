@@ -49,6 +49,7 @@ Réglages (rien n'est affiché à l'écran)
   secrets [api|erp|access]    API Cloudflare (jeton, compte, zone), lien ERP, Cloudflare Access (facultatif)
   secrets veille              jeton de lecture des zones Cloudflare (détection des domaines à surveiller)
   secrets github              jeton GitHub en lecture seule (dépôt privé : nécessaire à update)
+  secrets php                 agent du CT des sites PHP : IP et secret partagé (README, section 11.8)
   licence-keygen <slug> [--public]
                               clé de signature des licences d'un logiciel (créée si absente, jamais remplacée)
   tracebay-keygen [--public]  même chose pour Tracebay (licence-keygen tracebay)

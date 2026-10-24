@@ -17,6 +17,7 @@ import { PushService } from "@/lib/push/service.js";
 import { generateReport, reportContext } from "@/lib/monitor/report.js";
 import { prisma } from "@/lib/prisma.js";
 import { backfillSiteTargets } from "@/lib/monitor/targets.js";
+import { phpAgentFromEnv, type PhpAgentClient } from "@/lib/php-agent/client.js";
 
 export type Services = {
   cloudflare: CloudflareGateway;
@@ -34,6 +35,8 @@ export type Services = {
   push: PushService;
   /** Zones Cloudflare (jeton séparé en lecture seule) pour proposer des cibles. */
   zones: ZonesDirectory;
+  /** Agent du CT des sites PHP (docs/cadrage.md, section 11), null tant qu'il n'est pas posé. */
+  phpAgent: PhpAgentClient | null;
   /** Minuteries des tâches de fond (startBackground). */
   timers: NodeJS.Timeout[];
   /** Arrête les minuteries et sondages, attend les opérations en cours (borné). */
@@ -52,6 +55,7 @@ export type ServicesOverrides = {
   monitor?: Partial<MonitorDeps>;
   push?: PushService;
   zones?: ZonesDirectory;
+  phpAgent?: PhpAgentClient | null;
 };
 
 /** Cloudflare réel si un jeton est posé, sinon simulé (persisté dans HUB_DATA_DIR/fake-cloudflare.json). */
@@ -94,6 +98,7 @@ export function createServices(overrides: ServicesOverrides = {}): Services {
   } as Services;
   services.push = overrides.push ?? new PushService();
   services.zones = overrides.zones ?? zonesFromEnv();
+  services.phpAgent = overrides.phpAgent !== undefined ? overrides.phpAgent : phpAgentFromEnv();
   services.monitor = new MonitorService({
     push: services.push,
     veille: overrides.monitor?.veille ?? veilleFromEnv(),

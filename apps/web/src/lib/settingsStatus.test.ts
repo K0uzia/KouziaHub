@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { MonitorOverview, OrphanReport, StorageUsage, SystemStatus } from "@hub/contract";
+import type { MonitorOverview, OrphanReport, PhpAgentState, PhpServerStatus, StorageUsage, SystemStatus } from "@hub/contract";
 import {
   cloudflareStatus,
   erpStatus,
+  phpServerStatus,
   journalStatus,
   notificationsStatus,
   reportsStatus,
@@ -112,5 +113,30 @@ describe("état des tuiles des Réglages", () => {
     expect(r("Kouzia", null, null)?.reason).toMatch(/^Aucun moyen de contact/);
     expect(r("Kouzia", "a@b.fr", null)?.level).toBe("ok");
     expect(r("Kouzia", null, "0612345678")).toMatchObject({ level: "ok", label: "Configuré" });
+  });
+});
+
+describe("serveur des sites PHP", () => {
+  const state: PhpAgentState = {
+    agentVersion: "1",
+    alpine: "3.22.2",
+    node: "22.23.4",
+    php: ["8.3"],
+    services: { nginx: "running", mariadb: "running", tunnel: "running", firewall: "running" },
+    cgroups: { result: "ok", checkedAt: "2026-10-24 11:50" },
+    lastUpgrade: "2026-10-20",
+    disk: null,
+    sites: 1,
+    time: "2026-10-24T12:00:00.000Z",
+  };
+  const status = (data: PhpServerStatus) => phpServerStatus({ data, error: null });
+
+  it("non installé, injoignable, service arrêté, mises à jour en retard, puis tout va bien", () => {
+    expect(status({ configured: false })?.level).toBe("todo");
+    expect(status({ configured: true, reachable: false, error: "Serveur des sites PHP injoignable." })).toMatchObject({ level: "error", reason: "Serveur des sites PHP injoignable." });
+    expect(status({ configured: true, reachable: true, state: { ...state, services: { ...state.services, tunnel: "stopped" } } })).toMatchObject({ level: "error", reason: "Arrêté ou absent : tunnel." });
+    expect(status({ configured: true, reachable: true, state: { ...state, lastUpgrade: "2026-10-01" } })?.level).toBe("todo");
+    expect(status({ configured: true, reachable: true, state: { ...state, lastUpgrade: null } })?.level).toBe("todo");
+    expect(status({ configured: true, reachable: true, state })).toMatchObject({ level: "ok", reason: "Joignable : PHP 8.3, 1 site." });
   });
 });

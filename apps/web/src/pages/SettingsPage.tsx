@@ -7,6 +7,7 @@ import { PageHeader } from "@/components/ui/Card";
 import { SecuritySection } from "@/components/settings/SecuritySection";
 import { NotificationsSection } from "@/components/settings/NotificationsSection";
 import { CloudflareTile, ErpTile } from "@/components/settings/ControlsSection";
+import { PhpServerTile } from "@/components/settings/PhpServerTile";
 import { StorageSection } from "@/components/settings/StorageSection";
 import { VeilleTile } from "@/components/settings/VeilleTile";
 import { AuditSection } from "@/components/settings/AuditSection";
@@ -36,6 +37,7 @@ export function SettingsPage() {
         <NotificationsSection />
         <CloudflareTile system={system} />
         <ErpTile system={system} />
+        <PhpServerTile />
         <VeilleTile />
         <ReportsSection />
         <StorageSection />

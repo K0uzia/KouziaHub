@@ -6,6 +6,7 @@
 #   hubctl secrets api       API Cloudflare : jeton, identifiant de compte, identifiant de zone
 #   hubctl secrets veille    jeton de lecture des zones (surveillance : détection des domaines)
 #   hubctl secrets github    jeton GitHub en lecture seule (dépôt privé, pour hubctl update)
+#   hubctl secrets php       agent du CT des sites PHP : IP et secret partagé
 #   hubctl secrets           les deux
 #   hubctl chromium          installer Chromium pour les vignettes automatiques (facultatif)
 #   hubctl licence-keygen <slug> [--public]  clé de signature des licences d'un logiciel (jamais remplacée)
@@ -195,6 +196,37 @@ EOF
   V=""
   if env_has ERP_BASE_URL && ! env_has HUB_READ_SECRET; then
     warn "Adresse de l'ERP posée sans secret : le hub refuse de démarrer tant que le secret manque."
+  fi
+}
+
+# --- Agent du CT des sites PHP (docs/cadrage.md, section 11 ; README, section 11) ---
+
+configure_php() {
+  title "Serveur des sites PHP (agent du CT kouziaphp)"
+  cat <<EOF
+  Le hub pilote le CT des sites PHP par son agent : port 8790, sur l'IP de ce CT dans le réseau local
+  du Proxmox (jamais par Internet). Le pare-feu Proxmox du CT PHP n'ouvre ce port qu'à l'IP de ce CT du hub.
+  Le secret partagé est généré dans le Shell du nœud Proxmox et posé dans les deux CT sans être affiché
+  (README, section 11.8). Saisie à la main : la même valeur que /etc/kouziaphp/agent.secret.
+  État : adresse de l'agent $(present PHP_AGENT_URL), secret $(present PHP_AGENT_SECRET).
+  Entrée sans rien saisir = garder la valeur actuelle.
+EOF
+  ask V "IP du CT des sites PHP sur le réseau local (ex. 192.168.1.40)"
+  if [ -n "$V" ]; then
+    printf '%s' "$V" | grep -Eq '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' || die "IP invalide (4 nombres séparés par des points). Rien n'a changé."
+    env_set PHP_AGENT_URL "http://${V}:8790"
+    ok "Adresse de l'agent enregistrée (port 8790)."
+  fi
+  ask_secret V "Secret partagé avec l'agent (invisible)"
+  if [ -n "$V" ]; then
+    printf '%s' "$V" | grep -Eq '^[A-Za-z0-9+/=_-]{32,200}$' \
+      || die "Secret invalide (${#V} caractères reçus, 32 au moins). Rien n'a changé."
+    env_set PHP_AGENT_SECRET "$V"
+    ok "Secret enregistré."
+  fi
+  V=""
+  if env_has PHP_AGENT_URL && ! env_has PHP_AGENT_SECRET; then
+    warn "Adresse de l'agent posée sans secret : le hub refuse de démarrer tant que le secret manque."
   fi
 }
 
@@ -446,6 +478,11 @@ case "$SECTION" in
   erp)
     [ -f "$KH_ENV_FILE" ] || die ".env absent : lancer « hubctl install »."
     configure_erp
+    restart_if_needed
+    ;;
+  php)
+    [ -f "$KH_ENV_FILE" ] || die ".env absent : lancer « hubctl install »."
+    configure_php
     restart_if_needed
     ;;
   veille)

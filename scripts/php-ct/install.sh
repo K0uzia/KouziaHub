@@ -20,13 +20,13 @@ title "Paquets"
 grep -Eq '^[^#].*/community/?$' /etc/apk/repositories || die "Dépôt « community » absent de /etc/apk/repositories (PHP s'y trouve) : décommenter sa ligne, puis relancer."
 apk update >/dev/null || die "apk update a échoué (réseau du CT ?)."
 apk_available "php${KP_PHP_DEFAULT}-fpm" || die "php${KP_PHP_DEFAULT}-fpm introuvable dans les dépôts : vérifier la branche d'Alpine et le dépôt community."
-_pkgs="nginx mariadb mariadb-client nftables curl ca-certificates logrotate php${KP_PHP_DEFAULT} php${KP_PHP_DEFAULT}-fpm"
+_pkgs="nginx mariadb mariadb-client nftables curl ca-certificates logrotate nodejs php${KP_PHP_DEFAULT} php${KP_PHP_DEFAULT}-fpm"
 for _ext in $KP_PHP_EXTENSIONS; do
   _pkgs="${_pkgs} php${KP_PHP_DEFAULT}-${_ext}"
 done
 # shellcheck disable=SC2086
 apk add --no-cache $_pkgs >/dev/null || die "Installation des paquets impossible : $(printf '%s' "$_pkgs")"
-ok "nginx, MariaDB, nftables et PHP ${KP_PHP_DEFAULT} (avec ses extensions) installés."
+ok "nginx, MariaDB, nftables, Node.js (agent) et PHP ${KP_PHP_DEFAULT} (avec ses extensions) installés."
 
 title "Dossiers"
 mkdir -p "$KP_ETC_DIR" "$KP_LOG_DIR" "$KP_STATE_DIR" "$KP_SITES_DIR" "$KP_LIB_DIR" "$KP_NGINX_SITES_DIR"
@@ -126,17 +126,22 @@ ok "MariaDB : socket local seulement, comptes anonymes et base de test retirés.
 title "Outil kouziaphpctl"
 # « kouziaphpctl install » relance la copie déjà installée : rien à recopier sur elle-même.
 if [ "$SCRIPT_DIR" != "$KP_LIB_DIR" ]; then
-  for _f in lib.sh install.sh firewall.sh cgroups.sh status.sh tunnel.sh kouziaphpctl; do
+  for _f in lib.sh install.sh firewall.sh cgroups.sh status.sh tunnel.sh agent.sh kouziaphpctl; do
     install -o root -g root -m 755 "${SCRIPT_DIR}/${_f}" "${KP_LIB_DIR}/${_f}"
   done
-  mkdir -p "${KP_LIB_DIR}/openrc"
-  for _f in kouziaphp-firewall cloudflared; do
+  mkdir -p "${KP_LIB_DIR}/openrc" "${KP_LIB_DIR}/agent"
+  install -o root -g root -m 644 "${SCRIPT_DIR}/agent/agent.mjs" "${KP_LIB_DIR}/agent/agent.mjs"
+  for _f in kouziaphp-firewall cloudflared kouziaphp-agent; do
     install -o root -g root -m 755 "${SCRIPT_DIR}/openrc/${_f}" "${KP_LIB_DIR}/openrc/${_f}"
   done
 fi
-for _f in kouziaphp-firewall cloudflared; do
+for _f in kouziaphp-firewall cloudflared kouziaphp-agent; do
   install -o root -g root -m 755 "${KP_LIB_DIR}/openrc/${_f}" "/etc/init.d/${_f}"
 done
+# Agent déjà réglé (réinstallation) : relancé sur la nouvelle copie. Sinon : kouziaphpctl agent (README, 11.8).
+if [ -s "${KP_ETC_DIR}/agent.secret" ]; then
+  rc_service kouziaphp-agent restart >/dev/null 2>&1 || warn "L'agent n'a pas redémarré : kouziaphpctl status"
+fi
 ln -sf "${KP_LIB_DIR}/kouziaphpctl" /usr/local/sbin/kouziaphpctl
 ok "kouziaphpctl installé (scripts copiés dans ${KP_LIB_DIR}, à root, lecture seule pour les autres)."
 

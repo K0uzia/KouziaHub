@@ -1,4 +1,4 @@
-import type { MonitorOverview, OrphanReport, StorageUsage, SystemStatus } from "@hub/contract";
+import type { MonitorOverview, OrphanReport, PhpAgentState, PhpServerStatus, StorageUsage, SystemStatus } from "@hub/contract";
 import { plural } from "@/lib/format";
 
 /** État d'une tuile des Réglages, en un coup d'œil : texte et icône, jamais la couleur seule. */
@@ -92,4 +92,34 @@ export function reportsStatus({ data, error: err }: Read<{ displayName: string |
   if (!name) return todo("Nom affiché absent du pied de page des rapports.");
   if (!contact) return todo("Aucun moyen de contact (e-mail ou téléphone) dans le pied de page des rapports.");
   return ok("Nom et contact imprimés en bas de chaque rapport.");
+}
+
+/** Mises à jour de sécurité du CT des sites PHP : alerte au-delà de 14 jours (comme kouziaphpctl status). */
+export const PHP_UPGRADE_MAX_DAYS = 14;
+
+const SERVICE_LABEL: Record<keyof PhpAgentState["services"], string> = {
+  nginx: "nginx",
+  mariadb: "MariaDB",
+  tunnel: "tunnel",
+  firewall: "pare-feu du CT",
+};
+
+/** Jours entiers entre deux dates AAAA-MM-JJ (ou ISO), null si l'une est illisible. */
+function daysBetween(from: string, to: string): number | null {
+  const a = Date.parse(from.slice(0, 10));
+  const b = Date.parse(to.slice(0, 10));
+  return Number.isNaN(a) || Number.isNaN(b) ? null : Math.round((b - a) / 86_400_000);
+}
+
+export function phpServerStatus({ data, error: err }: Read<PhpServerStatus>): TileStatus | null {
+  if (err && !data) return error("État du serveur des sites PHP illisible.");
+  if (!data) return null;
+  if (!data.configured) return todo("Pas encore installé : CT des sites PHP et son agent (README, section 11).");
+  if (!data.reachable) return error(data.error);
+  const s = data.state;
+  const stopped = (Object.keys(s.services) as Array<keyof PhpAgentState["services"]>).filter((k) => s.services[k] !== "running");
+  if (stopped.length) return error(`Arrêté ou absent : ${stopped.map((k) => SERVICE_LABEL[k]).join(", ")}.`);
+  const age = s.lastUpgrade ? daysBetween(s.lastUpgrade, s.time) : null;
+  if (age === null || age > PHP_UPGRADE_MAX_DAYS) return todo("Mises à jour de sécurité en retard : kouziaphpctl upgrade dans le CT.");
+  return ok(`Joignable : PHP ${s.php.join(", ") || "absent"}, ${plural(s.sites, "site", "sites")}.`);
 }

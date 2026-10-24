@@ -35,6 +35,7 @@ export async function buildTestHub(
     monitor?: ServicesOverrides["monitor"];
     push?: ServicesOverrides["push"];
     zones?: ServicesOverrides["zones"];
+    phpAgent?: ServicesOverrides["phpAgent"];
   } = {},
 ): Promise<TestHub> {
   const cf = (opts.cloudflare as FakeCloudflare | undefined) ?? new FakeCloudflare();
@@ -49,6 +50,8 @@ export async function buildTestHub(
     monitor: { fetch: refusingFetch, speed: async () => ({ available: false, reason: "test" }), ...opts.monitor },
     ...(opts.push ? { push: opts.push } : {}),
     ...(opts.zones ? { zones: opts.zones } : {}),
+    // Serveur des sites PHP : jamais lu depuis l'environnement du poste.
+    phpAgent: opts.phpAgent ?? null,
   });
   const app = await buildApp({ silent: true, serveStatic: false, accessVerifier: null, services });
   if (!(await prisma.user.findUnique({ where: { email: TEST_EMAIL } }))) await createAdmin();
