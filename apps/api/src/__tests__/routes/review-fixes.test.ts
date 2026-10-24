@@ -165,13 +165,16 @@ describe("P2-5 : fichiers de développement retirés de l'export", () => {
     ]);
     // Outillage du projet : refusé dès l'envoi depuis le 19/10/2026 (il n'entre plus dans la version).
     const refused = (sent.json() as { rejected: Array<{ path: string; reason: string }> }).rejected;
-    expect(refused.map((r) => r.path).sort()).toEqual([".editorconfig", ".npmrc", "package-lock.json", "package.json", "pnpm-lock.yaml", "tsconfig.app.json", "yarn.lock"]);
-    expect(refused.every((r) => /Fichier de développement refusé/.test(r.reason))).toBe(true);
+    // Fichiers du dépôt (README, .gitignore) : refusés dès l'envoi depuis le 24/10/2026.
+    expect(refused.map((r) => r.path).sort()).toEqual([".editorconfig", ".gitignore", ".npmrc", "README.md", "package-lock.json", "package.json", "pnpm-lock.yaml", "tsconfig.app.json", "yarn.lock"]);
+    const repo = refused.filter((r) => r.path === "README.md" || r.path === ".gitignore");
+    expect(repo.every((r) => /Fichier du dépôt refusé/.test(r.reason))).toBe(true);
+    expect(refused.filter((r) => !repo.includes(r)).every((r) => /Fichier de développement refusé/.test(r.reason))).toBe(true);
     await publish();
     const s = await summary();
     const removed = s.issues.find((i) => i.code === "dev_files_removed")!;
     expect(removed.paths.sort()).toEqual(
-      [".gitignore", "README.md", "assets/.cache-info", "docs/guide.markdown"].sort(),
+      ["assets/.cache-info", "docs/guide.markdown"].sort(),
     );
     const files = await unzip((await hub.app.inject({ method: "GET", url: `/api/sites/${siteId}/export`, headers: hub.headers })).rawPayload);
     expect(files.has(".well-known/security.txt")).toBe(true);
