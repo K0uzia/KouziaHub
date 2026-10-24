@@ -541,6 +541,162 @@ Côté Worker, un schéma D1 de 4 tables, versionné dans le dépôt et appliqu�
 
 ---
 
+## 11. Sites dynamiques en PHP (cadrage du 24/10/2026, en attente d'accord)
+
+Demande d'Alexandre : le hub héberge aussi les versions de travail des sites PHP, MyTakumi d'abord (PHP 8.2 ou plus, MySQL en production, SQLite en développement, une tâche planifiée toutes les 15 minutes). Tout reste sur le seul Proxmox d'Alexandre, aucune autre machine. Rien n'est écrit tant que ce cadrage n'est pas validé.
+
+### 11.1 Principe
+
+```
+Navigateur ──► Cloudflare ──► tunnel « sites PHP » ──► CT « kouziaphp » (Alpine)
+                                                         nginx ─► PHP-FPM (un pool par site)
+                                                         MariaDB (une base par site)
+                                                         agent kouziaphp (port local, appelé par le hub seul)
+CT « kouziahub » (hub) ── réseau du Proxmox, port de l'agent ──┘
+```
+
+- Un CT dédié, **kouziaphp**, distinct du hub et de l'ERP. Le CT du hub garde seul le jeton Cloudflare, les clés de licence et la base du hub : le code des clients ne tourne jamais à côté.
+- Le hub pilote ce CT par un **agent** : petit service sur le CT PHP, qui n'accepte qu'une liste fermée d'opérations (créer un site, déposer une version, basculer, couper, lire les journaux...), signées par un secret partagé, sur le réseau du Proxmox, port ouvert au seul CT du hub par le pare-feu Proxmox. Même modèle que le lien hub vers ERP (section 3). Pas de SSH, pas de commande libre.
+- L'agent ne reçoit jamais le jeton Cloudflare. Le DNS des sites reste créé par le hub, comme aujourd'hui.
+
+### 11.2 Isolation
+
+- **CT non privilégié**, sans imbrication, avec des limites globales posées dans Proxmox (cœurs, mémoire, disque). Une évasion du conteneur reste le risque le plus grave (11.8) ; le non-privilégié la rend nettement plus difficile.
+- **Aucun accès au réseau d'Alexandre.** Deux couches, parce que le code client tourne dans ce CT :
+  1. **Pare-feu Proxmox sur l'interface du CT** (le root du CT ne peut pas le retirer) : sortie refusée vers `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`, `169.254.0.0/16`, sauf la passerelle pour le DNS ; sortie SMTP (25, 465, 587) refusée ; entrée seulement depuis l'IP du CT du hub, vers le port de l'agent.
+  2. **nftables dans le CT**, par compte : les comptes des sites ne peuvent joindre ni l'agent, ni MariaDB par le réseau (socket local seulement), ni le LAN.
+  - Un **VLAN dédié** (pont Proxmox séparé) est plus propre si la box et le switch le permettent. *Recommandation : pare-feu Proxmox d'abord (rien à acheter), VLAN plus tard si Alexandre en a l'usage.*
+  - Sortie Internet en HTTPS laissée ouverte par défaut (API de paiement en mode test, polices, webhooks). Elle peut être fermée site par site.
+- **Par site** :
+  - un compte système `php-<slug>`, sans shell ni mot de passe ;
+  - un dossier `/srv/sites/<slug>/` (versions, `shared/`, `tmp/`, sessions, journaux), illisible des autres sites ;
+  - un pool PHP-FPM à lui, sous ce compte, avec `open_basedir` limité à son dossier, `sys_temp_dir` et `session.save_path` à lui, `allow_url_include` coupé et `expose_php` coupé ;
+  - `disable_functions` : `exec`, `passthru`, `shell_exec`, `system`, `proc_open`, `popen`, `pcntl_exec`, `dl`. `putenv` reste permis, car des bibliothèques de `.env` s'en servent.
+- **Limites par site** :
+  - **mémoire PHP** : `memory_limit` 256 Mo par requête ;
+  - **nombre de processus** : 4 au plus (`pm = ondemand`), arrêtés à l'inactivité ;
+  - **durée d'une requête** : 30 s au plus (`request_terminate_timeout`) ;
+  - **envois de fichiers** : taille plafonnée.
+  - **CPU et mémoire au niveau du système** : un service OpenRC par site (un PHP-FPM par site plutôt qu'un seul maître à plusieurs pools) permet un groupe de contrôle par site (`rc_cgroup_settings`). Cela suppose que le CT non privilégié laisse écrire ses cgroups : **à vérifier sur le Proxmox au lot 1**. À défaut, on reste aux limites PHP ci-dessus et aux limites globales du CT.
+  - **Disque** : pas de quota système fiable dans un CT. Le hub plafonne la taille à l'envoi et mesure chaque nuit les fichiers et la base de chaque site, avec une alerte au-delà d'un seuil. Le disque du CT reste la limite dure.
+
+### 11.3 Pile
+
+- **Serveur web : nginx** (paquet apk `nginx`).
+  - Caddy apporte surtout des certificats automatiques, inutiles derrière le tunnel Cloudflare.
+  - nginx est léger, éprouvé avec PHP-FPM, et produit une configuration par site simple à générer et à vérifier (`nginx -t` avant chaque rechargement).
+  - Un bloc `server` par site, dont la racine est le dossier public choisi (`public/` pour MyTakumi), jamais la racine du projet.
+  - Règles de base :
+    - fichiers cachés, `.env`, `composer.*`, `vendor/`, journaux et sauvegardes refusés (403), comme le `_worker.js` des sites statiques ;
+    - seuls les `.php` du dossier public sont exécutés ;
+    - un site absent répond 404.
+- **PHP** : paquets apk de la branche installée. Alpine 3.22 (dépôt community) fournit `php82`, `php83` et `php84`, chacun avec son `-fpm`.
+  - La version se choisit par site parmi celles installées.
+  - MyTakumi : 8.3 proposée (8.2 ou plus demandé, 8.2 sort du support de sécurité avant les autres).
+  - Les extensions sont installées à la demande, sur une liste connue : `pdo_mysql`, `mbstring`, `intl`, `gd`, `zip`, `opcache`...
+- **MariaDB** (paquets `mariadb`, `mariadb-client`), dans le même CT, écoute sur le socket local seulement.
+  - Une base et un compte par site, droits limités à sa base, nombre de connexions plafonné.
+  - Le mot de passe est généré par l'agent, transmis au hub et chiffré au repos comme les autres secrets, puis écrit dans le `.env` du site.
+- **Sauvegardes** :
+  - un `mariadb-dump` par site chaque nuit, chiffré avec la phrase de passe des sauvegardes du hub, 14 jours gardés ;
+  - les fichiers des versions sont déjà gardés par le hub ;
+  - en plus, la sauvegarde Proxmox du CT entier (Datacenter > Backup).
+
+### 11.4 Exposition
+
+- **Un tunnel Cloudflare propre au CT PHP**, distinct de celui du hub et de celui de l'ERP. Son entrée accepte `*.kouzia.com` vers nginx ; c'est le DNS qui décide quels noms arrivent à ce tunnel.
+- Le hub crée `<client>.kouzia.com` en CNAME vers ce tunnel (`<id>.cfargotunnel.com`), avec le jeton qu'il a déjà (DNS Edit). Pas de nouveau droit Cloudflare.
+- **noindex** comme les sites statiques : `X-Robots-Tag: noindex, nofollow` et `robots.txt` en `Disallow: /` servis par nginx, l'option « Autoriser l'indexation » restant possible par site (cinquième série).
+- **Interrupteur on/off** comme aujourd'hui : « couper » retire le CNAME (l'adresse ne répond plus), puis désactive le bloc nginx et arrête le pool. « Rallumer » fait l'inverse, sans délai de certificat (le certificat est celui de Cloudflare sur `kouzia.com`).
+- La surveillance (section 10) s'applique telle quelle : c'est une adresse HTTPS.
+
+### 11.5 Pilotage depuis le hub
+
+- **Création** : « Nouveau site », avec un choix « Statique (Cloudflare Pages) » ou « PHP (serveur Kouzia) ». Pour PHP : version de PHP, dossier public (`public/` proposé si présent), base de données oui ou non.
+- **Fichiers** : mêmes outils qu'aujourd'hui (zip, explorateur, envoi par morceaux).
+  - Les règles d'envoi changent pour un site PHP : les `.php`, `composer.json` et `vendor/` sont acceptés. `.env`, `.git`, `.claude/`, `node_modules/` et les README restent refusés.
+  - La détection de l'envoi dira alors « Site dynamique : à publier comme site PHP » et proposera de changer le type du site.
+  - Composer n'est jamais lancé sur le serveur : Alexandre envoie le projet avec son `vendor/`, construit sur son PC.
+- **Variables d'environnement** : écran « Variables » par site (clé et valeur, valeurs masquées), chiffrées dans la base du hub.
+  - L'agent écrit `/srv/sites/<slug>/shared/.env` (lisible du seul compte du site), hors du dossier public, jamais publié ni téléchargeable.
+  - `DB_*` est rempli d'office.
+  - Garde-fou : une valeur qui ressemble à une clé de paiement réelle (`sk_live_`, `pk_live_`, `rk_live_`...) est refusée (11.6).
+- **Base de données** :
+  - « Importer un fichier SQL » (`.sql` ou `.sql.gz`), exécuté avec le compte du site ;
+  - « Exporter » (téléchargement d'un dump) ;
+  - « Réinitialiser » (vider la base, avec double confirmation).
+  - Pas de console SQL libre dans le hub.
+- **Journaux** : erreurs PHP, journal lent et erreurs nginx du site, les dernières centaines de lignes, consultables et téléchargeables. Rotation chaque nuit.
+- **Tâche planifiée** : une ligne par site, faite d'un script du projet (chemin relatif, ex. `bin/cron.php`) et d'une fréquence choisie dans une liste (5, 15, 30, 60 minutes, quotidienne).
+  - Elle est lancée par crond sous le compte du site, avec durée maximale et verrou anti-chevauchement.
+  - Dernière exécution et code de sortie visibles.
+  - Coupée quand le site est coupé.
+- **Versions et retour arrière** :
+  - Chaque publication devient un dossier `releases/<n>/` ; un lien `current` bascule de façon atomique, puis PHP-FPM est rechargé sans coupure.
+  - Retour arrière : basculer `current` sur une version précédente, en un clic.
+  - Limite : la base ne revient pas en arrière avec le code. Le hub propose un dump automatique de la base avant chaque publication, qu'on peut restaurer avec la version, après confirmation. Les 5 dernières versions sont gardées sur le CT PHP ; le hub garde les autres comme aujourd'hui.
+
+### 11.6 E-mails et paiements
+
+- **Jamais de vrai envoi d'e-mail** depuis une version de travail :
+  - `sendmail_path` de chaque pool pointe vers un capteur de l'agent, qui range le message dans le dossier du site (100 derniers gardés) ;
+  - pour les applications qui parlent SMTP, le capteur écoute aussi sur `127.0.0.1:1025`, et le `.env` reçoit `MAIL_HOST`/`MAIL_PORT` vers lui ;
+  - le pare-feu bloque de toute façon le SMTP sortant ;
+  - écran « E-mails capturés » dans la fiche, pour vérifier les envois sans les envoyer.
+  - Mailpit n'existe pas dans les paquets Alpine (vérifié le 24/10/2026) : le capteur fait partie de l'agent.
+- **Paiements en mode test seulement** : clés `live` refusées à la saisie des variables, bandeau « mode test » rappelé dans la fiche. Les webhooks de test arrivent par l'adresse du site comme une requête normale.
+
+### 11.7 Ressources (estimation par site, à mesurer sur MyTakumi)
+
+| Poste | Au repos | En usage (recette) |
+|---|---|---|
+| PHP-FPM (ondemand, 4 processus au plus) | 0 à 30 Mo | 150 à 250 Mo |
+| MariaDB (part du site) | quelques Mo | 20 à 50 Mo |
+| Disque (code, 5 versions, base, journaux) | 0,5 à 3 Go | |
+| CPU | nul | pointes courtes, 1 cœur |
+
+CT de départ : 2 cœurs, 2 Go de RAM (dont environ 256 Mo pour le tampon de MariaDB), 30 Go de disque. Cela suffit pour 3 à 5 sites en recette, peu fréquentés. À revoir avec la mesure réelle de MyTakumi au lot 5.
+
+### 11.8 Risques et mesures
+
+| Risque | Mesure |
+|---|---|
+| Faille dans le code d'un client (exécution de code, envoi de fichier piégé) | Compte et pool propres au site, `open_basedir`, fonctions de commande coupées, seuls les `.php` du dossier public exécutés, pas d'écriture dans `releases/` (lecture seule pour le site, écriture seulement dans `shared/` et `tmp/`) |
+| Un site lit un autre site ou sa base | Comptes séparés, droits des dossiers, sessions et fichiers temporaires séparés, un compte MariaDB par base |
+| Rebond vers le réseau d'Alexandre (box, NAS, ERP, hub) | Pare-feu Proxmox sur l'interface du CT, que le CT ne peut pas modifier ; nftables par compte dans le CT ; VLAN en option |
+| Évasion du conteneur (faille du noyau) | CT non privilégié, mises à jour du noyau Proxmox par Alexandre, rien de sensible dans le CT PHP (ni jeton Cloudflare, ni clés de licence, ni base du hub) |
+| CT détourné pour envoyer du spam ou attaquer d'autres sites | SMTP sortant bloqué, sortie vers le LAN bloquée, sortie HTTPS fermable par site, journal des requêtes sortantes à étudier si besoin |
+| Saturation du Proxmox | Limites du CT dans Proxmox, limites PHP par site, groupes de contrôle par site si possible (11.2), alerte disque |
+| Agent détourné (il agit en root sur le CT PHP) | Liste fermée d'opérations, chaque paramètre validé (slug, chemins, versions de PHP connues), requêtes signées et horodatées, port ouvert au seul hub, journal de chaque opération dans le hub |
+| Code source ou `.env` téléchargeable | Racine web limitée au dossier public, `.env` dans `shared/`, règles nginx de refus, contrôle automatique après chaque publication (demande de `/.env`, `/composer.json`, `/vendor/` : 403 ou 404 attendu, sinon alerte et site coupé) |
+| Vrais e-mails ou vrais paiements depuis une recette | Capteur d'e-mails, SMTP bloqué, clés `live` refusées |
+| Versions de PHP ou paquets non corrigés | `kouziaphp upgrade` (apk upgrade dans la branche installée, comme `system_upgrade` du hub), signalé dans le hub ; alerte si une version de PHP utilisée sort du support de sécurité ; changement de branche Alpine à la main, une fois par an |
+| Indexation d'une recette | noindex par défaut, comme les sites statiques |
+
+**Mises à jour de sécurité** : un outil `kouziaphpctl` sur le CT PHP, copié de `hubctl` (install, update, status, upgrade, backup). `upgrade` lance `apk update` puis `apk upgrade` dans la branche installée, vérifie `nginx -t` et `php-fpm -t`, redémarre nginx, les pools et MariaDB, et écrit le résultat. Le hub affiche la date de la dernière mise à jour et une alerte au-delà de 14 jours.
+
+### 11.9 Découpage en lots
+
+| Lot | Contenu | Ce qu'Alexandre fait lui-même |
+|---|---|---|
+| **P0. Décisions** | Valider ce cadrage et les questions de 11.10 ; sixième série ajoutée aux règles du dépôt | Répondre aux questions |
+| **P1. CT PHP** | Scripts Alpine de `kouziaphpctl` (installation, nginx, PHP, MariaDB, nftables, tunnel, mises à jour, état), vérification des cgroups dans le CT | Créer le CT non privilégié, le pare-feu Proxmox sur son interface, le tunnel « sites PHP » et coller son jeton |
+| **P2. Agent et lien avec le hub** | Agent (opérations fermées, signature, journal), client dans le hub, secret partagé, contrôle de l'état | Poser le secret dans les deux `.env`, ouvrir le port de l'agent au seul hub dans le pare-feu Proxmox |
+| **P3. Site PHP dans le hub** | Type de site « PHP », création, DNS vers le tunnel, on/off, noindex, fichiers (règles d'envoi propres au PHP), dossier public, publication par versions et retour arrière, contrôle anti-fuite après publication | Rien |
+| **P4. Variables et base** | Écran des variables (chiffrées, clés `live` refusées), création de la base, import, export, réinitialisation, dump avant publication, sauvegarde de nuit | Rien |
+| **P5. Exploitation et MyTakumi** | Journaux, tâche planifiée, e-mails capturés, mesure disque et alertes, mesure des ressources ; mise en ligne de MyTakumi en recette | Envoyer MyTakumi avec son `vendor/`, son dump SQL et ses variables de test |
+
+### 11.10 Questions pour Alexandre
+
+1. **Réseau** : pare-feu Proxmox sur l'interface du CT (recommandé pour commencer) ou VLAN dédié dès maintenant ?
+2. **Sortie Internet** des sites PHP : ouverte en HTTPS par défaut (recommandé, fermable par site), ou fermée par défaut ?
+3. **Version de PHP** de MyTakumi : 8.3 (recommandé) ou 8.2 ?
+4. **MyTakumi a-t-il besoin d'appels sortants** (API de paiement, de cartes, d'e-mail transactionnel) ? Lesquels, pour les prévoir en mode test ?
+5. **Retour arrière de la base** : dump automatique avant chaque publication (recommandé), ou code seul ?
+6. **Taille du CT** : 2 cœurs, 2 Go de RAM, 30 Go de disque conviennent-ils au Proxmox actuel ?
+
+---
+
 ## Sources (consultées le 17/10/2026)
 
 Cloudflare (documentation officielle) :
