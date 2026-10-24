@@ -1,0 +1,28 @@
+#!/sbin/openrc-run
+# OpenRC : pare-feu de sortie des comptes des sites PHP (table nftables « inet kouziaphp » seule, le reste du
+# pare-feu du CT n'est pas touché). Règle écrite par kouziaphpctl : /etc/kouziaphp/nftables.nft
+
+description="Sites PHP : sortie réseau des comptes des sites filtrée"
+
+: "${KP_NFT_FILE:=/etc/kouziaphp/nftables.nft}"
+
+depend() {
+  need net
+  before nginx
+}
+
+start() {
+  ebegin "Pare-feu des sites PHP (table inet kouziaphp)"
+  if [ ! -f "$KP_NFT_FILE" ]; then
+    eend 1 "Règle absente : $KP_NFT_FILE (kouziaphpctl firewall)"
+    return 1
+  fi
+  nft -f "$KP_NFT_FILE" && nft list table inet kouziaphp | grep -q "jump sites"
+  eend $? "Pose refusée (CT non privilégié ? la règle Proxmox reste la protection principale)"
+}
+
+stop() {
+  ebegin "Retrait du pare-feu des sites PHP"
+  nft delete table inet kouziaphp 2>/dev/null
+  eend 0
+}

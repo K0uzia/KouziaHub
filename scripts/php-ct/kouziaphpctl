@@ -1,0 +1,81 @@
+#!/bin/sh
+# Outil du CT des sites PHP (docs/cadrage.md, section 11 ; README, section 9). Copié de hubctl pour l'esprit :
+# une commande, des sous-commandes en français, rien d'affiché qui soit secret.
+set -eu
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+# shellcheck source=lib.sh
+. "${SCRIPT_DIR}/lib.sh"
+
+usage() {
+  cat <<EOF
+kouziaphpctl : CT des sites PHP du hub Kouzia
+
+  install      installer ou réparer nginx, PHP, MariaDB, pare-feu du CT, outil (rejouable)
+  tunnel       coller le jeton du tunnel Cloudflare « kouziaphp »
+  firewall     reposer le pare-feu du CT (comptes des sites)
+  cgroups      contrôler les limites CPU, mémoire et processus par site
+  upgrade      mises à jour de sécurité (apk upgrade dans la version d'Alpine installée)
+  status       état du CT
+EOF
+}
+
+# Mise à jour de sécurité : paquets de la branche installée, vérification des configurations, puis
+# redémarrage des services touchés. Le changement de branche d'Alpine reste manuel (une fois par an).
+upgrade() {
+  require_root
+  ops_lock
+  title "Mises à jour de sécurité"
+  apk update >/dev/null 2>&1 || die "apk update a échoué (réseau ou dépôt) : rien n'a changé."
+  _list="$(apk version -l '<' 2>/dev/null | sed '1d')"
+  mkdir -p "$KP_LOG_DIR" "$KP_STATE_DIR"
+  if [ -z "$_list" ]; then
+    ok "Système déjà à jour."
+  else
+    _slog="${KP_LOG_DIR}/system-upgrade.log"
+    {
+      echo "== $(date '+%Y-%m-%d %H:%M:%S') : apk upgrade =="
+      printf '%s\n' "$_list"
+    } >> "$_slog"
+    printf '%s\n' "$_list" | sed 's/^/  /'
+    apk upgrade --no-cache >> "$_slog" 2>&1 || die "apk upgrade a échoué : détail dans ${_slog}."
+    ok "$(printf '%s\n' "$_list" | wc -l | tr -d ' ') paquet(s) mis à jour (liste dans ${_slog})."
+    if nginx -t >/dev/null 2>&1; then
+      rc_service nginx restart >/dev/null 2>&1 || warn "nginx n'a pas redémarré : rc-service nginx start"
+    else
+      warn "Configuration nginx refusée après la mise à jour : nginx garde l'ancienne en mémoire (nginx -t pour le détail)."
+    fi
+    if printf '%s\n' "$_list" | grep -q '^mariadb-'; then
+      rc_service mariadb restart >/dev/null 2>&1 || warn "MariaDB n'a pas redémarré : rc-service mariadb start"
+    fi
+    # Pools PHP-FPM des sites (lot P3) : un service par site, nommé php-fpm<version>.<slug>.
+    for _s in /etc/init.d/php-fpm*.*; do
+      [ -f "$_s" ] || continue
+      _name="$(basename "$_s")"
+      if rc-service "$_name" status >/dev/null 2>&1; then
+        rc_service "$_name" restart >/dev/null 2>&1 || warn "${_name} n'a pas redémarré."
+      fi
+    done
+    if service_running "$KP_TUNNEL_SERVICE"; then
+      rc_service "$KP_TUNNEL_SERVICE" restart >/dev/null 2>&1 || warn "Le tunnel n'a pas redémarré : rc-service cloudflared start"
+    fi
+    if printf '%s\n' "$_list" | grep -q '^nftables-'; then
+      rc_service "$KP_FIREWALL_SERVICE" restart >/dev/null 2>&1 || warn "Pare-feu du CT non reposé : kouziaphpctl firewall"
+    fi
+    if printf '%s\n' "$_list" | grep -q '^busybox-'; then
+      rc_service crond restart >/dev/null 2>&1 || true
+    fi
+  fi
+  date '+%Y-%m-%d' > "${KP_STATE_DIR}/last-upgrade"
+}
+
+case "${1:-}" in
+  install) require_root; exec sh "${SCRIPT_DIR}/install.sh" ;;
+  tunnel) exec sh "${SCRIPT_DIR}/tunnel.sh" ;;
+  firewall) require_root; exec sh "${SCRIPT_DIR}/firewall.sh" ;;
+  cgroups) require_root; exec sh "${SCRIPT_DIR}/cgroups.sh" ;;
+  upgrade) upgrade ;;
+  status) exec sh "${SCRIPT_DIR}/status.sh" ;;
+  ""|-h|--help|help) usage ;;
+  *) usage; exit 1 ;;
+esac

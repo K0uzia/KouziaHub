@@ -1,0 +1,49 @@
+#!/sbin/openrc-run
+# OpenRC : tunnel Cloudflare du CT des sites PHP (propre à ce CT, distinct de ceux du hub et de l'ERP).
+# Jeton : /etc/kouziaphp/tunnel.token (600, root), posé par « kouziaphpctl tunnel ».
+
+description="Tunnel Cloudflare des sites PHP"
+
+: "${KP_TUNNEL_TOKEN_FILE:=/etc/kouziaphp/tunnel.token}"
+: "${KP_LOG_DIR:=/var/log/kouziaphp}"
+
+name="cloudflared"
+command="/usr/local/bin/cloudflared"
+command_args="tunnel --no-autoupdate run"
+# Le jeton est lu ici en root puis passé par l'environnement (TUNNEL_TOKEN) : jamais sur la ligne
+# de commande visible dans la liste des processus. cloudflared tourne ensuite sans droits.
+command_user="nobody"
+supervisor=supervise-daemon
+respawn_delay=10
+respawn_max=0
+
+output_log="${KP_LOG_DIR}/cloudflared.log"
+error_log="${KP_LOG_DIR}/cloudflared.err"
+
+depend() {
+  need net
+  after nginx
+}
+
+start_pre() {
+  checkpath -d -o root:root -m 0755 "$KP_LOG_DIR"
+  checkpath -f -o nobody -m 0640 "$output_log" "$error_log"
+  if [ ! -x "$command" ]; then
+    eerror "cloudflared introuvable : $command (kouziaphpctl tunnel)"
+    return 1
+  fi
+  if [ ! -s "$KP_TUNNEL_TOKEN_FILE" ]; then
+    eerror "Jeton du tunnel absent : $KP_TUNNEL_TOKEN_FILE (kouziaphpctl tunnel)"
+    return 1
+  fi
+  TUNNEL_TOKEN="$(tr -d '\r\n' < "$KP_TUNNEL_TOKEN_FILE")"
+  if [ -z "$TUNNEL_TOKEN" ]; then
+    eerror "Jeton du tunnel vide : $KP_TUNNEL_TOKEN_FILE (kouziaphpctl tunnel)"
+    return 1
+  fi
+  export TUNNEL_TOKEN
+}
+
+start_post() {
+  unset TUNNEL_TOKEN
+}

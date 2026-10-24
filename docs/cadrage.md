@@ -640,13 +640,25 @@ CT « kouziahub » (hub) ── réseau du Proxmox, port de l'agent ──┘
 
 ### 11.6 E-mails et paiements
 
-- **Jamais de vrai envoi d'e-mail** depuis une version de travail :
+But : tester en conditions réelles, sans jamais toucher un vrai client ni un vrai paiement.
+
+- **Jamais d'envoi direct d'e-mail** depuis le CT PHP :
   - `sendmail_path` de chaque pool pointe vers un capteur de l'agent, qui range le message dans le dossier du site (100 derniers gardés) ;
   - pour les applications qui parlent SMTP, le capteur écoute aussi sur `127.0.0.1:1025`, et le `.env` reçoit `MAIL_HOST`/`MAIL_PORT` vers lui ;
   - le pare-feu bloque de toute façon le SMTP sortant ;
-  - écran « E-mails capturés » dans la fiche, pour vérifier les envois sans les envoyer.
   - Mailpit n'existe pas dans les paquets Alpine (vérifié le 24/10/2026) : le capteur fait partie de l'agent.
-- **Paiements en mode test seulement** : clés `live` refusées à la saisie des variables, bandeau « mode test » rappelé dans la fiche. Les webhooks de test arrivent par l'adresse du site comme une requête normale.
+- **Écran « E-mails capturés »** dans la fiche du site :
+  - liste (date, expéditeur, destinataire d'origine, objet, pièces jointes) ;
+  - pour chaque e-mail : rendu HTML réel dans un cadre isolé (`iframe` en `sandbox` sans scripts, CSP qui bloque les ressources distantes, affichées seulement sur demande), version texte, en-têtes complets, pièces jointes téléchargeables ;
+  - aperçu en largeur téléphone et ordinateur.
+- **Option par site « Rediriger les e-mails vers mon adresse »** (coupée par défaut) :
+  - chaque e-mail capturé est aussi réellement envoyé, mais seulement aux adresses autorisées : celle d'Alexandre par défaut, celle du client du site en option (lue dans l'ERP) ;
+  - jamais au destinataire d'origine : il est indiqué dans l'objet (« [recette pour client@exemple.fr] ... ») et dans un en-tête `X-Kouzia-Original-To` ;
+  - l'envoi part du **hub**, par son propre compte SMTP, jamais du CT PHP, qui garde son SMTP bloqué ; l'agent remet l'e-mail capturé au hub, qui le réécrit et l'envoie ;
+  - bouton « Envoyer à mon adresse » sur chaque e-mail capturé, même sans l'option.
+  - Le hub n'avait pas d'envoi d'e-mail jusqu'ici : un compte SMTP (adresse, serveur, mot de passe) est ajouté à ses réglages, chiffré comme les autres secrets, posé par Alexandre.
+- **Relève IMAP** (MyTakumi lit la boîte de la boutique) : coupée par défaut ; activable par site, ce qui ouvre le port 993 pour le seul compte de ce site (ensemble `imap_open` du pare-feu du CT). Le hub rappelle que la recette lira alors la vraie boîte.
+- **Paiements en mode test seulement**, mais complets : les clés de test Stripe (`sk_test_`, `pk_test_`, `whsec_`) fonctionnent pleinement, paiement de test de bout en bout et webhooks de test vers l'adresse du site (sortie HTTPS vers `api.stripe.com` ouverte, webhooks entrants par le tunnel comme toute requête). Seules les clés `live` (`sk_live_`, `pk_live_`, `rk_live_`) sont refusées à la saisie. Bandeau « mode test » dans la fiche.
 
 ### 11.7 Ressources (estimation par site, à mesurer sur MyTakumi)
 
@@ -685,8 +697,8 @@ CT de départ : 2 cœurs, 2 Go de RAM (dont environ 256 Mo pour le tampon de Mar
 | **P1. CT PHP** | Scripts Alpine de `kouziaphpctl` (installation, nginx, PHP, MariaDB, nftables, tunnel, mises à jour, état), vérification des cgroups dans le CT | Créer le CT non privilégié, le pare-feu Proxmox sur son interface, le tunnel « sites PHP » et coller son jeton |
 | **P2. Agent et lien avec le hub** | Agent (opérations fermées, signature, journal), client dans le hub, secret partagé, contrôle de l'état | Poser le secret dans les deux `.env`, ouvrir le port de l'agent au seul hub dans le pare-feu Proxmox |
 | **P3. Site PHP dans le hub** | Type de site « PHP », création, DNS vers le tunnel, on/off, noindex, fichiers (règles d'envoi propres au PHP), dossier public, publication par versions et retour arrière, contrôle anti-fuite après publication | Rien |
-| **P4. Variables et base** | Écran des variables (chiffrées, clés `live` refusées), création de la base, import, export, réinitialisation, dump avant publication, sauvegarde de nuit | Rien |
-| **P5. Exploitation et MyTakumi** | Journaux, tâche planifiée, e-mails capturés, mesure disque et alertes, mesure des ressources ; mise en ligne de MyTakumi en recette | Envoyer MyTakumi avec son `vendor/`, son dump SQL et ses variables de test |
+| **P4. Variables et base** | Écran des variables (chiffrées, clés `live` refusées, clés de test acceptées), création de la base, import, export, réinitialisation, dump avant publication, sauvegarde de nuit ; essai d'un paiement Stripe de test de bout en bout (paiement et webhook) | Rien |
+| **P5. Exploitation et MyTakumi** | Journaux, tâche planifiée, capteur d'e-mails et écran « E-mails capturés » (rendu isolé, texte, en-têtes, pièces jointes, aperçu téléphone et ordinateur), redirection vers les adresses autorisées et « Envoyer à mon adresse » par le SMTP du hub, relève IMAP activable par site, mesure disque et alertes, mesure des ressources ; mise en ligne de MyTakumi en recette | Créer le compte SMTP d'envoi du hub et le poser dans ses réglages ; envoyer MyTakumi avec son dump SQL et ses variables de test |
 
 ### 11.10 Décisions (24/10/2026)
 
@@ -695,7 +707,8 @@ CT de départ : 2 cœurs, 2 Go de RAM (dont environ 256 Mo pour le tampon de Mar
 3. **PHP de MyTakumi** : 8.3 (vérifié, voir 11.3).
 4. **Appels sortants de MyTakumi** : Stripe en mode test ; API Suivi de La Poste (HTTPS, clé dans ses réglages) ; relève IMAP de la boîte de la boutique, désactivée en recette sauf demande ; SMTP de l'hébergeur en production, capturé ici ; tâche `scripts/cron.php` toutes les 15 minutes.
 5. **Retour arrière de la base** : dump automatique avant chaque publication.
-6. **Taille du CT** : 2 cœurs, 2 Go de RAM, 30 Go de disque proposés, à confirmer par Alexandre.
+6. **Taille du CT** : 2 cœurs, 2 Go de RAM, 30 Go de disque (confirmé par Alexandre).
+7. **Précisions du 24/10/2026** : paiements Stripe de test complets ; écran des e-mails capturés soigné ; redirection des e-mails vers les adresses autorisées par le SMTP du hub ; relève IMAP activable par site (11.6).
 
 ---
 

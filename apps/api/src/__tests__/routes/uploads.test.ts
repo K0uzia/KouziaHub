@@ -75,7 +75,9 @@ describe("cas réel : dossier de projet (portfolio)", () => {
     const res = await uploadFiles(hub, siteId, files, "lot");
     expect(res.statusCode).toBe(200);
     expect((res.json() as UploadResult).accepted).toHaveLength(1500);
-  });
+    // 1 500 fichiers par tout le circuit d'envoi : environ 5 s sur un poste chargé, au-delà des 5 s par défaut.
+    // Le délai ne fait pas partie de ce qui est vérifié (une session, tous les fichiers reçus).
+  }, 30_000);
 
   it("au-delà du plafond du site : 413 avec un code et un message précis, jamais « Fichier trop volumineux. » seul", async () => {
     const files = Array.from({ length: 20_001 }, (_, i) => ({ path: `f${i}.txt`, size: 1, sha256: "b".repeat(64) }));
