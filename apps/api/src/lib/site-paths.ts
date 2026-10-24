@@ -48,8 +48,9 @@ export type Classification = { action: "accept" } | { action: "reject"; reason: 
 const IGNORED_NAMES = new Set([".ds_store", "thumbs.db", "desktop.ini"]);
 
 /**
- * Dossiers de développement jamais envoyés (dépendances, dépôt Git, caches des générateurs et des hébergeurs) :
- * refusés par le serveur, écartés par l'interface avant l'envoi. En minuscules.
+ * Dossiers de développement jamais envoyés (dépendances, dépôt Git, caches des générateurs et des hébergeurs,
+ * réglages des éditeurs et des assistants de code) : refusés par le serveur, écartés par l'interface avant
+ * l'envoi, sans exception possible. En minuscules.
  */
 export const DEV_DIRECTORIES: readonly string[] = [
   "node_modules",
@@ -65,8 +66,21 @@ export const DEV_DIRECTORIES: readonly string[] = [
   ".parcel-cache",
   ".idea",
   ".vscode",
+  ".claude",
+  ".cursor",
 ];
 const DEV_DIRECTORY_SET = new Set(DEV_DIRECTORIES);
+
+/** Fichiers du dépôt (Git, présentation du projet) : rien à faire dans un site, refusés sans exception possible. */
+const REPO_FILES = new Set([".gitignore", ".gitattributes", ".gitmodules"]);
+/** README sous toutes ses formes (README, README.md, readme.txt...), casse ignorée. */
+const README_RE = /^readme(?:\.(?:md|markdown|mdown|txt|text|rst|adoc|asciidoc|org|html?|rtf))?$/i;
+
+/** Fichier de dépôt (« .gitignore », « README.md »...), null sinon. */
+export function repoFileOf(sitePath: string): string | null {
+  const base = sitePath.slice(sitePath.lastIndexOf("/") + 1);
+  return REPO_FILES.has(base.toLowerCase()) || README_RE.test(base) ? base : null;
+}
 
 /** Premier dossier de développement d'un chemin (« node_modules »…), null s'il n'y en a pas. */
 export function devDirectoryOf(sitePath: string): string | null {
@@ -101,6 +115,8 @@ export const DEV_TOOLING = {
     ".editorconfig",
     "dockerfile",
     "makefile",
+    "composer.json",
+    "composer.lock",
   ],
   /** Motifs de nom refusés partout (expressions, insensibles à la casse). */
   patterns: ["^tsconfig[^/]*\\.json$", "^docker-compose[^/]*\\.ya?ml$", "^(?:vite|astro|next|nuxt|svelte)\\.config\\.[a-z]+$"],
@@ -157,6 +173,7 @@ export function classifySitePath(sitePath: string, options: ClassifyOptions = {}
   if (lowerSegments.some((s) => s === ".env" || s.startsWith(".env."))) {
     return { action: "reject", reason: "Fichier .env refusé (secrets possibles)." };
   }
+  if (repoFileOf(sitePath)) return { action: "reject", reason: "Fichier du dépôt refusé (README, .gitignore, .gitattributes) : inutile dans un site." };
   if (lowerBase.endsWith(".map")) return { action: "reject", reason: "Carte de sources (.map) refusée : elle exposerait le code source." };
   if (lowerBase.endsWith(".bak") || lowerBase.endsWith("~") || lowerBase.endsWith(".swp") || lowerBase.endsWith(".swo")) {
     return { action: "reject", reason: "Fichier de sauvegarde refusé." };
@@ -179,3 +196,50 @@ export function checkSitePath(raw: string, options: ClassifyOptions = {}): { pat
 
 /** Fichiers envoyés à Cloudflare comme champs dédiés du déploiement, pas comme fichiers servis. */
 export const CONFIG_FILES = new Set(["_headers", "_redirects"]);
+
+/**
+ * Code exécuté par un serveur (PHP, Python, Ruby...) : gardé dans la version de travail pour l'export vers
+ * l'hébergement final (un contact.php y tourne), jamais publié sur Pages, qui le servirait comme un fichier à
+ * télécharger, code source et identifiants compris.
+ */
+export const SERVER_CODE_RE = /\.(?:php\d?|phtml|phar|py|rb|pl|cgi|asp|aspx|jsp)$/i;
+
+export function isServerCode(sitePath: string): boolean {
+  return SERVER_CODE_RE.test(sitePath);
+}
+
+const SERVER_LANGUAGES: Array<{ name: string; ext: RegExp; signals: RegExp }> = [
+  { name: "PHP", ext: /\.(?:php\d?|phtml|phar)$/i, signals: /^(?:(?:public\/)?index\.php|composer\.json|vendor\/autoload\.php|artisan)$/i },
+  { name: "Python", ext: /\.py$/i, signals: /^(?:requirements\.txt|pyproject\.toml|manage\.py|wsgi\.py|asgi\.py|app\.py)$/i },
+  { name: "Ruby", ext: /\.rb$/i, signals: /^(?:gemfile|config\.ru|rakefile)$/i },
+  { name: "Perl ou CGI", ext: /\.(?:pl|cgi)$/i, signals: /^cgi-bin\//i },
+  { name: "ASP.NET", ext: /\.aspx?$/i, signals: /^web\.config$/i },
+  { name: "Java", ext: /\.jsp$/i, signals: /^web-inf\//i },
+];
+
+export type ServerApp = {
+  /** Langage le plus présent (« PHP »...). */
+  language: string;
+  /** app : application dynamique (index.php sans index.html, composer.json...) ; files : scripts isolés (formulaire). */
+  kind: "app" | "files";
+  /** Fichiers de code serveur de l'envoi, et quelques exemples. */
+  count: number;
+  examples: string[];
+};
+
+/**
+ * Site dynamique reconnu sur tout l'envoi (fichiers écartés compris) : null sans code serveur. Une application
+ * se signe par son point d'entrée (index.php sans index.html à la racine) ou son manifeste (composer.json...).
+ */
+export function serverAppOf(paths: readonly string[]): ServerApp | null {
+  const code = paths.filter(isServerCode);
+  const hasIndexHtml = paths.some((p) => /^index\.html?$/i.test(p));
+  let best: { name: string; count: number; signal: boolean } | null = null;
+  for (const lang of SERVER_LANGUAGES) {
+    const count = code.filter((p) => lang.ext.test(p)).length;
+    const signal = paths.some((p) => lang.signals.test(p) && !(lang.name === "PHP" && /index\.php$/i.test(p) && hasIndexHtml));
+    if (count && (!best || count > best.count)) best = { name: lang.name, count, signal };
+  }
+  if (!best) return null;
+  return { language: best.name, kind: best.signal ? "app" : "files", count: code.length, examples: code.slice(0, 3) };
+}

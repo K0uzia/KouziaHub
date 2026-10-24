@@ -1,4 +1,5 @@
-import type { RejectedFile } from "@hub/contract";
+import { Link } from "react-router-dom";
+import type { BrokenReference, RejectedFile, ServerAppNotice } from "@hub/contract";
 import { Button } from "@/components/ui/Button";
 import { Banner } from "@/components/ui/Banner";
 import { formatBytes, formatDecimal, plural } from "@/lib/format";
@@ -69,30 +70,120 @@ export function SkippedList({ items }: { items: SkippedItem[] }) {
   );
 }
 
-/** Résumé après un envoi : reçus, puis écartés (avant l'envoi par l'interface et par le serveur) avec leurs raisons. */
+/** Alertes d'un envoi, montrées en tête : références vers des fichiers refusés, code serveur. */
+export type UploadNoticesData = { brokenRefs?: BrokenReference[]; serverApp?: ServerAppNotice | null };
+
+export const hasNotices = (n: UploadNoticesData | null | undefined) => Boolean(n && ((n.brokenRefs?.length ?? 0) > 0 || n.serverApp));
+
+const SHOWN_TARGETS = 5;
+
+/** Pages qui utilisent un fichier refusé, regroupées par fichier : « index.html et 2 autres pages utilisent … ». */
+function BrokenRefs({ refs }: { refs: BrokenReference[] }) {
+  const byTarget = new Map<string, { from: string[]; exceptable: boolean }>();
+  for (const r of refs) {
+    const t = byTarget.get(r.target) ?? { from: [], exceptable: r.exceptable };
+    t.from.push(r.from);
+    byTarget.set(r.target, t);
+  }
+  const targets = [...byTarget.entries()];
+  const exceptable = targets.some(([, t]) => t.exceptable);
+  const never = targets.some(([, t]) => !t.exceptable);
+  return (
+    <Banner
+      level="error"
+      role="alert"
+      action={
+        exceptable ? (
+          <Link to="?tab=serveur" className="link inline-flex min-h-11 items-center text-sm font-medium">
+            Ouvrir l'onglet Serveur
+          </Link>
+        ) : undefined
+      }
+    >
+      <div className="min-w-0 space-y-2">
+        <p className="font-medium">{targets.length > 1 ? `${targets.length} fichiers utilisés par le site sont refusés : le site sera cassé.` : "Un fichier utilisé par le site est refusé : le site sera cassé."}</p>
+        <ul className="space-y-1">
+          {targets.slice(0, SHOWN_TARGETS).map(([target, t]) => (
+            <li key={target} className="break-words">
+              <span className="font-mono">{t.from[0]}</span>
+              {t.from.length > 1 ? ` et ${plural(t.from.length - 1, "autre page", "autres pages")} utilisent ` : " utilise "}
+              <span className="font-mono">{target}</span>, refusé.
+            </li>
+          ))}
+        </ul>
+        {targets.length > SHOWN_TARGETS ? <p>Et {plural(targets.length - SHOWN_TARGETS, "autre fichier", "autres fichiers")}.</p> : null}
+        {exceptable ? (
+          <p>Ajoutez ces chemins en exception dans l'onglet Serveur (chemin exact de chaque fichier), ou envoyez le site construit.</p>
+        ) : null}
+        {never ? <p>Les fichiers sensibles ou de développement (.env, .git, node_modules...) ne sont jamais servis : placez ces fichiers ailleurs dans le site, ou envoyez le site construit.</p> : null}
+      </div>
+    </Banner>
+  );
+}
+
+/** Code serveur reçu : application dynamique (bloquant) ou scripts isolés (information). */
+function ServerApp({ app }: { app: ServerAppNotice }) {
+  const files = plural(app.count, `fichier ${app.language}`, `fichiers ${app.language}`);
+  return app.kind === "app" ? (
+    <Banner level="error" role="alert">
+      <p className="font-medium">
+        Site dynamique ({app.language}) : il ne peut pas fonctionner sur l'hébergement statique du hub. Envoyez une version statique (maquette,
+        export HTML) ou hébergez-le chez un hébergeur {app.language}.
+      </p>
+      <p className="mt-1">Les {files} restent dans les fichiers de travail mais ne sont jamais publiés (leur code source serait lisible).</p>
+    </Banner>
+  ) : (
+    <Banner level="info" role="status">
+      {files} (<span className="break-all font-mono">{app.examples.join(", ")}</span>) : ils ne tournent pas sur la version de travail et n'y sont jamais
+      publiés. Ils restent pour la version de production, chez un hébergeur qui les exécute.
+    </Banner>
+  );
+}
+
+export function UploadNotices({ notices }: { notices: UploadNoticesData }) {
+  return (
+    <>
+      {notices.serverApp ? <ServerApp app={notices.serverApp} /> : null}
+      {notices.brokenRefs?.length ? <BrokenRefs refs={notices.brokenRefs} /> : null}
+    </>
+  );
+}
+
+/** Résumé après un envoi : alertes en tête, puis reçus et écartés (avant l'envoi par l'interface et par le serveur) avec leurs raisons. */
 export function RejectedSummary({
   accepted,
   rejected,
+  notices,
   onClose,
 }: {
   accepted: number;
   rejected: Array<RejectedFile | SkippedItem>;
+  notices?: UploadNoticesData | null;
   onClose: () => void;
 }) {
   return (
-    <Banner
-      level="warning"
-      role="status"
-      action={
+    <div className="space-y-2">
+      {notices ? <UploadNotices notices={notices} /> : null}
+      {rejected.length ? (
+        <Banner
+          level="warning"
+          role="status"
+          action={
+            <Button variant="ghost" onClick={onClose}>
+              Fermer
+            </Button>
+          }
+        >
+          <p className="font-medium">
+            {plural(accepted, "fichier reçu", "fichiers reçus")}, {plural(rejected.length, "fichier écarté", "fichiers écartés")} :
+          </p>
+          <SkippedList items={rejected} />
+        </Banner>
+      ) : (
         <Button variant="ghost" onClick={onClose}>
           Fermer
         </Button>
-      }
-    >
-      <p className="font-medium">
-        {plural(accepted, "fichier reçu", "fichiers reçus")}, {plural(rejected.length, "fichier écarté", "fichiers écartés")} :
-      </p>
-      <SkippedList items={rejected} />
-    </Banner>
+      )}
+    </div>
   );
 }

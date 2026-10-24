@@ -1,5 +1,5 @@
 import { CACHE_RULES, mergeCsp } from "@/lib/server-config.js";
-import { DEV_TOOLING } from "@/lib/site-paths.js";
+import { DEV_TOOLING, SERVER_CODE_RE } from "@/lib/site-paths.js";
 
 /** Corps de robots.txt des versions de travail (et du hub) : rien n'est à explorer. */
 export const NOINDEX_ROBOTS = "User-agent: *\nDisallow: /\n";
@@ -60,6 +60,7 @@ const HEADERS = ${JSON.stringify(headers)};
 const REDIRECT_HEADERS = ${JSON.stringify(redirectHeaders)};
 const CACHE = ${JSON.stringify(cache)}.map(([pattern, value]) => [new RegExp(pattern, "i"), value]);
 const TOOLING = ${JSON.stringify(DEV_TOOLING)};
+const SERVER_CODE = new RegExp(${JSON.stringify(SERVER_CODE_RE.source)}, "i");
 const TOOLING_PATTERNS = TOOLING.patterns.map((p) => new RegExp(p, "i"));
 const TOOLING_ROOT = TOOLING.rootPatterns.map((p) => new RegExp(p, "i"));
 const ALLOW = ${JSON.stringify(options.allow ?? [])};
@@ -79,6 +80,8 @@ function isForbidden(pathname) {
   } catch {}
   const segments = path.split("/").filter(Boolean);
   if (segments.some((s, i) => s.startsWith(".") && !(i === 0 && s === ".well-known"))) return true;
+  // Code serveur (PHP...) : jamais publié, refusé s'il restait d'un ancien déploiement (source lisible).
+  if (SERVER_CODE.test(path)) return true;
   if (/\\.(md|markdown|log|bak|map|swp)$|~$/i.test(path)) return true;
   const rel = segments.join("/");
   const base = segments[segments.length - 1] || "";
