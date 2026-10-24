@@ -1,4 +1,6 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { Readable } from "node:stream";
 import { z } from "zod";
 import type { PhpAgentState } from "@/contract.js";
 
@@ -13,10 +15,26 @@ export class PhpAgentUnavailableError extends Error {
   }
 }
 
+/** Refus d'une opération par l'agent (réglage invalide, site ou version absents...) : message de l'agent, statut. */
+export class PhpAgentOpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "PhpAgentOpError";
+  }
+}
+
 const sha256Hex = (body: string) => createHash("sha256").update(body).digest("hex");
 
 export function signAgentRequest(secret: string, timestamp: string, nonce: string, method: string, path: string, body: string): string {
-  return `sha256=${createHmac("sha256", secret).update(`${timestamp}.${nonce}.${method.toUpperCase()}.${path}.${sha256Hex(body)}`).digest("hex")}`;
+  return signAgentRequestHash(secret, timestamp, nonce, method, path, sha256Hex(body));
+}
+
+/** Même signature, sur l'empreinte d'un corps envoyé en flux (archive d'une version). */
+export function signAgentRequestHash(secret: string, timestamp: string, nonce: string, method: string, path: string, bodySha256: string): string {
+  return `sha256=${createHmac("sha256", secret).update(`${timestamp}.${nonce}.${method.toUpperCase()}.${path}.${bodySha256}`).digest("hex")}`;
 }
 
 export function signAgentResponse(secret: string, nonce: string, status: number, body: string): string {
@@ -68,7 +86,7 @@ export class PhpAgentClient {
   }
 
   /** Requête signée ; réponse vérifiée (signature liée au nonce) avant d'être lue. */
-  private async request(method: "GET" | "POST", path: string, payload?: unknown): Promise<unknown> {
+  private async request(method: "GET" | "POST" | "PUT" | "DELETE", path: string, payload?: unknown, stream?: { file: string; sha256: string }): Promise<unknown> {
     const body = payload === undefined ? "" : JSON.stringify(payload);
     const timestamp = String(Math.floor(this.now() / 1000));
     const nonce = randomBytes(16).toString("hex");
@@ -79,13 +97,20 @@ export class PhpAgentClient {
         headers: {
           accept: "application/json",
           ...(body ? { "content-type": "application/json" } : {}),
+          ...(stream ? { "content-type": "application/gzip", "x-kouzia-hub-content-sha256": stream.sha256 } : {}),
           "x-kouzia-hub-timestamp": timestamp,
           "x-kouzia-hub-nonce": nonce,
-          "x-kouzia-hub-signature": signAgentRequest(this.#secret, timestamp, nonce, method, path, body),
+          "x-kouzia-hub-signature": stream
+            ? signAgentRequestHash(this.#secret, timestamp, nonce, method, path, stream.sha256)
+            : signAgentRequest(this.#secret, timestamp, nonce, method, path, body),
         },
-        ...(body ? { body } : {}),
-        signal: AbortSignal.timeout(this.timeoutMs),
-      });
+        ...(stream
+          ? { body: Readable.toWeb(createReadStream(stream.file)) as unknown as RequestInit["body"], duplex: "half" }
+          : body
+            ? { body }
+            : {}),
+        signal: AbortSignal.timeout(stream ? 15 * 60_000 : this.timeoutMs),
+      } as RequestInit);
     } catch {
       throw new PhpAgentUnavailableError();
     }
@@ -96,12 +121,17 @@ export class PhpAgentClient {
     if (!sameText(signature, signAgentResponse(this.#secret, nonce, res.status, text))) {
       throw new PhpAgentUnavailableError("Serveur des sites PHP : réponse non signée, ignorée.");
     }
-    if (!res.ok) throw new PhpAgentUnavailableError(`Serveur des sites PHP : opération refusée (${res.status}).`);
+    let parsed: unknown;
     try {
-      return JSON.parse(text) as unknown;
+      parsed = JSON.parse(text) as unknown;
     } catch {
       throw new PhpAgentUnavailableError("Serveur des sites PHP : réponse illisible.");
     }
+    if (!res.ok) {
+      const message = typeof (parsed as { error?: unknown })?.error === "string" ? (parsed as { error: string }).error : `opération refusée (${res.status})`;
+      throw new PhpAgentOpError(res.status, `Serveur des sites PHP : ${message}`);
+    }
+    return parsed;
   }
 
   async state(): Promise<PhpAgentState> {
@@ -109,7 +139,48 @@ export class PhpAgentClient {
     if (!parsed.success) throw new PhpAgentUnavailableError("Serveur des sites PHP : état illisible (versions de l'agent et du hub différentes ?).");
     return parsed.data;
   }
+
+  /** Identifiant du tunnel du CT PHP : cible des CNAME des sites (<id>.cfargotunnel.com), null si absent. */
+  async tunnelId(): Promise<string | null> {
+    const parsed = z.object({ tunnelId: z.string().uuid().nullable() }).safeParse(await this.request("GET", "/v1/tunnel"));
+    if (!parsed.success) throw new PhpAgentUnavailableError("Serveur des sites PHP : identifiant du tunnel illisible.");
+    return parsed.data.tunnelId;
+  }
+
+  /** Crée ou met à jour le site sur le CT (rejouable). */
+  async upsertSite(spec: PhpSiteSpec): Promise<void> {
+    await this.request("POST", "/v1/sites", spec);
+  }
+
+  /** Envoie l'archive d'une version (flux, empreinte signée). */
+  async sendVersion(slug: string, number: number, archive: { file: string; sha256: string }): Promise<void> {
+    await this.request("PUT", `/v1/sites/${slug}/versions/${number}`, undefined, archive);
+  }
+
+  async publish(slug: string, number: number): Promise<void> {
+    await this.request("POST", `/v1/sites/${slug}/publier`, { version: number });
+  }
+
+  async setEnabled(slug: string, enabled: boolean): Promise<void> {
+    await this.request("POST", `/v1/sites/${slug}/${enabled ? "rallumer" : "couper"}`);
+  }
+
+  /** Contrôle anti-fuite : chaque chemin sensible doit répondre 403 ou 404 sur nginx local. */
+  async check(slug: string): Promise<{ ok: boolean; results: Array<{ path: string; status: number }> }> {
+    const parsed = z
+      .object({ ok: z.boolean(), results: z.array(z.object({ path: z.string().max(300), status: z.number().int() })).max(50) })
+      .safeParse(await this.request("GET", `/v1/sites/${slug}/verifier`));
+    if (!parsed.success) throw new PhpAgentUnavailableError("Serveur des sites PHP : contrôle illisible.");
+    return parsed.data;
+  }
+
+  async removeSite(slug: string): Promise<void> {
+    await this.request("DELETE", `/v1/sites/${slug}`);
+  }
 }
+
+/** Réglages d'un site PHP envoyés à l'agent (validés de nouveau par lui). */
+export type PhpSiteSpec = { slug: string; hostname: string; php: string; publicDir: string; persistentDirs: string[]; indexing: boolean };
 
 /** Client si PHP_AGENT_URL est posée (secret obligatoire), sinon null : la fonction PHP n'est pas encore installée. */
 export function phpAgentFromEnv(env: NodeJS.ProcessEnv = process.env): PhpAgentClient | null {

@@ -1,5 +1,6 @@
 // Types de l'agent (agent.mjs), pour les tests du hub qui le lancent tel quel.
 import type { Server } from "node:http";
+import type { SiteOperations } from "./sites.mjs";
 
 export type ServiceState = "running" | "stopped" | "absent";
 
@@ -11,6 +12,7 @@ export type Probes = {
   lastUpgrade(): string | null;
   disk(): { freeBytes: number; totalBytes: number } | null;
   sites(): number;
+  tunnelId(): string | null;
   now(): number;
 };
 
@@ -20,4 +22,12 @@ export const systemProbes: Probes;
 export function sha256Hex(body: string | Buffer | undefined): string;
 export function signRequest(secret: string, timestamp: string, nonce: string, method: string, path: string, body: string | Buffer | undefined): string;
 export function signResponse(secret: string, nonce: string, status: number, body: string): string;
-export function createAgent(options: { secret: string; allowedIps: string[]; probes?: Probes; log?: (line: string) => void }): Server;
+export const MAX_UPLOAD_BYTES: number;
+export function tunnelIdOf(token: string | null): string | null;
+export function createAgent(options: {
+  secret: string;
+  allowedIps: string[];
+  probes?: Probes;
+  sites?: Pick<SiteOperations, "incomingFile" | "upsert" | "receive" | "publish" | "setEnabled" | "check" | "remove"> | null;
+  log?: (line: string) => void;
+}): Server;

@@ -1,7 +1,7 @@
 import type { BrokenReference, RejectedFile, ServerAppNotice, UploadResult, VersionCheck } from "@/contract.js";
 import { findBrokenReferences, MAX_REF_FILE_BYTES, MAX_REF_FILES, REF_FILE_RE } from "@/lib/broken-refs.js";
 import { serverAppOf } from "@/lib/site-paths.js";
-import { siteExtras } from "@/lib/site-extras.js";
+import { rulesOf, siteExtras } from "@/lib/site-extras.js";
 import { checkVersion } from "@/lib/version-check.js";
 import { audit } from "@/lib/audit.js";
 import { replaceWorkingFiles } from "@/lib/maintenance.js";
@@ -37,8 +37,9 @@ async function uploadNotices(
 ): Promise<{ brokenRefs: BrokenReference[]; serverApp: ServerAppNotice | null }> {
   const pages = kept.filter((f) => REF_FILE_RE.test(f.path) && f.size <= MAX_REF_FILE_BYTES).slice(0, MAX_REF_FILES);
   const texts = await Promise.all(pages.map(async (f) => ({ path: f.path, text: (await services.blobs.readText(f.sha256, MAX_REF_FILE_BYTES)) ?? "" })));
-  const { devFilesAllowed } = await siteExtras(siteId);
-  return { brokenRefs: findBrokenReferences(texts, devFilesAllowed), serverApp: serverAppOf(allPaths) };
+  const extras = await siteExtras(siteId);
+  // Site PHP : son code serveur est attendu, pas d'alerte « site dynamique ».
+  return { brokenRefs: findBrokenReferences(texts, rulesOf(extras)), serverApp: extras.hosting === "php" ? null : serverAppOf(allPaths) };
 }
 
 /**
@@ -100,7 +101,7 @@ export async function importZip(
   mode: "replace" | "merge",
 ): Promise<UploadResult> {
   try {
-    const extraction = await extractZip(zipPath, services.blobs, undefined, (await siteExtras(site.id)).devFilesAllowed);
+    const extraction = await extractZip(zipPath, services.blobs, undefined, rulesOf(await siteExtras(site.id)));
     if (mode === "merge") {
       const { kept, rejected: conflicts } = splitCaseConflicts(extraction.accepted, await workingPaths(site.id));
       extraction.accepted = kept;

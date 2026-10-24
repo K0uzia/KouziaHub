@@ -17,6 +17,8 @@ export type ServerProfile = {
   csp?: string | null;
   /** Exceptions du site aux fichiers d'outillage refusés. */
   allow?: readonly string[];
+  /** Hébergement du site : un site PHP garde src/ et composer.json dans sa version de production. */
+  hosting?: "pages" | "php";
 };
 
 /**

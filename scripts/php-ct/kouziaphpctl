@@ -49,8 +49,8 @@ upgrade() {
     if printf '%s\n' "$_list" | grep -q '^mariadb-'; then
       rc_service mariadb restart >/dev/null 2>&1 || warn "MariaDB n'a pas redémarré : rc-service mariadb start"
     fi
-    # Pools PHP-FPM des sites (lot P3) : un service par site, nommé php-fpm<version>.<slug>.
-    for _s in /etc/init.d/php-fpm*.*; do
+    # PHP-FPM des sites (lot P3) : un service par site, kouziaphp-site.<slug>.
+    for _s in /etc/init.d/kouziaphp-site.*; do
       [ -f "$_s" ] || continue
       _name="$(basename "$_s")"
       if rc-service "$_name" status >/dev/null 2>&1; then

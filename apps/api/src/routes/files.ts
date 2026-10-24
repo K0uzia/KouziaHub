@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
-import { siteExtras } from "@/lib/site-extras.js";
+import { rulesOf, siteExtras } from "@/lib/site-extras.js";
 import { z } from "zod";
 import { audit } from "@/lib/audit.js";
 import { requireAuth } from "@/lib/auth.js";
@@ -127,13 +127,13 @@ export function filesRoutes(services: Services): FastifyPluginAsync {
         throw new HttpError(400, "Un dossier ne peut pas être déplacé dans lui-même.");
       }
       const movingPaths = new Set(moving.map((f) => f.path));
-      const { devFilesAllowed: allow } = await siteExtras(id);
+      const rules = rulesOf(await siteExtras(id));
       const existing = new Set(all.filter((f) => !movingPaths.has(f.path)).map((f) => f.path));
       const existingLower = new Map([...existing].map((p) => [p.toLowerCase(), p]));
       const upserts: FileRef[] = [];
       for (const f of moving) {
         const next = from.kind === "dir" ? `${to.path}/${f.path.slice(from.path.length + 1)}` : to.path;
-        const { path: target, verdict } = checkSitePath(next, { allow });
+        const { path: target, verdict } = checkSitePath(next, rules);
         if (verdict.action !== "accept") throw new HttpError(400, `${target.slice(0, 200)} : ${verdict.reason}`);
         if (existing.has(target)) throw new HttpError(409, `Un fichier porte déjà ce nom : ${target.slice(0, 200)}`);
         const other = existingLower.get(target.toLowerCase());

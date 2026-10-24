@@ -1,5 +1,6 @@
 import type { Operation as OperationRow, Site } from "@prisma/client";
 import { siteExtras } from "@/lib/site-extras.js";
+import { DEFAULT_PHP_VERSION, persistentDirsOf } from "@/lib/php-sites.js";
 import { THUMBNAIL_FOCUS, type CatalogResponse, type Notice, type Operation, type SiteDetail, type SiteMonitorBadge, type SiteSummary, type ThumbnailFocus } from "@/contract.js";
 import { siteBadges } from "@/lib/monitor/view.js";
 import { prisma } from "@/lib/prisma.js";
@@ -85,6 +86,7 @@ export async function toSummary(
     currentVersion: current ? { id: current.id, number: current.number, publishedAt: current.publishedAt?.toISOString() ?? null } : null,
     thumbnailUrl: site.thumbnailPath && site.thumbnailAt ? `/api/sites/${site.id}/thumbnail?v=${site.thumbnailAt.getTime()}` : null,
     thumbnailFocus: focusOf(site.thumbnailFocus),
+    hosting: site.hosting === "php" ? "php" : "pages",
     touchedAt: site.touchedAt.toISOString(),
     createdAt: site.createdAt.toISOString(),
     monitor,
@@ -113,6 +115,16 @@ export async function siteDetail(siteId: string, services: Services): Promise<Si
     pagesSubdomain: site.pagesSubdomain,
     erpClientUrl: erpClientUrl(site.erpClientId),
     thumbnailSource: site.thumbnailSource === "capture" || site.thumbnailSource === "upload" ? site.thumbnailSource : null,
+    php:
+      site.hosting === "php"
+        ? {
+            version: site.phpVersion ?? DEFAULT_PHP_VERSION,
+            publicDir: site.phpPublicDir ?? "",
+            persistentDirs: persistentDirsOf(site),
+            httpsOpen: site.phpHttpsOpen,
+            imapOpen: site.phpImapOpen,
+          }
+        : null,
     fileCount: files._count._all,
     totalBytes: files._sum.size ?? 0,
     finalDomain: site.finalDomain,

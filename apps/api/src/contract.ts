@@ -68,6 +68,8 @@ export type SiteSummary = {
   thumbnailUrl: string | null;
   /** Point d'intérêt du cadrage (l'image remplit le cadre 16:10), « haut » par défaut. */
   thumbnailFocus: ThumbnailFocus;
+  /** Hébergement de la version de travail : Cloudflare Pages (statique) ou serveur des sites PHP. */
+  hosting: "pages" | "php";
   touchedAt: string;
   createdAt: string;
   /** Surveillance du site (null si aucune cible surveillée). */
@@ -106,12 +108,15 @@ export type ServerConfigPreview = {
 };
 
 export type SiteDetail = SiteSummary & {
-  pagesProject: string;
+  /** Projet Cloudflare Pages, null pour un site PHP. */
+  pagesProject: string | null;
   /** Adresse <projet>.pages.dev (redirigée vers le sous-domaine). */
   pagesSubdomain: string | null;
   /** Lien vers la fiche du client dans l'ERP, null si inconnu. */
   erpClientUrl: string | null;
   thumbnailSource: "capture" | "upload" | null;
+  /** Site PHP : ses réglages ; null pour un site Pages. */
+  php: (PhpSiteSettings & { httpsOpen: boolean; imapOpen: boolean }) | null;
   fileCount: number;
   totalBytes: number;
   /** Profil serveur : domaine final (sans « www. »), forme canonique, page 404. */
@@ -151,9 +156,14 @@ export type Notice = {
 
 export type SlugCheck = { slug: string; ok: boolean; reason: string | null };
 
-export type CreateSiteInput =
+/** Site PHP (docs/cadrage.md, section 11) : version de PHP, dossier public, dossiers persistants (gardés, jamais servis). */
+export type PhpSiteSettings = { version: string; publicDir: string; persistentDirs: string[] };
+
+/** hosting absent : « pages » (Cloudflare Pages). « php » : CT des sites PHP, réglages php facultatifs (défauts sûrs). */
+export type CreateSiteInput = (
   | { kind: "CLIENT"; erpClientId: string; slug: string; label?: string | null }
-  | { kind: "PERSO"; slug: string; label: string };
+  | { kind: "PERSO"; slug: string; label: string }
+) & { hosting?: "pages" | "php"; php?: Partial<PhpSiteSettings> };
 
 /**
  * Un changement de finalDomain, canonicalHost ou notFoundPage régénère le .htaccess s'il est encore

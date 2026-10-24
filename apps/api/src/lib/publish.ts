@@ -1,3 +1,5 @@
+import { hostingOf, pagesProjectOf } from "@/lib/site-hosting.js";
+import { deployPhpVersion, phpEntryCheck } from "@/lib/php-sites.js";
 import type { Version } from "@prisma/client";
 import type { FileRef } from "@/lib/files.js";
 import { refreshDirty } from "@/lib/files.js";
@@ -73,7 +75,12 @@ export async function snapshotVersion(siteId: string, versionId: string): Promis
   if (!source) throw new HttpError(404, "Version introuvable.");
   if (source.status === "PURGED") throw new HttpError(409, "Version purgée : ses fichiers ne sont plus gardés.");
   if (source.status === "UPLOADING") throw new HttpError(409, "Version en cours d'envoi.");
-  if (!source.files.some((f) => f.path === "index.html")) {
+  // Page d'accueil : index.html à la racine (site Pages), page d'entrée du dossier public (site PHP).
+  const site = await prisma.site.findUniqueOrThrow({ where: { id: siteId }, select: { hosting: true, phpPublicDir: true } });
+  if (hostingOf(site) === "php") {
+    const missing = phpEntryCheck(source.files.map((f) => f.path), site.phpPublicDir ?? "");
+    if (missing) throw new HttpError(400, `Publication impossible : ${missing.message}`, "no_index");
+  } else if (!source.files.some((f) => f.path === "index.html")) {
     throw new HttpError(400, "Publication impossible : il manque index.html à la racine.", "no_index");
   }
   return createVersion(
@@ -126,6 +133,8 @@ async function markPublished(siteId: string, versionId: string, deployment: { id
  */
 export async function deployVersion(services: Services, siteId: string, versionId: string): Promise<void> {
   const site = await prisma.site.findUniqueOrThrow({ where: { id: siteId } });
+  // Site PHP : publié sur le CT des sites PHP par son agent (docs/cadrage.md, section 11.5).
+  if (hostingOf(site) === "php") return deployPhpVersion(services, siteId, versionId);
   const version = await prisma.version.findFirstOrThrow({ where: { id: versionId, siteId }, include: { files: true } });
   if (version.status === "PURGED") throw new HttpError(409, "Version purgée : ses fichiers ne sont plus gardés.");
   if (version.status === "PUBLISHED" && version.cfDeploymentId) {
@@ -134,11 +143,11 @@ export async function deployVersion(services: Services, siteId: string, versionI
     return;
   }
   // Reprise : un déploiement de la fenêtre de cette version existe déjà chez Cloudflare.
-  const strays = await strayDeployments(services, site, windowStart(version.createdAt));
+  const strays = await strayDeployments(services, { id: site.id, pagesProject: pagesProjectOf(site) }, windowStart(version.createdAt));
   if (strays.length > 0) {
     const [adopted, ...rest] = strays;
     await markPublished(siteId, versionId, adopted!);
-    await deleteStrays(services, site.pagesProject, rest.map((d) => d.id));
+    await deleteStrays(services, pagesProjectOf(site), rest.map((d) => d.id));
     return;
   }
   await prisma.version.update({ where: { id: versionId }, data: { status: "UPLOADING", error: null } });
@@ -166,7 +175,7 @@ export async function deployVersion(services: Services, siteId: string, versionI
   if (notFound) files.push({ ...notFound, path: "404.html" });
 
   try {
-    const deployment = await services.cloudflare.deploy(site.pagesProject, {
+    const deployment = await services.cloudflare.deploy(pagesProjectOf(site), {
       files,
       workerJs: buildWorkerScript(hostnameOf(site.slug, services.sitesDomain), {
         cacheRules: config.cacheRules,
@@ -187,8 +196,8 @@ export async function deployVersion(services: Services, siteId: string, versionI
     });
     await markPublished(siteId, versionId, deployment);
     // Appel rejoué après une coupure : d'autres déploiements de la fenêtre peuvent exister, supprimés.
-    const extra = await strayDeployments(services, site, windowStart(version.createdAt)).catch(() => []);
-    await deleteStrays(services, site.pagesProject, extra.map((d) => d.id));
+    const extra = await strayDeployments(services, { id: site.id, pagesProject: pagesProjectOf(site) }, windowStart(version.createdAt)).catch(() => []);
+    await deleteStrays(services, pagesProjectOf(site), extra.map((d) => d.id));
   } catch (err) {
     await prisma.version.update({
       where: { id: versionId },
@@ -223,7 +232,7 @@ export async function applyRetention(services: Services, siteId: string): Promis
   for (const v of versions) {
     if (keep.has(v.id)) continue;
     try {
-      if (v.cfDeploymentId) await services.cloudflare.deleteDeployment(site.pagesProject, v.cfDeploymentId);
+      if (v.cfDeploymentId) await services.cloudflare.deleteDeployment(pagesProjectOf(site), v.cfDeploymentId);
     } catch {
       failed++;
       continue;

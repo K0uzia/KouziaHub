@@ -46,7 +46,7 @@ describe("contrôle des orphelins", () => {
     expect(await prisma.auditEvent.findFirst({ where: { action: "orphan.delete" } })).toMatchObject({ result: "ok", detail: "CNAME fantome.kouzia.com" });
 
     // Projet supprimé hors hub : le site en ligne est signalé, son CNAME devient orphelin (cible absente).
-    const projectName = (await prisma.site.findUniqueOrThrow({ where: { id } })).pagesProject;
+    const projectName = (await prisma.site.findUniqueOrThrow({ where: { id } })).pagesProject!;
     hub.cf.dropProject(projectName);
     const after = (await hub.app.inject({ method: "POST", url: "/api/orphans/check", headers: hub.headers })).json() as OrphanReport;
     expect(after.findings.map((f) => `${f.type}:${f.name}`).sort()).toEqual(["dns:alpha.kouzia.com", "project:kz-perdu", "site:alpha.kouzia.com"]);

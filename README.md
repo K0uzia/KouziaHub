@@ -244,6 +244,8 @@ Bouton « Nouveau site », une seule fenêtre :
 
 La version de travail n'est jamais indexée par les moteurs de recherche, et l'adresse `pages.dev` du projet renvoie vers `<slug>.kouzia.com`.
 
+**Site dynamique (PHP)** : quand le serveur des sites PHP est relié (section 11), la fenêtre propose aussi l'hébergement « PHP ». Voir 11.9.
+
 ### 5.3 Fiche d'un site
 
 À droite (en dessous sur téléphone), le panneau **Synthèse** : adresse, client (lien vers sa fiche dans l'ERP), version servie, fichiers de travail, l'interrupteur **« Site accessible »** et, juste dessous, l'interrupteur **« Indexation par les moteurs »**. Puis six onglets : Fichiers, Versions, Surveillance, Vignette, Serveur, Réglages.
@@ -662,3 +664,44 @@ La première ligne règle l'agent (IP du hub seule autorisée, secret), la deuxi
 3. Depuis un autre poste du réseau, la même adresse ne répond pas (pare-feu Proxmox).
 
 En cas de « signature refusée » dans la tuile : secret différent des deux côtés (refaire les quatre lignes), ou horloges des CT décalées de plus d'une minute (elles suivent celle du nœud Proxmox).
+
+### 11.9 Créer et publier un site PHP (lot P3)
+
+1. « Nouveau site », puis **Hébergement : PHP** (proposé seulement quand le serveur des sites PHP répond, 11.8). Régler :
+   - **Version de PHP** : celles installées sur le CT (8.3 par défaut) ;
+   - **Dossier public** : le seul dossier servi (`public` pour MyTakumi ; vide : racine du projet) ;
+   - **Dossiers persistants** : gardés d'une version à l'autre et jamais servis (MyTakumi : `data`, qui contient sa base de développement, les originaux envoyés et sa clé `app.key`). Au premier envoi, leur contenu les initialise ; ensuite, une publication ne les écrase jamais.
+2. La fiche montre les étapes : site posé sur le serveur PHP, page d'attente, adresse (vers le tunnel du CT), en ligne. **Pas d'attente de certificat** (celui de Cloudflare sur `kouzia.com` sert tout de suite).
+3. Envoyer le projet (zip ou explorateur) : pour un site PHP, `src/`, `composer.json` et les `.php` sont gardés ; `.env`, `.git`, `node_modules`, les README restent refusés. Composer ne tourne jamais sur le serveur : envoyer le projet avec son `vendor/` s'il en a un. Il faut une page d'entrée (`index.php` ou `index.html`) dans le dossier public.
+4. **Publier** : la version part en archive au CT, devient la version servie d'un coup, puis le hub vérifie que `/.env`, `/.git/config`, `/composer.json`, `/vendor/` et les dossiers persistants sont bien refusés. **Une fuite coupe le site** et fait échouer la publication, avec les chemins en cause.
+5. Couper, rallumer, republier une ancienne version et supprimer marchent comme pour un site statique.
+
+Les variables d'environnement (`.env` du site), la base MariaDB, les journaux, la tâche planifiée et les e-mails capturés arrivent aux lots P4 et P5.
+
+### 11.10 Recette sur le vrai CT (à faire une fois, dans l'ordre)
+
+But : vérifier en réel ce qui n'a tourné qu'en simulation (scripts Alpine, agent, site PHP), et me renvoyer les sorties. **Pas encore de vrai site client** à ce stade.
+
+| # | Faire | Résultat attendu |
+|---|---|---|
+| 0 | CT du hub : `hubctl update` | « Mise à jour terminée », hub joignable ; la tuile « Serveur des sites PHP » des Réglages dit « Pas encore installé » |
+| 1 | Shell du nœud : variables de 11.1 | rien à l'écran |
+| 2 | Créer le CT (11.2) | `pct start` sans message ; `passwd` demande deux fois le mot de passe |
+| 3 | Pare-feu (11.3), puis ses trois vérifications | « Règles acceptées » ; puis `OK : réseau local fermé`, `OK : SMTP fermé`, `HTTP/1.1 401 Unauthorized` |
+| 4 | Tunnel (11.4) | tunnel « kouziaphp » créé ; route `*.kouzia.com` vers `localhost:8080` ; enregistrement DNS `*` supprimé s'il est apparu |
+| 5 | Installer (11.5) | se termine par l'état du CT : nginx et MariaDB « en marche », PHP « 83 », pare-feu du CT « posé » (ou « absent » : me le dire) |
+| 6 | Dans le CT : `kouziaphpctl tunnel`, puis `kouziaphpctl upgrade` | « Tunnel démarré » ; dans Cloudflare, le tunnel passe « Sain » ; puis « Système déjà à jour » ou la liste des paquets mis à jour |
+| 7 | Dans le CT : `kouziaphpctl cgroups` | une suite de lignes OK, ou ÉCHEC avec la raison : **me renvoyer toute la sortie**, quel que soit le résultat |
+| 8 | Agent (11.8, les quatre lignes) | « Agent démarré » ; dans le hub, tuile « Serveur des sites PHP » à « Configuré » avec PHP 8.3 ; `wget` depuis le hub : `HTTP/1.1 401 Unauthorized` |
+| 9 | Hub : « Nouveau site », Perso, libellé « Recette PHP », sous-domaine `recette-php`, hébergement **PHP**, dossier public `public`, dossier persistant `data` | étapes « Site posé sur le serveur PHP », « Page d'attente publiée », « Enregistrement DNS créé », « Site en ligne » ; `https://recette-php.kouzia.com` montre la page d'attente |
+| 10 | Récupérer la page de test : sur GitHub, dépôt KouziaHub, fichier `scripts/php-ct/recette/public/index.php`, « Download raw file ». Si la box n'est pas en 192.168.1.1, corriger la ligne `IP_DE_LA_BOX` | un fichier `index.php` sur le PC |
+| 11 | Sur le PC, mettre `index.php` dans un dossier nommé `public`. Fiche du site, onglet Fichiers : « Ajouter un dossier », choisir ce dossier `public`, puis **Publier** | la liste montre `public/index.php` (et non `index.php` seul) ; publication réussie, sans message « Fuite détectée » |
+| 12 | Ouvrir `https://recette-php.kouzia.com` | « Tous les points sont conformes. » et huit lignes OK : PHP 8.3, visite n° 1, lecture hors du site refusée, commandes coupées, Stripe en 401, réseau local et SMTP injoignables, e-mail capturé |
+| 13 | Recharger la page deux fois | visite n° 2, puis n° 3 |
+| 14 | Republier la même version (onglet Versions, « Republier ») puis recharger | visite n° 4 : `data/` a survécu à la publication |
+| 15 | Ouvrir `https://recette-php.kouzia.com/.env`, puis `/data/visites.txt`, puis `/../data/visites.txt` | 403 ou 404 à chaque fois, jamais un contenu |
+| 16 | Fiche : couper le site, recharger l'adresse ; puis le rallumer | coupé : erreur Cloudflare (l'adresse ne répond plus) ; rallumé : la page revient en moins d'une minute, visite suivante |
+| 17 | Dans le CT : `ls /srv/sites/recette-php/mail/` | un ou plusieurs fichiers `.eml` (e-mails capturés, jamais envoyés) |
+| 18 | Fiche, Réglages : supprimer le site `recette-php` | site retiré du hub ; dans le CT, `ls /srv/sites` ne le montre plus ; plus d'enregistrement DNS `recette-php` dans Cloudflare |
+
+**À me renvoyer** : la sortie de `kouziaphpctl cgroups` et de `kouziaphpctl status`, une capture de la page de l'étape 12, et le texte exact de toute étape qui ne donne pas le résultat attendu (message d'erreur, ou les dernières lignes de `/var/log/kouziaphp/agent.err` et de `hubctl logs erreurs`).

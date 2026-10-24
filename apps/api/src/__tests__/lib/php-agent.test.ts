@@ -20,6 +20,7 @@ const probes: Probes = {
   lastUpgrade: () => "2026-10-24",
   disk: () => ({ freeBytes: 20e9, totalBytes: 30e9 }),
   sites: () => 0,
+  tunnelId: () => null,
   now: () => clock,
 };
 
@@ -68,7 +69,7 @@ describe("protocole de l'agent des sites PHP", () => {
     await new Promise((resolve) => server.close(resolve));
     await start();
     const unknown = (client() as unknown as { request(m: string, p: string): Promise<unknown> }).request("GET", "/v1/exec");
-    await expect(unknown).rejects.toThrow(/opération refusée \(404\)/);
+    await expect(unknown).rejects.toThrow(/Opération inconnue/);
   });
 
   it("une requête signée ne sert qu'une fois (rejeu refusé)", async () => {

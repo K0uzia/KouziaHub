@@ -71,6 +71,6 @@ describe("références vers des fichiers refusés", () => {
       { from: "index.html", target: "node_modules/x/x.js", exceptable: false },
       { from: "css/site.css", target: "src/bg.jpg", exceptable: true },
     ]);
-    expect(findBrokenReferences(files, ["src/branding/Logo-blanc.png", "src/bg.jpg"])).toEqual([{ from: "index.html", target: "node_modules/x/x.js", exceptable: false }]);
+    expect(findBrokenReferences(files, { allow: ["src/branding/Logo-blanc.png", "src/bg.jpg"] })).toEqual([{ from: "index.html", target: "node_modules/x/x.js", exceptable: false }]);
   });
 });

@@ -18,6 +18,7 @@ import { generateReport, reportContext } from "@/lib/monitor/report.js";
 import { prisma } from "@/lib/prisma.js";
 import { backfillSiteTargets } from "@/lib/monitor/targets.js";
 import { phpAgentFromEnv, type PhpAgentClient } from "@/lib/php-agent/client.js";
+import { phpDnsTarget } from "@/lib/php-sites.js";
 
 export type Services = {
   cloudflare: CloudflareGateway;
@@ -94,7 +95,8 @@ export function createServices(overrides: ServicesOverrides = {}): Services {
     sitesDomain,
     thumbnails: new ThumbnailService({ dataDir, blobs, chromiumPath: overrides.chromiumPath }),
     projects: new ProjectCounter(cloudflare),
-    orphans: new OrphanService(cloudflare, sitesDomain),
+    // Cible des CNAME des sites PHP, lue à la demande (l'agent est posé plus bas).
+    orphans: new OrphanService(cloudflare, sitesDomain, () => (services.phpAgent ? phpDnsTarget(services) : Promise.resolve(null))),
   } as Services;
   services.push = overrides.push ?? new PushService();
   services.zones = overrides.zones ?? zonesFromEnv();

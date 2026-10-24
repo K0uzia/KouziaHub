@@ -3,10 +3,10 @@ import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faCircleCheck, faCircleExclamation } from "@fortawesome/free-solid-svg-icons";
-import type { CreateSiteInput, ErpClient, SiteDetail, SiteKind, SlugCheck } from "@hub/contract";
+import type { CreateSiteInput, ErpClient, PhpServerStatus, SiteDetail, SiteKind, SlugCheck } from "@hub/contract";
 import { api, errorMessage, isAbort, type ApiError } from "@/lib/api";
 import { cleanSlugInput, slugify } from "@/lib/slug";
-import { useDebounced } from "@/lib/useResource";
+import { useDebounced, useResource } from "@/lib/useResource";
 import { useSitesDomain } from "@/lib/system";
 import { Modal, ModalActions } from "@/components/ui/Modal";
 import { Segmented } from "@/components/ui/Segmented";
@@ -15,6 +15,11 @@ import { Field, Input, inputClass } from "@/components/ui/Field";
 import { ClientPicker } from "@/components/sites/ClientPicker";
 
 type Check = { status: "idle" | "checking" | "ok" | "bad" | "error"; reason: string | null; slug: string };
+
+const HOSTINGS = [
+  { id: "pages", label: "Statique" },
+  { id: "php", label: "PHP" },
+] as const;
 
 const KINDS = [
   { id: "CLIENT", label: "Client de l'ERP" },
@@ -31,6 +36,15 @@ export function NewSiteDialog({ open, onClose }: { open: boolean; onClose: () =>
   const [kind, setKind] = useState<SiteKind>("CLIENT");
   const [client, setClient] = useState<ErpClient | null>(null);
   const [label, setLabel] = useState("");
+  // Site PHP (docs/cadrage.md, section 11) : proposé seulement quand le serveur des sites PHP répond.
+  const phpServer = useResource<PhpServerStatus>("/api/php/serveur");
+  const phpVersions = phpServer.data?.configured && phpServer.data.reachable ? phpServer.data.state.php : [];
+  const [hosting, setHosting] = useState<"pages" | "php">("pages");
+  const [phpVersion, setPhpVersion] = useState("8.3");
+  const [publicDir, setPublicDir] = useState("public");
+  const [persistent, setPersistent] = useState("");
+  // Version proposée : 8.3 si installée, sinon la première du serveur.
+  const chosenPhp = phpVersions.includes(phpVersion) ? phpVersion : (phpVersions[0] ?? phpVersion);
   const [slug, setSlug] = useState("");
   const [slugTouched, setSlugTouched] = useState(false);
   const [check, setCheck] = useState<Check>({ status: "idle", reason: null, slug: "" });
@@ -51,6 +65,10 @@ export function NewSiteDialog({ open, onClose }: { open: boolean; onClose: () =>
     setCheck({ status: "idle", reason: null, slug: "" });
     setSubmitted(false);
     setServerError(null);
+    setHosting("pages");
+    setPhpVersion("8.3");
+    setPublicDir("public");
+    setPersistent("");
   }, [open]);
 
   // Sous-domaine proposé depuis le nom du client (ou le libellé d'un site perso) tant qu'il n'a pas été modifié.
@@ -123,10 +141,17 @@ export function NewSiteDialog({ open, onClose }: { open: boolean; onClose: () =>
       slugRef.current?.focus();
       return;
     }
+    const php =
+      hosting === "php"
+        ? {
+            hosting: "php" as const,
+            php: { version: chosenPhp, publicDir: publicDir.trim().replace(/^\/+|\/+$/g, ""), persistentDirs: persistent.split(/[\s,]+/).filter(Boolean) },
+          }
+        : {};
     const body: CreateSiteInput =
       kind === "CLIENT"
-        ? { kind, erpClientId: client!.id, slug, label: label.trim() || null }
-        : { kind, slug, label: label.trim() };
+        ? { kind, erpClientId: client!.id, slug, label: label.trim() || null, ...php }
+        : { kind, slug, label: label.trim(), ...php };
     setBusy(true);
     try {
       const site = await api<SiteDetail>("/api/sites", { method: "POST", json: body });
@@ -235,6 +260,46 @@ export function NewSiteDialog({ open, onClose }: { open: boolean; onClose: () =>
             )}
           </p>
         </div>
+
+        {phpVersions.length ? (
+          <div className="space-y-4 rounded-[var(--radius)] border border-[var(--border)] p-3">
+            <div className="space-y-1.5">
+              <span className="block text-sm font-medium text-[var(--text)]">Hébergement de la version de travail</span>
+              <Segmented
+                options={HOSTINGS}
+                value={hosting}
+                onChange={setHosting}
+                label="Hébergement de la version de travail"
+                stack
+                className="w-full"
+              />
+              <p className="text-xs text-[var(--muted)]">
+                {hosting === "php"
+                  ? "Site dynamique (PHP, base de données) : hébergé sur le serveur des sites PHP du Proxmox, jamais publié chez Cloudflare Pages."
+                  : "Site statique (HTML, CSS, JS) : Cloudflare Pages."}
+              </p>
+            </div>
+            {hosting === "php" ? (
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Version de PHP">
+                  <select value={chosenPhp} onChange={(e) => setPhpVersion(e.target.value)} className={inputClass}>
+                    {phpVersions.map((v) => (
+                      <option key={v} value={v}>
+                        PHP {v}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Dossier public" hint="Seul dossier servi (vide : racine du projet).">
+                  <Input value={publicDir} onChange={(e) => setPublicDir(e.target.value)} autoComplete="off" spellCheck={false} className="font-mono" />
+                </Field>
+                <Field label="Dossiers persistants (facultatif)" hint="Gardés d'une version à l'autre, jamais servis : données, fichiers envoyés (ex. data)." className="sm:col-span-2">
+                  <Input value={persistent} onChange={(e) => setPersistent(e.target.value)} autoComplete="off" spellCheck={false} className="font-mono" placeholder="data" />
+                </Field>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
         {serverError ? (
           <p role="alert" className="rounded-[var(--radius-sm)] border border-[var(--danger)]/40 bg-[var(--danger-soft)] px-3 py-2 text-sm text-[var(--danger)]">
