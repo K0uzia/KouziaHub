@@ -194,7 +194,9 @@ describe("filtres de période à l'heure de Paris", () => {
       ],
     });
     const at = async (from: string, to: string) =>
-      (await get<Page<AuditEntry>>(`/api/audit?from=${from}&to=${to}&pageSize=100`)).body.items.map((e) => e.at).sort();
+      // Seules les lignes de ce test (action site.update) : les entrées du jour même (connexion du test) ne s'y mêlent
+      // pas, quel que soit le jour où il tourne (le 25/10/2026, jour du passage à l'heure d'hiver, les mêlait).
+      (await get<Page<AuditEntry>>(`/api/audit?from=${from}&to=${to}&action=site.update&pageSize=100`)).body.items.map((e) => e.at).sort();
     expect(await at("2026-07-14", "2026-07-14")).toEqual(["2026-07-14T21:59:00.000Z"]);
     expect(await at("2026-07-15", "2026-07-15")).toEqual(["2026-07-14T22:00:00.000Z", "2026-07-14T23:30:00.000Z"]);
     expect(await at("2026-10-25", "2026-10-25")).toEqual(["2026-10-25T22:30:00.000Z"]);
