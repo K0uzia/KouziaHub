@@ -35,6 +35,10 @@ if [ "$(id -u)" -eq 0 ]; then
 fi
 echo "  MariaDB                : $(svc_state mariadb)"
 echo "  Tunnel (cloudflared)   : $(svc_state "$KP_TUNNEL_SERVICE")"
+echo "  Agent (hub)            : $(svc_state kouziaphp-agent)"
+if [ "$(id -u)" -eq 0 ] && [ ! -s "${KP_ETC_DIR}/agent.secret" ]; then
+  echo "                           pas encore réglé : kouziaphpctl agent (README, 11.8)"
+fi
 if [ ! -s "$KP_TUNNEL_TOKEN_FILE" ]; then
   echo "                           jeton absent : kouziaphpctl tunnel"
 fi

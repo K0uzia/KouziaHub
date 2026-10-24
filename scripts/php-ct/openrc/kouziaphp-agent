@@ -1,0 +1,30 @@
+#!/sbin/openrc-run
+# OpenRC : agent du CT des sites PHP, piloté par le hub seul (docs/cadrage.md, section 11.1).
+# Secret : /etc/kouziaphp/agent.secret (600, root) ; IP du hub et port : /etc/kouziaphp/agent.env.
+# En root : il créera les comptes, pools et bases des sites (lot P3), par une liste fermée d'opérations.
+
+description="Agent des sites PHP (piloté par le hub)"
+
+: "${KP_LOG_DIR:=/var/log/kouziaphp}"
+
+command="/usr/bin/node"
+command_args="/usr/local/lib/kouziaphp/agent/agent.mjs"
+supervisor=supervise-daemon
+respawn_delay=5
+respawn_max=0
+
+output_log="${KP_LOG_DIR}/agent.out"
+error_log="${KP_LOG_DIR}/agent.err"
+
+depend() {
+  need net
+  after kouziaphp-firewall
+}
+
+start_pre() {
+  checkpath -d -o root:root -m 0755 "$KP_LOG_DIR"
+  if [ ! -s /etc/kouziaphp/agent.secret ] || [ ! -s /etc/kouziaphp/agent.env ]; then
+    eerror "Agent non réglé : kouziaphpctl agent"
+    return 1
+  fi
+}

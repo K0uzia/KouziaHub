@@ -13,6 +13,7 @@ kouziaphpctl : CT des sites PHP du hub Kouzia
 
   install      installer ou réparer nginx, PHP, MariaDB, pare-feu du CT, outil (rejouable)
   tunnel       coller le jeton du tunnel Cloudflare « kouziaphp »
+  agent        régler l'agent piloté par le hub (IP du hub, secret partagé, lus sur l'entrée)
   firewall     reposer le pare-feu du CT (comptes des sites)
   cgroups      contrôler les limites CPU, mémoire et processus par site
   upgrade      mises à jour de sécurité (apk upgrade dans la version d'Alpine installée)
@@ -59,6 +60,9 @@ upgrade() {
     if service_running "$KP_TUNNEL_SERVICE"; then
       rc_service "$KP_TUNNEL_SERVICE" restart >/dev/null 2>&1 || warn "Le tunnel n'a pas redémarré : rc-service cloudflared start"
     fi
+    if printf '%s\n' "$_list" | grep -q '^nodejs-' && service_running kouziaphp-agent; then
+      rc_service kouziaphp-agent restart >/dev/null 2>&1 || warn "L'agent n'a pas redémarré : rc-service kouziaphp-agent start"
+    fi
     if printf '%s\n' "$_list" | grep -q '^nftables-'; then
       rc_service "$KP_FIREWALL_SERVICE" restart >/dev/null 2>&1 || warn "Pare-feu du CT non reposé : kouziaphpctl firewall"
     fi
@@ -72,6 +76,7 @@ upgrade() {
 case "${1:-}" in
   install) require_root; exec sh "${SCRIPT_DIR}/install.sh" ;;
   tunnel) exec sh "${SCRIPT_DIR}/tunnel.sh" ;;
+  agent) exec sh "${SCRIPT_DIR}/agent.sh" ;;
   firewall) require_root; exec sh "${SCRIPT_DIR}/firewall.sh" ;;
   cgroups) require_root; exec sh "${SCRIPT_DIR}/cgroups.sh" ;;
   upgrade) upgrade ;;

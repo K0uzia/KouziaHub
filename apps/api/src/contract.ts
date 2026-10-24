@@ -823,3 +823,32 @@ export type UpdateLicenseInput = {
   contact?: string | null;
   erpClientId?: string | null;
 };
+
+// --- Serveur des sites PHP (docs/cadrage.md, section 11 ; lot P2 : état seulement) ---
+// GET /api/php/serveur : PhpServerStatus
+
+export type PhpServiceState = "running" | "stopped" | "absent";
+
+/** État du CT des sites PHP, lu par l'agent. */
+export type PhpAgentState = {
+  agentVersion: string;
+  /** Version d'Alpine du CT (« 3.22.2 »), null si illisible. */
+  alpine: string | null;
+  node: string;
+  /** Versions de PHP installées (« 8.3 »). */
+  php: string[];
+  services: { nginx: PhpServiceState; mariadb: PhpServiceState; tunnel: PhpServiceState; firewall: PhpServiceState };
+  /** Dernier contrôle des limites par site (kouziaphpctl cgroups). */
+  cgroups: { result: "ok" | "echec" | null; checkedAt: string | null };
+  /** Dernière mise à jour de sécurité (AAAA-MM-JJ), null si jamais. */
+  lastUpgrade: string | null;
+  disk: { freeBytes: number; totalBytes: number } | null;
+  sites: number;
+  /** Horloge du CT (ISO). */
+  time: string;
+};
+
+export type PhpServerStatus =
+  | { configured: false }
+  | { configured: true; reachable: false; error: string }
+  | { configured: true; reachable: true; state: PhpAgentState };

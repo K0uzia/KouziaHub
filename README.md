@@ -493,6 +493,7 @@ make dev     # API http://127.0.0.1:3101 et interface http://localhost:5174
 | `hubctl 2fa-reset` | Couper la double authentification (téléphone perdu), puis `hubctl admin` |
 | `hubctl push-keys [mailto:adresse]` | Créer les clés des notifications (une seule fois) |
 | `hubctl veille deploy` | Installer ou mettre à jour la veille Cloudflare (jeton demandé, jamais gardé) |
+| `hubctl secrets php` | Agent du CT des sites PHP : IP et secret partagé (section 11.8) |
 
 ---
 
@@ -635,5 +636,29 @@ kouziaphpctl status
 | `kouziaphpctl firewall` | Reposer le pare-feu du CT |
 | `kouziaphpctl cgroups` | Contrôler les limites par site |
 | `kouziaphpctl tunnel` | Changer le jeton du tunnel |
+| `kouziaphpctl agent` | Régler l'agent : IP du hub et secret, lus sur l'entrée (11.8) |
 
 **Mettre à jour les scripts** du CT PHP après une mise à jour du hub : refaire les cinq commandes de 11.5 (l'installation est rejouable).
+
+### 11.8 Relier le hub à l'agent (lot P2)
+
+Le hub pilote le CT PHP par son **agent** : port 8790, ouvert au seul CT du hub par le pare-feu de 11.3. Chaque requête est signée par un secret partagé, avec un horodatage et un numéro à usage unique ; l'agent signe aussi ses réponses. Le hub doit être à jour (`hubctl update`) et les scripts du CT PHP aussi (11.5).
+
+Le secret est créé dans le Shell du nœud Proxmox et posé dans les deux CT **sans jamais s'afficher** (même fenêtre que 11.1, pour les variables) :
+
+```sh
+SECRET=$(openssl rand -hex 32)
+printf '%s\n%s\n' "$HUB_IP" "$SECRET" | pct exec $CTID -- kouziaphpctl agent
+printf '%s\n%s\n' "${IP%/*}" "$SECRET" | pct exec $HUB -- hubctl secrets php
+unset SECRET
+```
+
+La première ligne règle l'agent (IP du hub seule autorisée, secret), la deuxième donne au hub l'adresse du CT PHP et le même secret ; le hub redémarre seul.
+
+**Vérifier** :
+
+1. Dans le hub : Réglages > **Serveur des sites PHP** passe à « Configuré » et affiche PHP 8.3, les services, les limites par site et la date des mises à jour.
+2. Depuis le Shell du nœud : `pct exec $HUB -- wget -S -O /dev/null http://${IP%/*}:8790/v1/etat 2>&1 | grep HTTP/` affiche `HTTP/1.1 401 Unauthorized` : l'agent répond au hub, mais refuse une requête non signée.
+3. Depuis un autre poste du réseau, la même adresse ne répond pas (pare-feu Proxmox).
+
+En cas de « signature refusée » dans la tuile : secret différent des deux côtés (refaire les quatre lignes), ou horloges des CT décalées de plus d'une minute (elles suivent celle du nœud Proxmox).
