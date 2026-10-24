@@ -19,9 +19,9 @@ file="${dir}/$(date '+%Y%m%d-%H%M%S')-$$.eml"
 # 25 Mo au plus par message.
 head -c 26214400 > "$file"
 
-# 100 derniers messages gardés.
+# 100 derniers messages gardés. Noms fabriqués ici (date et numéro de processus) : ls trié par date suffit.
 # shellcheck disable=SC2012
-ls -1t "$dir" 2>/dev/null | grep '\.eml$' | tail -n +101 | while IFS= read -r old; do
-  rm -f "${dir}/${old}"
+ls -1t "$dir"/*.eml 2>/dev/null | tail -n +101 | while IFS= read -r old; do
+  rm -f "$old"
 done
 exit 0
