@@ -20,6 +20,7 @@ Cadrage technique complet : `docs/cadrage.md`.
 8. [Points encore à valider en réel](#8-points-encore-à-valider-en-réel)
 9. [Développement (PC)](#9-développement-pc)
 10. [Toutes les commandes hubctl](#10-toutes-les-commandes-hubctl)
+11. [CT des sites PHP (lot P1)](#11-ct-des-sites-php-lot-p1)
 
 ---
 
@@ -442,6 +443,7 @@ Testés contre des simulations, pas encore sur le vrai compte ni le vrai CT :
 | Notifications | Réception sur un vrai téléphone Android, par le hub et par la veille |
 | Version de production | Mise en ligne réelle chez Hostinger (`.htaccess`), et sitemap accepté dans la Google Search Console |
 | Exploitation | Première migration des droits par `hubctl update`, export et restauration GPG |
+| CT des sites PHP | Scripts `kouziaphpctl` jamais lancés sur une vraie Alpine (contrôlés par shellcheck) ; limites par site par cgroups dans un CT non privilégié (`kouziaphpctl cgroups`) ; nom d'hôte `*` accepté par le tableau de bord du tunnel ; pare-feu nftables par compte dans ce CT |
 
 ---
 
@@ -491,3 +493,147 @@ make dev     # API http://127.0.0.1:3101 et interface http://localhost:5174
 | `hubctl 2fa-reset` | Couper la double authentification (téléphone perdu), puis `hubctl admin` |
 | `hubctl push-keys [mailto:adresse]` | Créer les clés des notifications (une seule fois) |
 | `hubctl veille deploy` | Installer ou mettre à jour la veille Cloudflare (jeton demandé, jamais gardé) |
+
+---
+
+## 11. CT des sites PHP (lot P1)
+
+Les sites PHP (MyTakumi d'abord) tournent dans un CT à eux, **kouziaphp**, sur le même Proxmox, séparé du hub et de l'ERP : le code des clients ne tourne jamais à côté du jeton Cloudflare ni des clés de licence. Cadrage complet : `docs/cadrage.md`, section 11. Ce lot installe le CT (nginx, PHP 8.3, MariaDB, pare-feu, tunnel) ; la création des sites depuis le hub vient aux lots suivants.
+
+Toutes les commandes ci-dessous se tapent dans le **« Shell » du nœud Proxmox** (sauf mention), en remplaçant les valeurs d'exemple. Prérequis : le hub est à jour (`hubctl update`), car c'est lui qui fournit les scripts.
+
+### 11.1 Valeurs à choisir
+
+```sh
+CTID=120                 # numéro libre pour le nouveau CT
+IP=192.168.1.40/24       # IP fixe du CT PHP (hors de la plage DHCP de la box)
+GW=192.168.1.1           # passerelle (la box), qui sert aussi de DNS
+HUB=110                  # numéro du CT du hub
+HUB_IP=192.168.1.30      # IP du CT du hub
+STOCKAGE=local-lvm       # même stockage que les autres CT : pct config $HUB | grep rootfs
+```
+
+Ces variables ne vivent que dans la fenêtre du Shell : tout faire dans la même fenêtre, ou les retaper.
+
+### 11.2 Créer le CT
+
+```sh
+pveam update
+pveam available --section system | grep alpine
+```
+
+Repérer le modèle Alpine 3.22 ou plus récent (ex. `alpine-3.22-default_20250617_amd64.tar.xz`), puis :
+
+```sh
+MODELE=alpine-3.22-default_20250617_amd64.tar.xz     # le nom exact lu juste au-dessus
+pveam download local $MODELE
+pct create $CTID local:vztmpl/$MODELE --hostname kouziaphp --unprivileged 1 --features nesting=0 \
+  --cores 2 --memory 2048 --swap 512 --rootfs $STOCKAGE:30 \
+  --net0 name=eth0,bridge=vmbr0,ip=$IP,gw=$GW,firewall=1 \
+  --nameserver $GW --onboot 1 --ostype alpine
+pct start $CTID
+pct exec $CTID -- passwd
+```
+
+`passwd` demande le mot de passe root du CT (à garder dans le gestionnaire de mots de passe). Le CT est **non privilégié** et sans imbrication : c'est la première protection si un site était détourné.
+
+### 11.3 Pare-feu Proxmox du CT
+
+C'est la protection principale : le CT ne peut pas la retirer, même en root. Le CT ne joint ni la box, ni le NAS, ni l'ERP, ni le hub, et n'envoie aucun e-mail ; seul le hub peut le joindre (port de l'agent, lot P2).
+
+1. Le pare-feu doit être actif au niveau du centre de données (déjà fait pour l'ERP, section 2 d) étape 5.1 ; sinon suivre cette étape d'abord, dans cet ordre).
+2. Puis :
+
+```sh
+cat > /etc/pve/firewall/$CTID.fw <<EOF
+[OPTIONS]
+enable: 1
+policy_in: DROP
+policy_out: ACCEPT
+
+[RULES]
+IN ACCEPT -source $HUB_IP -p tcp -dport 8790 # agent des sites PHP (lot P2), hub seul
+OUT ACCEPT -dest $GW -p udp -dport 53 # DNS
+OUT ACCEPT -dest $GW -p tcp -dport 53 # DNS
+OUT DROP -dest 10.0.0.0/8 # réseau local
+OUT DROP -dest 172.16.0.0/12 # réseau local
+OUT DROP -dest 192.168.0.0/16 # réseau local
+OUT DROP -dest 100.64.0.0/10 # réseau local
+OUT DROP -dest 169.254.0.0/16 # réseau local
+OUT DROP -p tcp -dport 25 # SMTP : e-mails capturés, jamais envoyés
+OUT DROP -p tcp -dport 465 # SMTP
+OUT DROP -p tcp -dport 587 # SMTP
+EOF
+pve-firewall compile > /dev/null && echo "Règles acceptées"
+```
+
+Les règles se lisent de haut en bas, la première qui correspond s'applique : le DNS vers la box passe avant le refus du réseau local. Si le DNS du CT n'est pas la box, remplacer `$GW` dans les deux lignes DNS. L'interface Proxmox montre ces règles dans CT `kouziaphp` > Pare-feu.
+
+**Vérifier** (toujours depuis le Shell du nœud) :
+
+```sh
+pct exec $CTID -- sh -c "wget -q -T 5 -O /dev/null http://$GW && echo 'ERREUR : la box répond' || echo 'OK : réseau local fermé'"
+pct exec $CTID -- sh -c "nc -w 5 smtp.gmail.com 587 < /dev/null && echo 'ERREUR : SMTP ouvert' || echo 'OK : SMTP fermé'"
+pct exec $CTID -- sh -c "wget -S -T 10 -O /dev/null https://api.stripe.com/v1/charges 2>&1 | grep 'HTTP/'"
+```
+
+La troisième doit afficher `HTTP/1.1 401 Unauthorized` : Stripe répond (paiements de test possibles), il demande seulement une clé.
+
+### 11.4 Tunnel Cloudflare « kouziaphp »
+
+Un tunnel à lui, distinct de ceux du hub et de l'ERP.
+
+1. Cloudflare > **Zero Trust > Réseaux > Tunnels > Créer un tunnel** > **Cloudflared**, nom `kouziaphp`.
+2. À l'étape « Installer et lancer un connecteur », copier la commande affichée (elle contient le jeton). Ne pas la lancer ailleurs : elle se colle à l'étape 11.5.
+3. Étape « Routage » (nom d'hôte public / route publiée) : sous-domaine `*`, domaine `kouzia.com`, service **HTTP**, URL `localhost:8080`. Enregistrer.
+4. **Cloudflare > kouzia.com > DNS > Enregistrements** : si un enregistrement `*` (CNAME vers `...cfargotunnel.com`) a été créé à l'étape 3, **le supprimer**. Sinon toutes les adresses inconnues en `.kouzia.com` arriveraient sur ce CT ; le hub créera lui-même un enregistrement par site PHP (lot P3).
+
+Si le tableau de bord refuse `*` à l'étape 3, ne rien inventer : me le dire, le lot P3 posera chaque nom autrement.
+
+### 11.5 Installer
+
+Les scripts sont pris dans le CT du hub (aucun jeton GitHub dans le CT PHP) :
+
+```sh
+pct exec $HUB -- tar -C /opt/kouziahub/scripts -czf /tmp/php-ct.tgz php-ct
+pct pull $HUB /tmp/php-ct.tgz /root/php-ct.tgz
+pct exec $HUB -- rm -f /tmp/php-ct.tgz
+pct push $CTID /root/php-ct.tgz /root/php-ct.tgz
+pct exec $CTID -- sh -c 'tar -xzf /root/php-ct.tgz -C /root && sh /root/php-ct/install.sh'
+```
+
+L'installation pose nginx (écoute locale seulement), PHP 8.3 et ses extensions, MariaDB (socket local seulement), le pare-feu du CT pour les comptes des sites, l'outil `kouziaphpctl`, puis contrôle les limites par site et affiche l'état.
+
+Ensuite, dans le CT (`pct enter $CTID`) :
+
+```sh
+kouziaphpctl tunnel      # coller la commande copiée en 11.4 (rien ne s'affiche)
+kouziaphpctl upgrade     # premières mises à jour de sécurité
+kouziaphpctl status
+```
+
+Dans Cloudflare, le tunnel `kouziaphp` doit passer **« Sain »**.
+
+### 11.6 Me renvoyer
+
+Copier la sortie de ces deux commandes, dans le CT :
+
+```sh
+kouziaphpctl cgroups
+kouziaphpctl status
+```
+
+`cgroups` dit si les limites CPU, mémoire et processus **par site** fonctionnent dans ce CT : il lance un service d'essai borné, vérifie que les limites sont posées, puis qu'elles agissent vraiment (un processus qui dépasse la mémoire est arrêté, un trop-plein de processus est refusé). Si ce n'est pas le cas, les limites de PHP et celles du CT restent en place, et la suite se décide avec ce résultat.
+
+### 11.7 Au quotidien
+
+| Commande (dans le CT) | Rôle |
+|---|---|
+| `kouziaphpctl upgrade` | Mises à jour de sécurité (une fois par semaine) : paquets de la version d'Alpine installée, vérification de nginx, redémarrage des services touchés. `status` alerte après 14 jours sans mise à jour |
+| `kouziaphpctl status` | État du CT |
+| `kouziaphpctl install` | Réparer ou rejouer l'installation (rien n'est remplacé qui marche) |
+| `kouziaphpctl firewall` | Reposer le pare-feu du CT |
+| `kouziaphpctl cgroups` | Contrôler les limites par site |
+| `kouziaphpctl tunnel` | Changer le jeton du tunnel |
+
+**Mettre à jour les scripts** du CT PHP après une mise à jour du hub : refaire les cinq commandes de 11.5 (l'installation est rejouable).
