@@ -214,6 +214,15 @@ export type FilesResponse = {
 /** Fichier écarté lors d'un envoi, avec la raison affichable. */
 export type RejectedFile = { path: string; reason: string };
 
+/**
+ * Page ou feuille de style reçue qui référence un fichier refusé (jamais servi) : le site sera cassé.
+ * exceptable : autorisable dans l'onglet Serveur (outillage comme src/), sinon jamais (.env, .git, node_modules).
+ */
+export type BrokenReference = { from: string; target: string; exceptable: boolean };
+
+/** Code serveur reçu (PHP, Python...) : app = application dynamique, files = scripts isolés (formulaire). */
+export type ServerAppNotice = { language: string; kind: "app" | "files"; count: number; examples: string[] };
+
 export type UploadResult = {
   accepted: string[];
   rejected: RejectedFile[];
@@ -223,6 +232,10 @@ export type UploadResult = {
   removed?: number;
   /** Projet reconnu sur tout l'envoi, fichiers écartés compris (package.json, astro.config...), s'il n'est pas construit. */
   projectCheck?: VersionCheck | null;
+  /** Références des HTML et CSS reçus vers des fichiers refusés (200 au plus). */
+  brokenRefs?: BrokenReference[];
+  /** Code serveur reçu : jamais publié sur la version de travail (gardé pour l'export), null sans. */
+  serverApp?: ServerAppNotice | null;
   files: FilesResponse;
 };
 

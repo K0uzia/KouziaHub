@@ -431,3 +431,45 @@ describe("publication et versions", () => {
     expect(existsSync(hub.services.blobs.pathOf(kept))).toBe(true);
   });
 });
+
+describe("compte rendu d'envoi : fichiers utilisés mais refusés, code serveur", () => {
+  it("site HTML qui utilise src/ : alerte en tête ; formulaire PHP gardé pour l'export, jamais publié sur Pages", async () => {
+    const res = await upload([
+      { filename: "index.html", content: '<img src="src/branding/Logo-blanc.png"><link rel="icon" href="src/favicon.ico"><form action="contact.php"></form>' },
+      { filename: "src/branding/Logo-blanc.png", content: "png" },
+      { filename: "src/favicon.ico", content: "ico" },
+      { filename: "contact.php", content: "<?php mail('a@b.fr', 'x', 'y');" },
+      { filename: "README.md", content: "# notes" },
+      { filename: ".claude/settings.json", content: "{}" },
+    ]);
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as UploadResult;
+    expect(body.accepted.sort()).toEqual(["contact.php", "index.html"]);
+    expect(body.rejected.map((r) => r.path).sort()).toEqual([".claude/settings.json", "README.md", "src/branding/Logo-blanc.png", "src/favicon.ico"]);
+    expect(body.brokenRefs).toEqual([
+      { from: "index.html", target: "src/branding/Logo-blanc.png", exceptable: true },
+      { from: "index.html", target: "src/favicon.ico", exceptable: true },
+    ]);
+    expect(body.serverApp).toEqual({ language: "PHP", kind: "files", count: 1, examples: ["contact.php"] });
+
+    await publish();
+    const project = (await detail()).pagesProject;
+    const manifest = Object.keys(hub.cf.deployments(project).at(-1)!.manifest);
+    expect(manifest.some((p) => p.endsWith("index.html"))).toBe(true);
+    expect(manifest.some((p) => /contact\.php$/.test(p))).toBe(false);
+  });
+
+  it("application PHP envoyée en zip : site dynamique signalé ; une exception exacte lève l'alerte de référence", async () => {
+    const zip = await makeZip([
+      { name: "public/index.php", content: "<?php require '../app/Kernel.php';" },
+      { name: "app/Kernel.php", content: "<?php class Kernel {}" },
+      { name: "templates/home.php", content: "<?php echo 1;" },
+    ]);
+    const res = await sendZip(zip, "replace");
+    expect((res.json() as UploadResult).serverApp).toMatchObject({ language: "PHP", kind: "app", count: 3 });
+
+    await hub.app.inject({ method: "PATCH", url: `/api/sites/${siteId}`, headers: hub.headers, payload: { devFilesAllowed: ["src/logo.png"] } });
+    const again = (await upload([{ filename: "index.html", content: '<img src="src/logo.png"><img src="node_modules/x/y.png">' }])).json() as UploadResult;
+    expect(again.brokenRefs).toEqual([{ from: "index.html", target: "node_modules/x/y.png", exceptable: false }]);
+  });
+});

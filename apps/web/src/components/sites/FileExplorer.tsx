@@ -43,9 +43,9 @@ import { Banner } from "@/components/ui/Banner";
 import { PublishBar } from "@/components/sites/PublishBar";
 import { VersionCheckNotice } from "@/components/sites/VersionCheckNotice";
 import { ZipUpload } from "@/components/sites/ZipUpload";
-import { RejectedSummary, SkippedList, UploadProgress, type Progress, type SkippedItem } from "@/components/sites/UploadFeedback";
+import { hasNotices, RejectedSummary, SkippedList, UploadProgress, type Progress, type SkippedItem, type UploadNoticesData } from "@/components/sites/UploadFeedback";
 
-type Rejected = { accepted: number; rejected: SkippedItem[] };
+type Rejected = { accepted: number; rejected: SkippedItem[]; notices?: UploadNoticesData };
 
 function rawUrl(siteId: string, path: string) {
   return `/api/sites/${siteId}/files/raw?path=${encodeURIComponent(path)}`;
@@ -228,10 +228,9 @@ export function FilesTab({
       ].filter(Boolean);
       if (parts.length) toast.success(parts.join(", "));
       const allSkipped = [...skipped, ...res.rejected];
-      if (allSkipped.length) {
-        setRejected({ accepted: res.accepted.length, rejected: allSkipped });
-        toast.warning(plural(allSkipped.length, "fichier écarté", "fichiers écartés"));
-      }
+      const notices = { brokenRefs: res.brokenRefs, serverApp: res.serverApp };
+      if (allSkipped.length || hasNotices(notices)) setRejected({ accepted: res.accepted.length, rejected: allSkipped, notices });
+      if (allSkipped.length) toast.warning(plural(allSkipped.length, "fichier écarté", "fichiers écartés"));
     } catch (err) {
       const session = opened as UploadSession | null;
       if (isAbort(err) && cancelled) {
@@ -475,7 +474,7 @@ export function FilesTab({
                 ) : null}
               </Banner>
             ) : null}
-            {rejected ? <RejectedSummary accepted={rejected.accepted} rejected={rejected.rejected} onClose={() => setRejected(null)} /> : null}
+            {rejected ? <RejectedSummary accepted={rejected.accepted} rejected={rejected.rejected} notices={rejected.notices} onClose={() => setRejected(null)} /> : null}
             {files.error && files.data ? (
               <Banner level="warning" action={<Button variant="ghost" onClick={() => void files.reload()}>Réessayer</Button>}>
                 Dernière lecture impossible : {files.error}

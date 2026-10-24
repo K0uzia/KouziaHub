@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/Button";
 import { Segmented } from "@/components/ui/Segmented";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Banner } from "@/components/ui/Banner";
-import { RejectedSummary, UploadProgress, type Progress } from "@/components/sites/UploadFeedback";
+import { hasNotices, RejectedSummary, UploadProgress, type Progress } from "@/components/sites/UploadFeedback";
 
 type Mode = "replace" | "merge";
 const MODES = [
@@ -106,7 +106,7 @@ export function ZipUpload({
       setInterrupted([]);
       onDone(res);
       toast.success(`${plural(res.accepted.length, "fichier reçu", "fichiers reçus")} depuis le zip${res.removed ? `, ${plural(res.removed, "ancien fichier retiré", "anciens fichiers retirés")}` : ""}`);
-      if (res.rejected.length || res.strippedRoot) setResult(res);
+      if (res.rejected.length || res.strippedRoot || hasNotices(res)) setResult(res);
       if (res.rejected.length) toast.warning(plural(res.rejected.length, "fichier écarté", "fichiers écartés"));
     } catch (err) {
       const session = opened as UploadSession | null;
@@ -236,8 +236,8 @@ export function ZipUpload({
               Le zip contenait un seul dossier, <span className="font-mono">{result.strippedRoot}</span> : son contenu a été placé à la racine du site.
             </Banner>
           ) : null}
-          {result && result.rejected.length ? (
-            <RejectedSummary accepted={result.accepted.length} rejected={result.rejected} onClose={() => setResult(null)} />
+          {result && (result.rejected.length || hasNotices(result)) ? (
+            <RejectedSummary accepted={result.accepted.length} rejected={result.rejected} notices={result} onClose={() => setResult(null)} />
           ) : null}
         </div>
       </section>

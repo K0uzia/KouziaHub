@@ -4,7 +4,7 @@ import { refreshDirty } from "@/lib/files.js";
 import { HttpError } from "@/lib/http.js";
 import { KEPT_VERSIONS } from "@/lib/limits.js";
 import { prisma } from "@/lib/prisma.js";
-import { classifySitePath, CONFIG_FILES } from "@/lib/site-paths.js";
+import { classifySitePath, CONFIG_FILES, isServerCode } from "@/lib/site-paths.js";
 import { siteExtras } from "@/lib/site-extras.js";
 import { buildWorkerScript } from "@/lib/worker-script.js";
 import { HTACCESS_PATH, pagesDeployConfig } from "@/lib/server-config.js";
@@ -149,6 +149,8 @@ export async function deployVersion(services: Services, siteId: string, versionI
   for (const f of version.files) {
     // Fichier de développement resté dans une version (envoi d'avant la règle) : jamais déployé.
     if (!CONFIG_FILES.has(f.path) && f.path !== HTACCESS_PATH && classifySitePath(f.path, { allow: extras.devFilesAllowed }).action !== "accept") continue;
+    // Code serveur (PHP...) : gardé pour l'export vers l'hébergement final, jamais sur Pages (servi comme source).
+    if (isServerCode(f.path)) continue;
     if (CONFIG_FILES.has(f.path)) {
       const text = (await services.blobs.read(f.sha256)).toString("utf8");
       if (f.path === "_headers") user.headers = text;

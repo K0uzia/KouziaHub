@@ -1,4 +1,6 @@
-import type { RejectedFile, UploadResult, VersionCheck } from "@/contract.js";
+import type { BrokenReference, RejectedFile, ServerAppNotice, UploadResult, VersionCheck } from "@/contract.js";
+import { findBrokenReferences, MAX_REF_FILE_BYTES, MAX_REF_FILES, REF_FILE_RE } from "@/lib/broken-refs.js";
+import { serverAppOf } from "@/lib/site-paths.js";
 import { siteExtras } from "@/lib/site-extras.js";
 import { checkVersion } from "@/lib/version-check.js";
 import { audit } from "@/lib/audit.js";
@@ -21,6 +23,22 @@ import { extractZip } from "@/lib/zip.js";
 function projectCheckOf(accepted: string[], rejected: string[]): VersionCheck | null {
   const check = checkVersion([...accepted, ...rejected], null);
   return check?.code === "unbuilt" ? check : null;
+}
+
+/**
+ * Alertes en tête du compte rendu : pages qui référencent un fichier refusé (site cassé en ligne) et code serveur
+ * (site dynamique, ou script de formulaire) qui ne tourne pas sur la version de travail statique.
+ */
+async function uploadNotices(
+  services: Services,
+  siteId: string,
+  kept: FileRef[],
+  allPaths: string[],
+): Promise<{ brokenRefs: BrokenReference[]; serverApp: ServerAppNotice | null }> {
+  const pages = kept.filter((f) => REF_FILE_RE.test(f.path) && f.size <= MAX_REF_FILE_BYTES).slice(0, MAX_REF_FILES);
+  const texts = await Promise.all(pages.map(async (f) => ({ path: f.path, text: (await services.blobs.readText(f.sha256, MAX_REF_FILE_BYTES)) ?? "" })));
+  const { devFilesAllowed } = await siteExtras(siteId);
+  return { brokenRefs: findBrokenReferences(texts, devFilesAllowed), serverApp: serverAppOf(allPaths) };
 }
 
 /**
@@ -69,6 +87,7 @@ export async function importFiles(
       kept.map((f) => f.path),
       allRejected.map((r) => r.path),
     ),
+    ...(await uploadNotices(services, site.id, kept, [...kept.map((f) => f.path), ...allRejected.map((r) => r.path)])),
     files: await listFiles(site.id, services.blobs),
   };
 }
@@ -104,6 +123,7 @@ export async function importZip(
       rejected: extraction.rejected,
       projectCheck: projectCheckOf(extraction.accepted.map((f) => f.path), extraction.rejected.map((r) => r.path)),
       strippedRoot: extraction.strippedRoot,
+      ...(await uploadNotices(services, site.id, extraction.accepted, [...extraction.accepted.map((f) => f.path), ...extraction.rejected.map((r) => r.path)])),
       ...(mode === "replace" ? { removed } : {}),
       files: await listFiles(site.id, services.blobs),
     };

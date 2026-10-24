@@ -85,6 +85,10 @@ describe("fichiers de développement jamais servis", () => {
     "/app.js.map",
     "/.index.html.swp",
     "/index.html~",
+    "/contact.php",
+    "/app/Controller.PHP",
+    "/.claude/settings.json",
+    "/.gitignore",
   ])("%s : 403 avec les en-têtes du hub, sans lire les fichiers", async (path) => {
     served.length = 0;
     const res = await worker.fetch(new Request(`https://alpha.kouzia.com${path}`), env);
@@ -93,7 +97,7 @@ describe("fichiers de développement jamais servis", () => {
     expectSiteHeaders(res);
   });
 
-  it.each(["/.well-known/security.txt", "/index.html", "/assets/app.js", "/mdfile.html"])("%s : servi", async (path) => {
+  it.each(["/.well-known/security.txt", "/index.html", "/assets/app.js", "/mdfile.html", "/php.html", "/readme-site.html"])("%s : servi", async (path) => {
     const res = await worker.fetch(new Request(`https://alpha.kouzia.com${path}`), env);
     expect(res.status).toBe(200);
   });
