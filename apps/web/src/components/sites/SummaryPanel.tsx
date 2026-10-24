@@ -59,6 +59,22 @@ export function SummaryPanel({ site, onSite }: { site: SiteDetail; onSite: (s: S
           <dt className="text-xs text-[var(--muted)]">Adresse</dt>
           <dd className="mt-0.5 break-all font-mono text-[var(--text)]">{site.hostname}</dd>
         </div>
+        {site.php ? (
+          <div>
+            <dt className="text-xs text-[var(--muted)]">Hébergement</dt>
+            <dd className="mt-0.5 text-[var(--text)]">
+              Serveur des sites PHP, PHP {site.php.version}
+              <span className="block text-xs text-[var(--muted)]">
+                Dossier public : <span className="font-mono">{site.php.publicDir ? `${site.php.publicDir}/` : "racine"}</span>
+                {site.php.persistentDirs.length ? (
+                  <>
+                    , persistants : <span className="font-mono">{site.php.persistentDirs.map((d) => `${d}/`).join(", ")}</span>
+                  </>
+                ) : null}
+              </span>
+            </dd>
+          </div>
+        ) : null}
         <div>
           <dt className="text-xs text-[var(--muted)]">Client</dt>
           <dd className="mt-0.5 min-w-0">

@@ -89,6 +89,13 @@ describe("site PHP de bout en bout", () => {
     expect(record).toMatchObject({ type: "CNAME", content: `${TUNNEL}.cfargotunnel.com` });
     expect(mem.nodes.get("/srv/sites/mytakumi/current")).toEqual({ type: "link", target: "releases/1" });
     expect((await prisma.version.findFirstOrThrow({ where: { siteId: id, number: 1 }, include: { files: true } })).files.map((f) => f.path)).toEqual(["public/index.html"]);
+    // Contrôle des orphelins : le CNAME vers le tunnel est reconnu, aucun projet Pages attendu.
+    const orphans = (await hub.app.inject({ method: "POST", url: "/api/orphans/check", headers: hub.headers })).json() as { findings: Array<{ name: string }> };
+    expect(orphans.findings.filter((f) => f.name.includes("mytakumi"))).toEqual([]);
+    // CNAME détourné vers une autre cible : signalé.
+    await hub.cf.updateCname(record!.id, "mytakumi.kouzia.com", "autre.example.com", record!.comment ?? "");
+    const after = (await hub.app.inject({ method: "POST", url: "/api/orphans/check", headers: hub.headers })).json() as { findings: Array<{ name: string; type: string }> };
+    expect(after.findings).toEqual(expect.arrayContaining([expect.objectContaining({ type: "dns", name: "mytakumi.kouzia.com" })]));
     // Aucun appel Cloudflare Pages pour ce site.
     expect((await hub.cf.listProjects()).map((p) => p.name)).not.toContain("kz-mytakumi");
   });

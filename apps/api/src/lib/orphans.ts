@@ -39,21 +39,23 @@ export class ProjectCounter {
   }
 }
 
-type SiteRow = { id: string; slug: string; pagesProject: string | null; dnsRecordId: string | null; state: string };
+type SiteRow = { id: string; slug: string; pagesProject: string | null; dnsRecordId: string | null; state: string; hosting: string };
 
-// extraTargets : cibles légitimes hors Pages (tunnel des sites PHP, <id>.cfargotunnel.com).
-function analyse(records: CfDnsRecord[], projects: CfProject[], sites: SiteRow[], sitesDomain: string, extraTargets: string[] = []): OrphanFinding[] {
+// phpTarget : cible des CNAME des sites PHP (<id>.cfargotunnel.com) ; null si l'agent ne l'a pas donnée (pas de verdict).
+function analyse(records: CfDnsRecord[], projects: CfProject[], sites: SiteRow[], sitesDomain: string, phpTarget: string | null = null): OrphanFinding[] {
   const findings: OrphanFinding[] = [];
   const sitesById = new Map(sites.map((s) => [s.id, s]));
   const projectNames = new Set(projects.map((p) => p.name));
-  const projectTargets = new Set([...projects.map((p) => p.subdomain.toLowerCase()), ...extraTargets.map((t) => t.toLowerCase())]);
+  const projectTargets = new Set(projects.map((p) => p.subdomain.toLowerCase()));
   const sitesByProject = new Set(sites.map((s) => s.pagesProject));
   const recordIds = new Set(records.map((r) => r.id));
 
   for (const record of records) {
     const siteId = (record.comment ?? "").slice(HUB_DNS_COMMENT_PREFIX.length);
     const site = sitesById.get(siteId);
-    const targetKnown = projectTargets.has(record.content.toLowerCase());
+    const target = record.content.toLowerCase();
+    // Site PHP : sa cible est le tunnel du CT PHP ; inconnue (agent injoignable), aucun verdict plutôt qu'une fausse alerte.
+    const targetKnown = site?.hosting === "php" ? phpTarget === null || target === phpTarget.toLowerCase() : projectTargets.has(target);
     if (!site) {
       findings.push({ type: "dns", name: record.name, detail: "Enregistrement DNS du hub sans site correspondant.", deletable: true });
     } else if (!targetKnown) {
@@ -97,6 +99,8 @@ export class OrphanService {
   constructor(
     private readonly cloudflare: CloudflareGateway,
     private readonly sitesDomain: string,
+    /** Cible des CNAME des sites PHP, lue par l'agent (null : inconnue). */
+    private readonly phpTarget: () => Promise<string | null> = async () => null,
   ) {}
 
   async latest(): Promise<OrphanReport> {
@@ -108,9 +112,10 @@ export class OrphanService {
     const [records, projects, sites] = await Promise.all([
       this.cloudflare.listHubDnsRecords(),
       this.cloudflare.listProjects(),
-      prisma.site.findMany({ select: { id: true, slug: true, pagesProject: true, dnsRecordId: true, state: true } }),
+      prisma.site.findMany({ select: { id: true, slug: true, pagesProject: true, dnsRecordId: true, state: true, hosting: true } }),
     ]);
-    return analyse(records, projects, sites, this.sitesDomain);
+    const phpTarget = sites.some((s) => s.hosting === "php") ? await this.phpTarget().catch(() => null) : null;
+    return analyse(records, projects, sites, this.sitesDomain, phpTarget);
   }
 
   /**

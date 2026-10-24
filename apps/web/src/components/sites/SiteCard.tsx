@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import type { SiteSummary } from "@hub/contract";
 import { formatAgo, formatDateTime } from "@/lib/format";
 import { OwnerLabel, StateBadge } from "@/components/sites/StateBadge";
+import { Badge } from "@/components/ui/Card";
 import { SiteThumb } from "@/components/sites/SiteThumb";
 import { siteFrame } from "@/lib/thumbFrame";
 import { ExpiryBadge } from "@/components/monitor/MonitorBadge";
@@ -34,6 +35,7 @@ export function SiteCard({ site, headingLevel = 3 }: { site: SiteSummary; headin
         {/* Un seul état (panne, erreur, création, hors ligne, en ligne) ; l'échéance proche reste à côté, en petit. */}
         <div className="flex flex-wrap items-center gap-2">
           <StateBadge site={site} />
+          {site.hosting === "php" ? <Badge tone="violet">PHP</Badge> : null}
           <ExpiryBadge monitor={site.monitor} />
         </div>
         <p className="truncate font-mono text-sm text-[var(--muted)]" title={site.hostname}>

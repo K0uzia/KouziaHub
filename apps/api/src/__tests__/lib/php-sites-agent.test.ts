@@ -169,7 +169,7 @@ describe("cycle de vie d'un site sur le CT (système simulé)", () => {
     const ops = siteOperations({ ...ctx, paths, limitsEffective: () => false, sys: m.sys });
     await ops.upsert(spec);
     await expect(ops.receive("mytakumi", 1, "/srv/sites/mytakumi/incoming/a.tar.gz")).rejects.toThrow(/lien/);
-    expect(m.runs.some((r) => r.startsWith("/bin/tar -xzf"))).toBe(false);
+    expect(m.runs.some((r) => r.startsWith("/bin/tar -x"))).toBe(false);
   });
 });
 

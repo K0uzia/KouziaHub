@@ -269,7 +269,8 @@ export function siteOperations(ctx) {
       const dir = path.posix.join(siteDir(spec.slug), "releases", String(n));
       await sys.rm(dir);
       await sys.mkdir(dir, 0o750);
-      await run("/bin/tar", ["-xzf", archivePath, "-C", dir, "--no-same-owner", "--no-same-permissions"], "Extraction de la version");
+      // -o : propriétaire de l'archive ignoré (BusyBox et GNU tar) ; droits reposés juste après.
+      await run("/bin/tar", ["-xzof", archivePath, "-C", dir], "Extraction de la version");
       await run("/bin/chown", ["-R", `root:${userOf(spec.slug)}`, dir], "Droits de la version");
       await run("/bin/chmod", ["-R", "u=rwX,g=rX,o=", dir], "Droits de la version");
       await sys.rm(archivePath);

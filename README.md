@@ -244,6 +244,8 @@ Bouton « Nouveau site », une seule fenêtre :
 
 La version de travail n'est jamais indexée par les moteurs de recherche, et l'adresse `pages.dev` du projet renvoie vers `<slug>.kouzia.com`.
 
+**Site dynamique (PHP)** : quand le serveur des sites PHP est relié (section 11), la fenêtre propose aussi l'hébergement « PHP ». Voir 11.9.
+
 ### 5.3 Fiche d'un site
 
 À droite (en dessous sur téléphone), le panneau **Synthèse** : adresse, client (lien vers sa fiche dans l'ERP), version servie, fichiers de travail, l'interrupteur **« Site accessible »** et, juste dessous, l'interrupteur **« Indexation par les moteurs »**. Puis six onglets : Fichiers, Versions, Surveillance, Vignette, Serveur, Réglages.
@@ -662,3 +664,16 @@ La première ligne règle l'agent (IP du hub seule autorisée, secret), la deuxi
 3. Depuis un autre poste du réseau, la même adresse ne répond pas (pare-feu Proxmox).
 
 En cas de « signature refusée » dans la tuile : secret différent des deux côtés (refaire les quatre lignes), ou horloges des CT décalées de plus d'une minute (elles suivent celle du nœud Proxmox).
+
+### 11.9 Créer et publier un site PHP (lot P3)
+
+1. « Nouveau site », puis **Hébergement : PHP** (proposé seulement quand le serveur des sites PHP répond, 11.8). Régler :
+   - **Version de PHP** : celles installées sur le CT (8.3 par défaut) ;
+   - **Dossier public** : le seul dossier servi (`public` pour MyTakumi ; vide : racine du projet) ;
+   - **Dossiers persistants** : gardés d'une version à l'autre et jamais servis (MyTakumi : `data`, qui contient sa base de développement, les originaux envoyés et sa clé `app.key`). Au premier envoi, leur contenu les initialise ; ensuite, une publication ne les écrase jamais.
+2. La fiche montre les étapes : site posé sur le serveur PHP, page d'attente, adresse (vers le tunnel du CT), en ligne. **Pas d'attente de certificat** (celui de Cloudflare sur `kouzia.com` sert tout de suite).
+3. Envoyer le projet (zip ou explorateur) : pour un site PHP, `src/`, `composer.json` et les `.php` sont gardés ; `.env`, `.git`, `node_modules`, les README restent refusés. Composer ne tourne jamais sur le serveur : envoyer le projet avec son `vendor/` s'il en a un. Il faut une page d'entrée (`index.php` ou `index.html`) dans le dossier public.
+4. **Publier** : la version part en archive au CT, devient la version servie d'un coup, puis le hub vérifie que `/.env`, `/.git/config`, `/composer.json`, `/vendor/` et les dossiers persistants sont bien refusés. **Une fuite coupe le site** et fait échouer la publication, avec les chemins en cause.
+5. Couper, rallumer, republier une ancienne version et supprimer marchent comme pour un site statique.
+
+Les variables d'environnement (`.env` du site), la base MariaDB, les journaux, la tâche planifiée et les e-mails capturés arrivent aux lots P4 et P5.

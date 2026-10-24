@@ -133,7 +133,8 @@ export function FilesTab({
   /** Choix d'abord : écartés avant l'envoi, dossier de projet reconnu (proposition « seulement dist/ »). */
   async function send(picked: PickedFile[], confirmedUnbuilt = false) {
     if (!picked.length || progress) return;
-    const prepared = prepareSelection(picked, files.data?.limits.maxFileBytes ?? null, site.devFilesAllowed);
+    // Mêmes règles que le serveur, hébergement compris (un site PHP garde src/ et composer.json).
+    const prepared = prepareSelection(picked, files.data?.limits.maxFileBytes ?? null, { allow: site.devFilesAllowed, hosting: site.hosting });
     const skipped = prepared.excluded.map((e) => ({ path: (dir ? `${dir}/` : "") + e.path, reason: e.reason, size: e.size }));
     // Reprise d'un envoi « seulement dist/ » : même choix, sans redemander.
     if (resume && prepared.project && prepared.project.files.length === resume.included.length) {

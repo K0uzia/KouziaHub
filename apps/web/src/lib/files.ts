@@ -1,5 +1,5 @@
 import type { WorkingFileEntry } from "@hub/contract";
-import { checkSitePath, fileTooBigReason } from "@hub/site-paths";
+import { checkSitePath, fileTooBigReason, type ClassifyOptions } from "@hub/site-paths";
 
 export type DirEntry =
   | { type: "folder"; name: string; path: string; size: number; count: number; updatedAt: string }
@@ -104,11 +104,11 @@ const OUTPUT_DIRS = ["dist", "build", "out"];
  * Tri avant l'envoi, avec les règles du serveur (@hub/site-paths, une seule source) : les dossiers de
  * développement et les fichiers interdits ne partent jamais ; les fichiers trop lourds sont nommés.
  */
-export function prepareSelection(picked: PickedFile[], maxFileBytes: number | null, allow: readonly string[] = []): PreparedSelection {
+export function prepareSelection(picked: PickedFile[], maxFileBytes: number | null, rules: ClassifyOptions = {}): PreparedSelection {
   const send: PickedFile[] = [];
   const excluded: ExcludedFile[] = [];
   for (const p of picked) {
-    const { verdict } = checkSitePath(p.path, { allow });
+    const { verdict } = checkSitePath(p.path, rules);
     if (verdict.action !== "accept") excluded.push({ path: p.path, size: p.file.size, reason: verdict.reason });
     else if (maxFileBytes != null && p.file.size > maxFileBytes) excluded.push({ path: p.path, size: p.file.size, reason: fileTooBigReason(p.file.size) });
     else send.push(p);
