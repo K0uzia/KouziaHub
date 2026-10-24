@@ -670,7 +670,7 @@ CT de départ : 2 cœurs, 2 Go de RAM (dont environ 256 Mo pour le tampon de Mar
 | Agent détourné (il agit en root sur le CT PHP) | Liste fermée d'opérations, chaque paramètre validé (slug, chemins, versions de PHP connues), requêtes signées et horodatées, port ouvert au seul hub, journal de chaque opération dans le hub |
 | Code source ou `.env` téléchargeable | Racine web limitée au dossier public, `.env` dans `shared/`, règles nginx de refus, contrôle automatique après chaque publication (demande de `/.env`, `/composer.json`, `/vendor/` : 403 ou 404 attendu, sinon alerte et site coupé) |
 | Vrais e-mails ou vrais paiements depuis une recette | Capteur d'e-mails, SMTP bloqué, clés `live` refusées |
-| Versions de PHP ou paquets non corrigés | `kouziaphp upgrade` (apk upgrade dans la branche installée, comme `system_upgrade` du hub), signalé dans le hub ; alerte si une version de PHP utilisée sort du support de sécurité ; changement de branche Alpine à la main, une fois par an |
+| Versions de PHP ou paquets non corrigés | `kouziaphpctl upgrade` (apk upgrade dans la branche installée, comme `system_upgrade` du hub), signalé dans le hub ; alerte si une version de PHP utilisée sort du support de sécurité ; changement de branche Alpine à la main, une fois par an |
 | Indexation d'une recette | noindex par défaut, comme les sites statiques |
 
 **Mises à jour de sécurité** : un outil `kouziaphpctl` sur le CT PHP, copié de `hubctl` (install, update, status, upgrade, backup). `upgrade` lance `apk update` puis `apk upgrade` dans la branche installée, vérifie `nginx -t` et `php-fpm -t`, redémarre nginx, les pools et MariaDB, et écrit le résultat. Le hub affiche la date de la dernière mise à jour et une alerte au-delà de 14 jours.
