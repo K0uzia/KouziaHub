@@ -22,8 +22,8 @@ import type { Services } from "@/lib/services.js";
 import { catalog, siteDetail, toOperation } from "@/lib/site-view.js";
 import { checkSlug, hubZoneConflict, projectNameFor, suggestSlug } from "@/lib/slug.js";
 import { toStoredImage } from "@/lib/thumbnails.js";
-import { phpEntryCheck, phpSettingsFor } from "@/lib/php-sites.js";
-import { hostingOf } from "@/lib/site-hosting.js";
+import { phpSettingsFor } from "@/lib/php-sites.js";
+import { hostingOf, phpEntryCheck } from "@/lib/site-hosting.js";
 
 const label = z.string().trim().min(1, "Libellé vide.").max(120, "120 caractères au plus.");
 const slugField = z.string().trim().toLowerCase().max(64);

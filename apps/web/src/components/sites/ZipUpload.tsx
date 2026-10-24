@@ -33,12 +33,15 @@ function isZip(file: File) {
 /** Envoi du site entier en zip (voie principale, téléphone compris), en remplacement ou en fusion. */
 export function ZipUpload({
   siteId,
+  publicDir = null,
   fileCount,
   maxZipBytes,
   busy,
   onDone,
 }: {
   siteId: string;
+  /** Site PHP : son dossier public (vide : racine du projet) ; null pour un site statique. */
+  publicDir?: string | null;
   fileCount: number;
   maxZipBytes: number | null;
   /** Un autre envoi est en cours dans l'explorateur. */
@@ -160,7 +163,9 @@ export function ZipUpload({
           Envoyer le site entier (zip)
         </h2>
         <p className="mt-1 text-sm text-[var(--muted)]">
-          Un zip du dossier du site, avec index.html à la racine du zip ou dans un seul dossier.
+          {publicDir === null
+            ? "Un zip du dossier du site, avec index.html à la racine du zip ou dans un seul dossier."
+            : `Un zip du projet PHP (son code et ${publicDir ? `le dossier ${publicDir}/ avec index.php` : "index.php à la racine"}), à la racine du zip ou dans un seul dossier.`}
           {maxZipBytes ? ` ${formatBytes(maxZipBytes)} au plus.` : ""}
         </p>
 

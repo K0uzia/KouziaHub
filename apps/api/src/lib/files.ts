@@ -1,4 +1,5 @@
 import type { FilesResponse, VersionCheck } from "@/contract.js";
+import { hostingOf, phpEntryCheck } from "@/lib/site-hosting.js";
 import type { BlobStore } from "@/lib/blobs.js";
 import { checkVersion } from "@/lib/version-check.js";
 import { classifySitePath } from "@/lib/site-paths.js";
@@ -63,13 +64,15 @@ export async function leftoverDevFiles(siteId: string, paths: string[]): Promise
 export async function listFiles(siteId: string, blobs: BlobStore): Promise<FilesResponse> {
   const [files, site] = await Promise.all([
     prisma.workingFile.findMany({ where: { siteId }, orderBy: { path: "asc" } }),
-    prisma.site.findUniqueOrThrow({ where: { id: siteId }, select: { workingDirty: true } }),
+    prisma.site.findUniqueOrThrow({ where: { id: siteId }, select: { workingDirty: true, hosting: true, phpPublicDir: true } }),
   ]);
+  // Site PHP : page d'entrée (index.php ou index.html) dans le dossier public ; site Pages : index.html à la racine.
+  const phpCheck = hostingOf(site) === "php" ? phpEntryCheck(files.map((f) => f.path), site.phpPublicDir ?? "") : undefined;
   return {
     files: files.map((f) => ({ path: f.path, size: f.size, sha256: f.sha256, updatedAt: f.updatedAt.toISOString() })),
     totalBytes: files.reduce((sum, f) => sum + f.size, 0),
-    hasIndex: files.some((f) => f.path === "index.html"),
-    versionCheck: await workingVersionCheck(files, blobs),
+    hasIndex: phpCheck !== undefined ? phpCheck === null : files.some((f) => f.path === "index.html"),
+    versionCheck: phpCheck !== undefined ? phpCheck : await workingVersionCheck(files, blobs),
     devFiles: await leftoverDevFiles(siteId, files.map((f) => f.path)),
     workingDirty: site.workingDirty,
     limits: FILE_LIMITS,
