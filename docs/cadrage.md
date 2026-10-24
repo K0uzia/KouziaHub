@@ -541,9 +541,9 @@ Côté Worker, un schéma D1 de 4 tables, versionné dans le dépôt et appliqu�
 
 ---
 
-## 11. Sites dynamiques en PHP (cadrage du 24/10/2026, en attente d'accord)
+## 11. Sites dynamiques en PHP (cadrage du 24/10/2026, validé le 24/10/2026)
 
-Demande d'Alexandre : le hub héberge aussi les versions de travail des sites PHP, MyTakumi d'abord (PHP 8.2 ou plus, MySQL en production, SQLite en développement, une tâche planifiée toutes les 15 minutes). Tout reste sur le seul Proxmox d'Alexandre, aucune autre machine. Rien n'est écrit tant que ce cadrage n'est pas validé.
+Demande d'Alexandre : le hub héberge aussi les versions de travail des sites PHP, MyTakumi d'abord (PHP 8.2 ou plus, MySQL en production, SQLite en développement, une tâche planifiée toutes les 15 minutes). Tout reste sur le seul Proxmox d'Alexandre, aucune autre machine. Validé le 24/10/2026, avec les décisions de 11.10.
 
 ### 11.1 Principe
 
@@ -566,7 +566,8 @@ CT « kouziahub » (hub) ── réseau du Proxmox, port de l'agent ──┘
   1. **Pare-feu Proxmox sur l'interface du CT** (le root du CT ne peut pas le retirer) : sortie refusée vers `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`, `169.254.0.0/16`, sauf la passerelle pour le DNS ; sortie SMTP (25, 465, 587) refusée ; entrée seulement depuis l'IP du CT du hub, vers le port de l'agent.
   2. **nftables dans le CT**, par compte : les comptes des sites ne peuvent joindre ni l'agent, ni MariaDB par le réseau (socket local seulement), ni le LAN.
   - Un **VLAN dédié** (pont Proxmox séparé) est plus propre si la box et le switch le permettent. *Recommandation : pare-feu Proxmox d'abord (rien à acheter), VLAN plus tard si Alexandre en a l'usage.*
-  - Sortie Internet en HTTPS laissée ouverte par défaut (API de paiement en mode test, polices, webhooks). Elle peut être fermée site par site.
+  - Sortie Internet en HTTPS ouverte par défaut (API de paiement en mode test, API de suivi des colis, webhooks), fermable site par site.
+  - **IMAP (993) fermé par défaut** : une recette ne relève jamais la vraie boîte d'une boutique. Il s'ouvre seulement sur demande explicite, site par site, pour le compte de ce site.
 - **Par site** :
   - un compte système `php-<slug>`, sans shell ni mot de passe ;
   - un dossier `/srv/sites/<slug>/` (versions, `shared/`, `tmp/`, sessions, journaux), illisible des autres sites ;
@@ -592,7 +593,7 @@ CT « kouziahub » (hub) ── réseau du Proxmox, port de l'agent ──┘
     - un site absent répond 404.
 - **PHP** : paquets apk de la branche installée. Alpine 3.22 (dépôt community) fournit `php82`, `php83` et `php84`, chacun avec son `-fpm`.
   - La version se choisit par site parmi celles installées.
-  - MyTakumi : 8.3 proposée (8.2 ou plus demandé, 8.2 sort du support de sécurité avant les autres).
+  - MyTakumi : **8.3**. Vérifié dans le projet le 24/10/2026 : minimum 8.2.0 (`scripts/dev.php`), pas de `composer.json` ni de `vendor/`, rien qui exige 8.2 exactement. Extensions utilisées : `mbstring`, `gd` (dont WebP), `sodium`, `pdo_mysql`, `pdo_sqlite`, `ctype`, `exif`, `session`, `openssl` (client IMAP et HTTPS sans extension `imap`).
   - Les extensions sont installées à la demande, sur une liste connue : `pdo_mysql`, `mbstring`, `intl`, `gd`, `zip`, `opcache`...
 - **MariaDB** (paquets `mariadb`, `mariadb-client`), dans le même CT, écoute sur le socket local seulement.
   - Une base et un compte par site, droits limités à sa base, nombre de connexions plafonné.
@@ -617,6 +618,7 @@ CT « kouziahub » (hub) ── réseau du Proxmox, port de l'agent ──┘
   - Les règles d'envoi changent pour un site PHP : les `.php`, `composer.json` et `vendor/` sont acceptés. `.env`, `.git`, `.claude/`, `node_modules/` et les README restent refusés.
   - La détection de l'envoi dira alors « Site dynamique : à publier comme site PHP » et proposera de changer le type du site.
   - Composer n'est jamais lancé sur le serveur : Alexandre envoie le projet avec son `vendor/`, construit sur son PC.
+  - **Dossiers persistants** déclarés par site (MyTakumi : `data/`, qui contient sa base SQLite de développement, les originaux envoyés, son journal et `app.key`) : gardés dans `shared/` et reliés dans chaque version, jamais écrasés par une publication ni servis par nginx. Le contenu envoyé de ces dossiers sert seulement à les initialiser la première fois.
 - **Variables d'environnement** : écran « Variables » par site (clé et valeur, valeurs masquées), chiffrées dans la base du hub.
   - L'agent écrit `/srv/sites/<slug>/shared/.env` (lisible du seul compte du site), hors du dossier public, jamais publié ni téléchargeable.
   - `DB_*` est rempli d'office.
@@ -686,14 +688,14 @@ CT de départ : 2 cœurs, 2 Go de RAM (dont environ 256 Mo pour le tampon de Mar
 | **P4. Variables et base** | Écran des variables (chiffrées, clés `live` refusées), création de la base, import, export, réinitialisation, dump avant publication, sauvegarde de nuit | Rien |
 | **P5. Exploitation et MyTakumi** | Journaux, tâche planifiée, e-mails capturés, mesure disque et alertes, mesure des ressources ; mise en ligne de MyTakumi en recette | Envoyer MyTakumi avec son `vendor/`, son dump SQL et ses variables de test |
 
-### 11.10 Questions pour Alexandre
+### 11.10 Décisions (24/10/2026)
 
-1. **Réseau** : pare-feu Proxmox sur l'interface du CT (recommandé pour commencer) ou VLAN dédié dès maintenant ?
-2. **Sortie Internet** des sites PHP : ouverte en HTTPS par défaut (recommandé, fermable par site), ou fermée par défaut ?
-3. **Version de PHP** de MyTakumi : 8.3 (recommandé) ou 8.2 ?
-4. **MyTakumi a-t-il besoin d'appels sortants** (API de paiement, de cartes, d'e-mail transactionnel) ? Lesquels, pour les prévoir en mode test ?
-5. **Retour arrière de la base** : dump automatique avant chaque publication (recommandé), ou code seul ?
-6. **Taille du CT** : 2 cœurs, 2 Go de RAM, 30 Go de disque conviennent-ils au Proxmox actuel ?
+1. **Réseau** : pare-feu Proxmox sur l'interface du CT d'abord, VLAN plus tard.
+2. **Sortie Internet** : HTTPS ouvert par défaut, fermable par site. IMAP (993) fermé par défaut, ouvert sur demande explicite par site.
+3. **PHP de MyTakumi** : 8.3 (vérifié, voir 11.3).
+4. **Appels sortants de MyTakumi** : Stripe en mode test ; API Suivi de La Poste (HTTPS, clé dans ses réglages) ; relève IMAP de la boîte de la boutique, désactivée en recette sauf demande ; SMTP de l'hébergeur en production, capturé ici ; tâche `scripts/cron.php` toutes les 15 minutes.
+5. **Retour arrière de la base** : dump automatique avant chaque publication.
+6. **Taille du CT** : 2 cœurs, 2 Go de RAM, 30 Go de disque proposés, à confirmer par Alexandre.
 
 ---
 
