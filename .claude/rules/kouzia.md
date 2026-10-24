@@ -45,3 +45,8 @@ Elles remplacent les points correspondants ci-dessus et du cadrage (`docs/cadrag
 - Ni Cloudflare Access ni Zero Trust devant le hub. Le hub fonctionne comme l'ERP : tunnel Cloudflare à jeton, protection par le login du hub seul, mot de passe et code TOTP obligatoires. Access reste possible en option.
 - Par le tunnel, seul `hub.kouzia.com` est servi (404 ailleurs) ; limite de débit stricte, verrouillage progressif, journal des connexions, notification à chaque nouvel appareil.
 - Elles remplacent le point « Accès à l'outil » de la première série et le cadrage 1.6.
+
+## Décisions d'Alexandre (22/10/2026, cinquième série : indexation et logiciels, verrouillées)
+
+- Option « Autoriser l'indexation » par site, désactivée par défaut. Désactivée : comportement de la deuxième série (noindex). Activée : plus de `X-Robots-Tag`, `robots.txt` du site servi tel quel, sinon `Allow: /` avec la ligne `Sitemap:` si le fichier existe. Les adresses `pages.dev` restent en 301 et noindex. Premier usage : la démo Tracebay.
+- Licences Tracebay émises dans le hub (page Logiciels), d'après `docs/licences-logiciels.md`. Pas de révocation (vérification hors ligne). Les demandes d'utilisation arrivent dans l'ERP depuis le site ; la licence garde l'id client de l'ERP.
