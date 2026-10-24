@@ -50,3 +50,11 @@ Elles remplacent les points correspondants ci-dessus et du cadrage (`docs/cadrag
 
 - Option « Autoriser l'indexation » par site, désactivée par défaut. Désactivée : comportement de la deuxième série (noindex). Activée : plus de `X-Robots-Tag`, `robots.txt` du site servi tel quel, sinon `Allow: /` avec la ligne `Sitemap:` si le fichier existe. Les adresses `pages.dev` restent en 301 et noindex. Premier usage : la démo Tracebay.
 - Licences Tracebay émises dans le hub (page Logiciels), d'après `docs/licences-logiciels.md`. Pas de révocation (vérification hors ligne). Les demandes d'utilisation arrivent dans l'ERP depuis le site ; la licence garde l'id client de l'ERP.
+
+## Décisions d'Alexandre (24/10/2026, sixième série : sites PHP, verrouillées)
+
+- Le hub héberge aussi les versions de travail des sites dynamiques en PHP (MyTakumi d'abord), sur le seul Proxmox d'Alexandre, dans un CT dédié « kouziaphp », distinct du CT du hub et de celui de l'ERP. Aucune autre machine.
+- Pilotage par un agent à opérations fermées et signées, ouvert au seul CT du hub ; le jeton Cloudflare et les clés de licence ne quittent jamais le CT du hub.
+- Isolation : CT non privilégié, pare-feu Proxmox sur son interface (aucun accès au LAN, SMTP sortant bloqué), compte, pool PHP-FPM, base MariaDB et dossier par site.
+- Versions de travail : jamais de vrai e-mail (capteur), paiements en mode test seulement (clés live refusées), relève IMAP coupée par défaut, noindex par défaut.
+- Détail technique : `docs/cadrage.md`, section 11.
