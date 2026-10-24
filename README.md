@@ -677,3 +677,31 @@ En cas de « signature refusée » dans la tuile : secret différent des deux c�
 5. Couper, rallumer, republier une ancienne version et supprimer marchent comme pour un site statique.
 
 Les variables d'environnement (`.env` du site), la base MariaDB, les journaux, la tâche planifiée et les e-mails capturés arrivent aux lots P4 et P5.
+
+### 11.10 Recette sur le vrai CT (à faire une fois, dans l'ordre)
+
+But : vérifier en réel ce qui n'a tourné qu'en simulation (scripts Alpine, agent, site PHP), et me renvoyer les sorties. **Pas encore de vrai site client** à ce stade.
+
+| # | Faire | Résultat attendu |
+|---|---|---|
+| 0 | CT du hub : `hubctl update` | « Mise à jour terminée », hub joignable ; la tuile « Serveur des sites PHP » des Réglages dit « Pas encore installé » |
+| 1 | Shell du nœud : variables de 11.1 | rien à l'écran |
+| 2 | Créer le CT (11.2) | `pct start` sans message ; `passwd` demande deux fois le mot de passe |
+| 3 | Pare-feu (11.3), puis ses trois vérifications | « Règles acceptées » ; puis `OK : réseau local fermé`, `OK : SMTP fermé`, `HTTP/1.1 401 Unauthorized` |
+| 4 | Tunnel (11.4) | tunnel « kouziaphp » créé ; route `*.kouzia.com` vers `localhost:8080` ; enregistrement DNS `*` supprimé s'il est apparu |
+| 5 | Installer (11.5) | se termine par l'état du CT : nginx et MariaDB « en marche », PHP « 83 », pare-feu du CT « posé » (ou « absent » : me le dire) |
+| 6 | Dans le CT : `kouziaphpctl tunnel`, puis `kouziaphpctl upgrade` | « Tunnel démarré » ; dans Cloudflare, le tunnel passe « Sain » ; puis « Système déjà à jour » ou la liste des paquets mis à jour |
+| 7 | Dans le CT : `kouziaphpctl cgroups` | une suite de lignes OK, ou ÉCHEC avec la raison : **me renvoyer toute la sortie**, quel que soit le résultat |
+| 8 | Agent (11.8, les quatre lignes) | « Agent démarré » ; dans le hub, tuile « Serveur des sites PHP » à « Configuré » avec PHP 8.3 ; `wget` depuis le hub : `HTTP/1.1 401 Unauthorized` |
+| 9 | Hub : « Nouveau site », Perso, libellé « Recette PHP », sous-domaine `recette-php`, hébergement **PHP**, dossier public `public`, dossier persistant `data` | étapes « Site posé sur le serveur PHP », « Page d'attente publiée », « Enregistrement DNS créé », « Site en ligne » ; `https://recette-php.kouzia.com` montre la page d'attente |
+| 10 | Récupérer la page de test : sur GitHub, dépôt KouziaHub, fichier `scripts/php-ct/recette/public/index.php`, « Download raw file ». Si la box n'est pas en 192.168.1.1, corriger la ligne `IP_DE_LA_BOX` | un fichier `index.php` sur le PC |
+| 11 | Sur le PC, mettre `index.php` dans un dossier nommé `public`. Fiche du site, onglet Fichiers : « Ajouter un dossier », choisir ce dossier `public`, puis **Publier** | la liste montre `public/index.php` (et non `index.php` seul) ; publication réussie, sans message « Fuite détectée » |
+| 12 | Ouvrir `https://recette-php.kouzia.com` | « Tous les points sont conformes. » et huit lignes OK : PHP 8.3, visite n° 1, lecture hors du site refusée, commandes coupées, Stripe en 401, réseau local et SMTP injoignables, e-mail capturé |
+| 13 | Recharger la page deux fois | visite n° 2, puis n° 3 |
+| 14 | Republier la même version (onglet Versions, « Republier ») puis recharger | visite n° 4 : `data/` a survécu à la publication |
+| 15 | Ouvrir `https://recette-php.kouzia.com/.env`, puis `/data/visites.txt`, puis `/../data/visites.txt` | 403 ou 404 à chaque fois, jamais un contenu |
+| 16 | Fiche : couper le site, recharger l'adresse ; puis le rallumer | coupé : erreur Cloudflare (l'adresse ne répond plus) ; rallumé : la page revient en moins d'une minute, visite suivante |
+| 17 | Dans le CT : `ls /srv/sites/recette-php/mail/` | un ou plusieurs fichiers `.eml` (e-mails capturés, jamais envoyés) |
+| 18 | Fiche, Réglages : supprimer le site `recette-php` | site retiré du hub ; dans le CT, `ls /srv/sites` ne le montre plus ; plus d'enregistrement DNS `recette-php` dans Cloudflare |
+
+**À me renvoyer** : la sortie de `kouziaphpctl cgroups` et de `kouziaphpctl status`, une capture de la page de l'étape 12, et le texte exact de toute étape qui ne donne pas le résultat attendu (message d'erreur, ou les dernières lignes de `/var/log/kouziaphp/agent.err` et de `hubctl logs erreurs`).
