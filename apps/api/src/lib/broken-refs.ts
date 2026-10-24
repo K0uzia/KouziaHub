@@ -1,5 +1,5 @@
 import type { BrokenReference } from "@/contract.js";
-import { classifySitePath, devToolingOf, normalizeSitePath } from "@/lib/site-paths.js";
+import { classifySitePath, devToolingOf, normalizeSitePath, type ClassifyOptions } from "@/lib/site-paths.js";
 
 // Après un envoi : une page ou une feuille de style qui référence un fichier refusé (src/branding/logo.png d'un
 // site en HTML simple) sera cassée en ligne sans autre signe. On relit les HTML et CSS reçus, on résout leurs
@@ -73,14 +73,14 @@ export function resolveReference(fromPath: string, raw: string): string | null {
  * Références vers un fichier refusé à l'envoi (donc jamais servi), une fois par couple page et cible.
  * exceptable : l'onglet Serveur peut l'autoriser (outillage comme src/) ; sinon jamais (.env, .git, node_modules...).
  */
-export function findBrokenReferences(files: Array<{ path: string; text: string }>, allow: readonly string[] = []): BrokenReference[] {
+export function findBrokenReferences(files: Array<{ path: string; text: string }>, rules: ClassifyOptions = {}): BrokenReference[] {
   const seen = new Set<string>();
   const out: BrokenReference[] = [];
   for (const file of files) {
     const kind = /\.css$/i.test(file.path) ? "css" : "html";
     for (const raw of extractReferences(file.text, kind)) {
       const target = resolveReference(file.path, raw);
-      if (!target || classifySitePath(target, { allow }).action !== "reject") continue;
+      if (!target || classifySitePath(target, rules).action !== "reject") continue;
       const key = `${file.path}\n${target}`;
       if (seen.has(key)) continue;
       seen.add(key);

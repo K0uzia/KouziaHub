@@ -25,7 +25,7 @@ export async function generatedHtaccess(site: Site): Promise<string> {
 /** Profil complet : profil du site, CSP et exceptions de l'onglet Serveur. */
 export async function fullProfileOf(site: Site): Promise<ServerProfile> {
   const extras = await siteExtras(site.id);
-  return { ...profileOf(site), csp: extras.siteCsp, allow: extras.devFilesAllowed };
+  return { ...profileOf(site), csp: extras.siteCsp, allow: extras.devFilesAllowed, hosting: extras.hosting };
 }
 
 const sha256 = (text: string) => createHash("sha256").update(Buffer.from(text, "utf8")).digest("hex");

@@ -164,7 +164,7 @@ export async function buildExportPlan(services: Services, siteId: string, versio
   let versionHtaccess: VersionFile | null = null;
   const user: { headers?: string; redirects?: string } = {};
   for (const f of version.files) {
-    const verdict = classifySitePath(f.path, { allow: profile.allow });
+    const verdict = classifySitePath(f.path, { allow: profile.allow, hosting: profile.hosting });
     const reason = verdict.action !== "accept" ? verdict.reason : exportRejectReason(f.path);
     if (reason) {
       removed.push({ path: f.path, reason });

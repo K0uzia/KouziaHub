@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAgent, tunnelIdOf, type Probes } from "../../../../../scripts/php-ct/agent/agent.mjs";
+import { memorySys } from "../helpers/php-memory.js";
 import {
   allocateUid,
   checkArchiveListing,
@@ -14,8 +15,6 @@ import {
   nginxConf,
   siteOperations,
   type Paths,
-  type RunResult,
-  type Sys,
 } from "../../../../../scripts/php-ct/agent/sites.mjs";
 
 // Opérations de l'agent sur les sites PHP (docs/cadrage.md, sections 11.2 à 11.5, lot P3a). Système de fichiers
@@ -31,52 +30,10 @@ const paths: Paths = {
   confdDir: "/etc/conf.d",
   passwdFile: "/etc/passwd",
 };
-const ctx = { domain: "kouzia.com", phpInstalled: () => ["8.3"] };
+// nginx simulé : tout est refusé sauf ce que le test ouvre exprès.
+let served = new Set<string>();
+const ctx = { domain: "kouzia.com", phpInstalled: () => ["8.3"], httpStatus: async (_host: string, p: string) => (served.has(p) ? 200 : 403) };
 const spec = { slug: "mytakumi", hostname: "mytakumi.kouzia.com", php: "8.3", publicDir: "public", persistentDirs: ["data"] };
-
-type Node = { type: "file"; text: string } | { type: "dir" } | { type: "link"; target: string };
-
-/** Système simulé : fichiers en mémoire, commandes enregistrées (réponses choisies par le test). */
-function memorySys(answer: (file: string, args: string[]) => RunResult = () => ({ code: 0, stdout: "", stderr: "" })) {
-  const nodes = new Map<string, Node>([["/etc/passwd", { type: "file", text: "root:x:0:0::/root:/bin/sh\nphp-autre:x:20000:20000::/srv/sites/autre:/sbin/nologin\n" }]]);
-  const runs: string[] = [];
-  const owners = new Map<string, string>();
-  const under = (p: string) => [...nodes.keys()].filter((k) => k === p || k.startsWith(`${p}/`));
-  const sys: Sys = {
-    run: async (file, args) => {
-      runs.push([file, ...args].join(" "));
-      return answer(file, args);
-    },
-    readFile: async (p) => {
-      const n = nodes.get(p);
-      if (n?.type !== "file") throw new Error(`absent : ${p}`);
-      return n.text;
-    },
-    writeFile: async (p, text) => void nodes.set(p, { type: "file", text }),
-    mkdir: async (p) => {
-      const parts = p.split("/");
-      for (let i = 2; i <= parts.length; i++) if (!nodes.has(parts.slice(0, i).join("/"))) nodes.set(parts.slice(0, i).join("/"), { type: "dir" });
-    },
-    rm: async (p) => {
-      for (const k of under(p)) nodes.delete(k);
-    },
-    symlink: async (target, p) => void nodes.set(p, { type: "link", target }),
-    rename: async (a, b) => {
-      for (const k of under(b)) nodes.delete(k);
-      for (const k of under(a)) {
-        nodes.set(b + k.slice(a.length), nodes.get(k)!);
-        nodes.delete(k);
-      }
-    },
-    readdir: async (p) => [...new Set(under(p).filter((k) => k !== p).map((k) => k.slice(p.length + 1).split("/")[0]!))],
-    chown: async (p, u, g) => void owners.set(p, `${u}:${g}`),
-    exists: async (p) => nodes.has(p),
-    cp: async (a, b) => {
-      for (const k of under(a)) nodes.set(b + k.slice(a.length), nodes.get(k)!);
-    },
-  };
-  return { sys, nodes, runs, owners };
-}
 
 describe("réglages d'un site PHP (validation stricte, l'agent tourne en root)", () => {
   it("accepte le cas MyTakumi ; refuse slug, nom d'hôte, version de PHP et dossiers douteux", () => {
@@ -184,6 +141,12 @@ describe("cycle de vie d'un site sur le CT (système simulé)", () => {
     // Sept versions, la 1 servie : les cinq plus récentes (3 à 7) restent, la 1 aussi, la 2 part.
     expect(kept).toEqual(["1", "3", "4", "5", "6", "7"]);
 
+    // Contrôle anti-fuite : tout refusé, puis une fuite simulée sur /.env.
+    expect(await ops.check("mytakumi")).toMatchObject({ ok: true, results: expect.arrayContaining([{ path: "/data/", status: 403 }]) });
+    served = new Set(["/.env"]);
+    expect(await ops.check("mytakumi")).toMatchObject({ ok: false, results: expect.arrayContaining([{ path: "/.env", status: 200 }]) });
+    served = new Set();
+
     await ops.setEnabled("mytakumi", false);
     expect(m.nodes.has("/etc/nginx/kouziaphp-sites/mytakumi.conf.off")).toBe(true);
     expect(m.nodes.has("/etc/nginx/kouziaphp-sites/mytakumi.conf")).toBe(false);
@@ -234,6 +197,7 @@ describe("envoi d'une version à l'agent (flux, empreinte signée)", () => {
         upsert: async () => ({ slug: "x", uid: 1, created: true }),
         publish: async (slug, n) => ({ slug, current: n }),
         setEnabled: async (slug, enabled) => ({ slug, enabled }),
+        check: async (slug) => ({ slug, ok: true, results: [] }),
         remove: async (slug) => ({ slug, removed: true }),
       },
     });

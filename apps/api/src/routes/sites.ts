@@ -22,13 +22,22 @@ import type { Services } from "@/lib/services.js";
 import { catalog, siteDetail, toOperation } from "@/lib/site-view.js";
 import { checkSlug, hubZoneConflict, projectNameFor, suggestSlug } from "@/lib/slug.js";
 import { toStoredImage } from "@/lib/thumbnails.js";
+import { phpEntryCheck, phpSettingsFor } from "@/lib/php-sites.js";
+import { hostingOf } from "@/lib/site-hosting.js";
 
 const label = z.string().trim().min(1, "Libellé vide.").max(120, "120 caractères au plus.");
 const slugField = z.string().trim().toLowerCase().max(64);
 
+const hostingFields = {
+  hosting: z.enum(["pages", "php"]).optional(),
+  php: z
+    .object({ version: z.string().max(10).optional(), publicDir: z.string().max(200).optional(), persistentDirs: z.array(z.string().max(200)).max(10).optional() })
+    .strict()
+    .optional(),
+};
 const createSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("CLIENT"), erpClientId: z.string().regex(ERP_CLIENT_ID), slug: slugField, label: label.nullish() }),
-  z.object({ kind: z.literal("PERSO"), slug: slugField, label }),
+  z.object({ kind: z.literal("CLIENT"), erpClientId: z.string().regex(ERP_CLIENT_ID), slug: slugField, label: label.nullish(), ...hostingFields }),
+  z.object({ kind: z.literal("PERSO"), slug: slugField, label, ...hostingFields }),
 ]);
 
 const focusSchema = z.object({ focus: z.enum(THUMBNAIL_FOCUS) }).strict();
@@ -102,13 +111,17 @@ export function sitesRoutes(services: Services): FastifyPluginAsync {
       const check = await checkSlug(input.slug, services.cloudflare, services.sitesDomain);
       if (!check.ok) throw new HttpError(409, check.reason ?? "Sous-domaine indisponible.", "slug_unavailable");
       if (input.kind === "CLIENT") await ensureErpClient(services, input.erpClientId);
+      // Site PHP : réglages validés par la règle de l'agent (même code), version de PHP lue sur le CT, avant tout écrit.
+      const php = input.hosting === "php" ? await phpSettingsFor(services, input.slug, input.php ?? {}) : null;
       const site = await prisma.site.create({
         data: {
           slug: input.slug,
           kind: input.kind,
           erpClientId: input.kind === "CLIENT" ? input.erpClientId : null,
           label: input.label ?? null,
-          pagesProject: projectNameFor(input.slug),
+          ...(php
+            ? { hosting: "php", pagesProject: null, phpVersion: php.php, phpPublicDir: php.publicDir, phpPersistentDirs: php.persistentDirs.join("\n") || null }
+            : { pagesProject: projectNameFor(input.slug) }),
           state: "CREATING",
         },
       });
@@ -239,10 +252,13 @@ export function sitesRoutes(services: Services): FastifyPluginAsync {
       if (!parsed.success) throw badRequest(parsed.error);
       const site = await loadSite(id);
       if (site.state === "DELETING") throw new HttpError(409, "Suppression en cours.");
-      if (!site.pagesSubdomain) throw new HttpError(409, "Le projet Cloudflare n'est pas encore créé : reprendre la création.");
+      const php = hostingOf(site) === "php";
+      if (!php && !site.pagesSubdomain) throw new HttpError(409, "Le projet Cloudflare n'est pas encore créé : reprendre la création.");
       await ensureIdle(services, id);
       // Contrôle de la version : refus sans confirmation explicite (« Publier quand même »). Rien n'est construit ici.
-      const check = await workingVersionCheck(await prisma.workingFile.findMany({ where: { siteId: id }, select: { path: true, sha256: true } }), services.blobs);
+      // Site PHP : une page d'entrée dans son dossier public ; site Pages : index.html à la racine, projet construit.
+      const working = await prisma.workingFile.findMany({ where: { siteId: id }, select: { path: true, sha256: true } });
+      const check = php ? phpEntryCheck(working.map((f) => f.path), site.phpPublicDir ?? "") : await workingVersionCheck(working, services.blobs);
       if (check && !parsed.data?.force) throw new HttpError(409, check.message, "version_check");
       if (check) await audit({ action: "version.force", result: "ok", siteId: id, siteSlug: site.slug, detail: check.message });
       // .htaccess généré : mis à jour d'après le contenu publié (404, dossiers hashés, sitemap) avant l'instantané.
@@ -292,7 +308,7 @@ export function sitesRoutes(services: Services): FastifyPluginAsync {
       const { id, vid } = versionParams.parse(request.params);
       const site = await loadSite(id);
       if (site.state === "DELETING") throw new HttpError(409, "Suppression en cours.");
-      if (!site.pagesSubdomain) throw new HttpError(409, "Le projet Cloudflare n'est pas encore créé : reprendre la création.");
+      if (hostingOf(site) === "pages" && !site.pagesSubdomain) throw new HttpError(409, "Le projet Cloudflare n'est pas encore créé : reprendre la création.");
       await ensureIdle(services, id);
       const version = await snapshotVersion(id, vid);
       try {

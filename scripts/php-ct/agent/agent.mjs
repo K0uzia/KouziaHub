@@ -15,7 +15,7 @@ import { execFile } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, appendFileSync, statfsSync, createWriteStream } from "node:fs";
 import { rm } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import { pathToFileURL } from "node:url";
 import { realSys, siteOperations } from "./sites.mjs";
 
@@ -139,6 +139,7 @@ const routes = [
   { method: "POST", re: new RegExp(`^/v1/sites/${SITE}/publier$`), site: true, run: (c, [slug]) => c.sites.publish(slug, Number(c.json().version)) },
   { method: "POST", re: new RegExp(`^/v1/sites/${SITE}/couper$`), site: true, run: (c, [slug]) => c.sites.setEnabled(slug, false) },
   { method: "POST", re: new RegExp(`^/v1/sites/${SITE}/rallumer$`), site: true, run: (c, [slug]) => c.sites.setEnabled(slug, true) },
+  { method: "GET", re: new RegExp(`^/v1/sites/${SITE}/verifier$`), site: true, run: (c, [slug]) => c.sites.check(slug) },
   { method: "DELETE", re: new RegExp(`^/v1/sites/${SITE}$`), site: true, run: (c, [slug]) => c.sites.remove(slug) },
 ];
 
@@ -331,6 +332,16 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     domain: env.KP_SITES_DOMAIN || "kouzia.com",
     phpInstalled: () => systemProbes.php(),
     limitsEffective: () => systemProbes.cgroups().result === "ok",
+    httpStatus: (host, p) =>
+      new Promise((resolve) => {
+        const r = httpRequest({ host: "127.0.0.1", port: 8080, path: p, method: "GET", headers: { host }, timeout: 5000 }, (res) => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+        });
+        r.on("timeout", () => r.destroy());
+        r.on("error", () => resolve(0));
+        r.end();
+      }),
     sys: realSys(runImpl),
   });
   const server = createAgent({

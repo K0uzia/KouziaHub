@@ -146,7 +146,15 @@ export function devToolingOf(sitePath: string): string | null {
 export type ClassifyOptions = {
   /** Exceptions du site aux fichiers d'outillage (jamais aux .env, .git, dossiers de développement, _worker.js). */
   allow?: readonly string[];
+  /**
+   * Hébergement du site : un site PHP (docs/cadrage.md, section 11) exécute son code, donc src/ à la racine et
+   * composer.json/composer.lock en font partie. Le reste (.env, .git, README, node_modules...) reste refusé.
+   */
+  hosting?: "pages" | "php";
 };
+
+/** Outillage d'un site statique qui fait partie d'une application PHP (comparé en minuscules). */
+const PHP_RUNTIME_TOOLING = new Set(["src/", "composer.json", "composer.lock"]);
 
 /** Tri d'un chemin déjà normalisé : accepté, refusé (montré avec sa raison) ou écarté sans bruit. */
 export function classifySitePath(sitePath: string, options: ClassifyOptions = {}): Classification {
@@ -179,7 +187,7 @@ export function classifySitePath(sitePath: string, options: ClassifyOptions = {}
     return { action: "reject", reason: "Fichier de sauvegarde refusé." };
   }
   const tooling = devToolingOf(sitePath);
-  if (tooling && !isAllowedPath(sitePath, options.allow)) {
+  if (tooling && !isAllowedPath(sitePath, options.allow) && !(options.hosting === "php" && PHP_RUNTIME_TOOLING.has(tooling.toLowerCase()))) {
     return tooling.endsWith("/")
       ? { action: "reject", reason: `Dossier ${tooling} refusé (sources du projet, inutiles dans un site construit ; exception possible dans l'onglet Serveur).` }
       : { action: "reject", reason: `Fichier de développement refusé (${tooling}) : inutile dans un site construit (exception possible dans l'onglet Serveur).` };

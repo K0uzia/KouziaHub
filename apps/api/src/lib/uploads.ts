@@ -18,7 +18,7 @@ import {
   UPLOAD_SESSION_TTL_MS,
 } from "@/lib/limits.js";
 import type { BlobStore } from "@/lib/blobs.js";
-import { checkSitePath, fileTooBigReason, normalizeDir } from "@/lib/site-paths.js";
+import { checkSitePath, fileTooBigReason, normalizeDir, type ClassifyOptions } from "@/lib/site-paths.js";
 
 const MIB = 1024 * 1024;
 const SHA = /^[0-9a-f]{64}$/;
@@ -149,7 +149,7 @@ export class UploadStore {
     await rename(tmp, file);
   }
 
-  async create(siteId: string, input: CreateUploadInput, allow: readonly string[] = []): Promise<UploadSession> {
+  async create(siteId: string, input: CreateUploadInput, rules: ClassifyOptions = {}): Promise<UploadSession> {
     await this.sweep();
     const id = randomBytes(12).toString("hex");
     const now = this.now();
@@ -174,7 +174,7 @@ export class UploadStore {
         if (!SHA.test(f.sha256) || !Number.isSafeInteger(f.size) || f.size < 0) {
           throw new HttpError(400, `Description invalide pour « ${String(f.path).slice(0, 200)} » (taille ou empreinte).`);
         }
-        const { path: target, verdict } = checkSitePath(dir ? `${dir}/${f.path}` : f.path, { allow });
+        const { path: target, verdict } = checkSitePath(dir ? `${dir}/${f.path}` : f.path, rules);
         if (verdict.action !== "accept") {
           rejected.push({ path: target || "(sans nom)", reason: verdict.reason });
           return;

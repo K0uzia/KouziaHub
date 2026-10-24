@@ -39,7 +39,15 @@ export type Sys = {
   cp(a: string, b: string): Promise<void>;
 };
 
-export type SiteContext = { paths: Paths; domain: string; phpInstalled(): string[]; limitsEffective(): boolean; sys: Sys };
+export type SiteContext = {
+  paths: Paths;
+  domain: string;
+  phpInstalled(): string[];
+  limitsEffective(): boolean;
+  /** Statut HTTP de nginx local pour ce nom d'hôte et ce chemin. */
+  httpStatus(host: string, path: string): Promise<number>;
+  sys: Sys;
+};
 
 export type SiteOperations = {
   incomingFile(slug: string, nonce: string): Promise<string>;
@@ -47,6 +55,7 @@ export type SiteOperations = {
   receive(slug: string, n: number, archivePath: string): Promise<{ slug: string; version: number }>;
   publish(slug: string, n: number): Promise<{ slug: string; current: number }>;
   setEnabled(slug: string, enabled: boolean): Promise<{ slug: string; enabled: boolean }>;
+  check(slug: string): Promise<{ slug: string; ok: boolean; results: Array<{ path: string; status: number }> }>;
   remove(slug: string): Promise<{ slug: string; removed: boolean }>;
 };
 

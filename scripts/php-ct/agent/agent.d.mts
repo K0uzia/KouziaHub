@@ -28,6 +28,6 @@ export function createAgent(options: {
   secret: string;
   allowedIps: string[];
   probes?: Probes;
-  sites?: Pick<SiteOperations, "incomingFile" | "upsert" | "receive" | "publish" | "setEnabled" | "remove"> | null;
+  sites?: Pick<SiteOperations, "incomingFile" | "upsert" | "receive" | "publish" | "setEnabled" | "check" | "remove"> | null;
   log?: (line: string) => void;
 }): Server;

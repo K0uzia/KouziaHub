@@ -180,7 +180,7 @@ export function checkArchiveListing(text) {
 }
 
 /**
- * Opérations sur les sites. ctx : { paths, domain, phpInstalled(), limitsEffective(), sys }.
+ * Opérations sur les sites. ctx : { paths, domain, phpInstalled(), limitsEffective(), httpStatus(host, path), sys }.
  * sys : run(file, args) -> { code, stdout, stderr } ; readFile, writeFile (atomique), mkdir, rm, symlink, rename,
  * readdir, chown, chmod, exists, cp (copie récursive).
  */
@@ -332,6 +332,19 @@ export function siteOperations(ctx) {
       }
       await reloadNginx();
       return { slug: spec.slug, enabled };
+    },
+
+    /**
+     * Contrôle anti-fuite (docs/cadrage.md, 11.8) : nginx local, sous le nom du site, ne doit servir ni secrets,
+     * ni dépendances, ni dossiers persistants. Chaque chemin doit répondre 403 ou 404.
+     */
+    async check(slug) {
+      const spec = await known(slug);
+      const probes = ["/.env", "/.git/config", "/composer.json", "/composer.lock", "/vendor/autoload.php", ...spec.persistentDirs.map((d) => `/${d}/`)];
+      const results = [];
+      for (const p of probes) results.push({ path: p, status: await ctx.httpStatus(spec.hostname, p) });
+      const leaks = results.filter((r) => r.status !== 403 && r.status !== 404);
+      return { slug: spec.slug, ok: leaks.length === 0, results };
     },
 
     /** Supprime le site : service, configurations, compte et dossier. La base (lot P4) est retirée à part. */

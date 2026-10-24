@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
-import { siteExtras } from "@/lib/site-extras.js";
+import { rulesOf, siteExtras } from "@/lib/site-extras.js";
 import { z } from "zod";
 import type { UploadResult } from "@/contract.js";
 import { requireAuth } from "@/lib/auth.js";
@@ -62,7 +62,7 @@ export function uploadsRoutes(services: Services): FastifyPluginAsync {
       await loadSite(id);
       const parsed = createSchema.safeParse(request.body);
       if (!parsed.success) throw new HttpError(400, "Description d'envoi invalide.");
-      return store.create(id, parsed.data, (await siteExtras(id)).devFilesAllowed);
+      return store.create(id, parsed.data, rulesOf(await siteExtras(id)));
     });
 
     app.get("/api/sites/:id/uploads/:uid", async (request) => {

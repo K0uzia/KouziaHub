@@ -1,4 +1,5 @@
-import { pagesProjectOf } from "@/lib/site-hosting.js";
+import { hostingOf, pagesProjectOf, type Hosting } from "@/lib/site-hosting.js";
+import { agentOf, phpDnsTarget, specOf } from "@/lib/php-sites.js";
 import { rm } from "node:fs/promises";
 import path from "node:path";
 import type { Operation, OperationKind, Site } from "@prisma/client";
@@ -56,7 +57,9 @@ const placeholderStep: StepDef = {
     });
     if (!version) {
       const blob = await services.blobs.putBuffer(Buffer.from(PLACEHOLDER_HTML, "utf8"));
-      version = await createVersion(site.id, "placeholder", [{ path: "index.html", ...blob }], { note: "Page d'attente" });
+      // Site PHP : la page d'attente va dans son dossier public (seul servi).
+      const page = hostingOf(site) === "php" && site.phpPublicDir ? `${site.phpPublicDir}/index.html` : "index.html";
+      version = await createVersion(site.id, "placeholder", [{ path: page, ...blob }], { note: "Page d'attente" });
     }
     await deployVersion(services, site.id, version.id);
   },
@@ -76,20 +79,22 @@ const dnsAddStep: StepDef = {
   label: "Enregistrement DNS créé",
   async run({ services, site, hostname }) {
     const comment = hubDnsComment(site.id);
+    // Cible : l'adresse pages.dev du projet (site Pages) ou le tunnel du CT des sites PHP (site PHP).
+    const target = hostingOf(site) === "php" ? await phpDnsTarget(services) : site.pagesSubdomain;
     const existing = await services.cloudflare.findDnsRecord(hostname);
     if (existing) {
       if (existing.comment === comment) {
-        if (!site.pagesSubdomain) throw new StepError("adresse pages.dev inconnue : reprendre la création du projet.");
-        // CNAME du hub réemployé : sa cible doit être l'adresse pages.dev actuelle du projet, sinon il est recalé.
-        const stale = existing.type !== "CNAME" || existing.content.toLowerCase() !== site.pagesSubdomain.toLowerCase() || !existing.proxied;
-        if (stale) await services.cloudflare.updateCname(existing.id, hostname, site.pagesSubdomain, comment);
+        if (!target) throw new StepError("adresse pages.dev inconnue : reprendre la création du projet.");
+        // CNAME du hub réemployé : sa cible doit être la cible actuelle, sinon il est recalé.
+        const stale = existing.type !== "CNAME" || existing.content.toLowerCase() !== target.toLowerCase() || !existing.proxied;
+        if (stale) await services.cloudflare.updateCname(existing.id, hostname, target, comment);
         await prisma.site.update({ where: { id: site.id }, data: { dnsRecordId: existing.id } });
         return;
       }
       throw new StepError(`un enregistrement DNS ${existing.type} existe déjà pour ${hostname} hors du hub : le retirer dans Cloudflare, puis reprendre.`);
     }
-    if (!site.pagesSubdomain) throw new StepError("adresse pages.dev inconnue : reprendre la création du projet.");
-    const record = await services.cloudflare.createCname(hostname, site.pagesSubdomain, comment);
+    if (!target) throw new StepError("adresse pages.dev inconnue : reprendre la création du projet.");
+    const record = await services.cloudflare.createCname(hostname, target, comment);
     await prisma.site.update({ where: { id: site.id }, data: { dnsRecordId: record.id } });
   },
 };
@@ -183,6 +188,60 @@ const retentionStep: StepDef = {
   },
 };
 
+// --- Sites PHP (docs/cadrage.md, section 11) : agent du CT au lieu du projet Pages ---
+
+const phpSiteStep: StepDef = {
+  key: "php-site",
+  label: "Site posé sur le serveur PHP",
+  async run({ services, site }) {
+    await agentOf(services).upsertSite(specOf(site, services.sitesDomain));
+  },
+};
+
+const phpEnableStep: StepDef = {
+  key: "php-enable",
+  label: "Site rallumé sur le serveur PHP",
+  async run({ services, site }) {
+    await agentOf(services).setEnabled(site.slug, true);
+  },
+};
+
+const phpDisableStep: StepDef = {
+  key: "php-disable",
+  label: "Site coupé sur le serveur PHP",
+  async run({ services, site }) {
+    await agentOf(services).setEnabled(site.slug, false);
+    // Plus d'adresse servie : même état que la coupure d'un site Pages (domaine retiré).
+    await prisma.site.update({ where: { id: site.id }, data: { domainStatus: "NONE" } });
+  },
+};
+
+const phpRemoveStep: StepDef = {
+  key: "php-remove",
+  label: "Site retiré du serveur PHP",
+  async run({ services, site }) {
+    await agentOf(services).removeSite(site.slug);
+  },
+};
+
+// Certificat : celui de Cloudflare sur la zone (le tunnel sert l'adresse tout de suite), aucune attente.
+const phpOnlineStep: StepDef = {
+  key: "online",
+  label: "Site en ligne",
+  async run({ site }) {
+    await prisma.site.update({ where: { id: site.id }, data: { domainStatus: "ACTIVE", state: "ONLINE", touchedAt: new Date() } });
+  },
+};
+
+const PHP_OPERATION_STEPS: Record<OperationKind, StepDef[]> = {
+  CREATE: [phpSiteStep, placeholderStep, dnsAddStep, phpOnlineStep],
+  ENABLE: [phpEnableStep, dnsAddStep, phpOnlineStep],
+  // Ordre anti-orphelin, comme pour Pages : CNAME d'abord, puis le site sur le CT.
+  DISABLE: [dnsRemoveStep, phpDisableStep, offlineStep],
+  DELETE: [dnsRemoveStep, phpRemoveStep, localDeleteStep],
+  PUBLISH: [uploadStep, retentionStep],
+};
+
 export const OPERATION_STEPS: Record<OperationKind, StepDef[]> = {
   CREATE: [projectStep, placeholderStep, domainAddStep, dnsAddStep, certificateStep],
   ENABLE: [domainAddStep, dnsAddStep, certificateStep],
@@ -191,6 +250,11 @@ export const OPERATION_STEPS: Record<OperationKind, StepDef[]> = {
   DELETE: [dnsRemoveStep, domainRemoveStep, projectDeleteStep, localDeleteStep],
   PUBLISH: [uploadStep, retentionStep],
 };
+
+/** Étapes d'une opération selon l'hébergement du site. */
+export function stepsFor(kind: OperationKind, hosting: Hosting): StepDef[] {
+  return (hosting === "php" ? PHP_OPERATION_STEPS : OPERATION_STEPS)[kind];
+}
 
 const AUDIT_ACTION: Record<OperationKind, string> = {
   CREATE: "site.create",
@@ -233,7 +297,7 @@ export class OperationEngine {
       const running = await prisma.operation.findFirst({ where: { siteId, status: "RUNNING" }, select: { id: true } });
       if (running) throw new HttpError(409, "Une opération est déjà en cours sur ce site.", "operation_running");
       const site = await prisma.site.findUniqueOrThrow({ where: { id: siteId } });
-      const steps: OperationStep[] = OPERATION_STEPS[kind].map((s) => ({ key: s.key, label: s.label, status: "todo" }));
+      const steps: OperationStep[] = stepsFor(kind, hostingOf(site)).map((s) => ({ key: s.key, label: s.label, status: "todo" }));
       const op = await prisma.operation.create({
         data: { siteId, siteSlug: site.slug, kind, steps: JSON.stringify(steps), params: JSON.stringify(params) },
       });
@@ -321,7 +385,9 @@ export class OperationEngine {
 
   private async run(opId: string): Promise<void> {
     const op = await prisma.operation.findUniqueOrThrow({ where: { id: opId } });
-    const defs = OPERATION_STEPS[op.kind];
+    // Hébergement lu au départ (le site peut disparaître à la dernière étape d'une suppression).
+    const hosting = op.siteId ? await prisma.site.findUnique({ where: { id: op.siteId }, select: { hosting: true } }) : null;
+    const defs = stepsFor(op.kind, hosting ? hostingOf(hosting) : "pages");
     const steps = parseSteps(op.steps);
     const params = op.params ? (JSON.parse(op.params) as Record<string, unknown>) : {};
     const save = (data: Partial<Pick<Operation, "status" | "error" | "finishedAt">> = {}) =>

@@ -1,4 +1,5 @@
-import { pagesProjectOf } from "@/lib/site-hosting.js";
+import { hostingOf, pagesProjectOf } from "@/lib/site-hosting.js";
+import { deployPhpVersion, phpEntryCheck } from "@/lib/php-sites.js";
 import type { Version } from "@prisma/client";
 import type { FileRef } from "@/lib/files.js";
 import { refreshDirty } from "@/lib/files.js";
@@ -74,7 +75,12 @@ export async function snapshotVersion(siteId: string, versionId: string): Promis
   if (!source) throw new HttpError(404, "Version introuvable.");
   if (source.status === "PURGED") throw new HttpError(409, "Version purgée : ses fichiers ne sont plus gardés.");
   if (source.status === "UPLOADING") throw new HttpError(409, "Version en cours d'envoi.");
-  if (!source.files.some((f) => f.path === "index.html")) {
+  // Page d'accueil : index.html à la racine (site Pages), page d'entrée du dossier public (site PHP).
+  const site = await prisma.site.findUniqueOrThrow({ where: { id: siteId }, select: { hosting: true, phpPublicDir: true } });
+  if (hostingOf(site) === "php") {
+    const missing = phpEntryCheck(source.files.map((f) => f.path), site.phpPublicDir ?? "");
+    if (missing) throw new HttpError(400, `Publication impossible : ${missing.message}`, "no_index");
+  } else if (!source.files.some((f) => f.path === "index.html")) {
     throw new HttpError(400, "Publication impossible : il manque index.html à la racine.", "no_index");
   }
   return createVersion(
@@ -127,6 +133,8 @@ async function markPublished(siteId: string, versionId: string, deployment: { id
  */
 export async function deployVersion(services: Services, siteId: string, versionId: string): Promise<void> {
   const site = await prisma.site.findUniqueOrThrow({ where: { id: siteId } });
+  // Site PHP : publié sur le CT des sites PHP par son agent (docs/cadrage.md, section 11.5).
+  if (hostingOf(site) === "php") return deployPhpVersion(services, siteId, versionId);
   const version = await prisma.version.findFirstOrThrow({ where: { id: versionId, siteId }, include: { files: true } });
   if (version.status === "PURGED") throw new HttpError(409, "Version purgée : ses fichiers ne sont plus gardés.");
   if (version.status === "PUBLISHED" && version.cfDeploymentId) {
