@@ -106,7 +106,8 @@ export type ServerConfigPreview = {
 };
 
 export type SiteDetail = SiteSummary & {
-  pagesProject: string;
+  /** Projet Cloudflare Pages, null pour un site PHP. */
+  pagesProject: string | null;
   /** Adresse <projet>.pages.dev (redirigée vers le sous-domaine). */
   pagesSubdomain: string | null;
   /** Lien vers la fiche du client dans l'ERP, null si inconnu. */

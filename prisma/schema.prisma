@@ -108,8 +108,19 @@ model Site {
   erpClientId      String?
   /// Nom affiché. Obligatoire pour un site perso ; facultatif pour un site client (nom lu dans l'ERP).
   label            String?
-  /// Projet Cloudflare Pages (kz-<slug>), unique.
-  pagesProject     String       @unique
+  /// Hébergement de la version de travail : "pages" (Cloudflare Pages, statique) ou "php" (CT des sites PHP,
+  /// docs/cadrage.md section 11). Immuable après la création.
+  hosting          String       @default("pages")
+  /// Projet Cloudflare Pages (kz-<slug>), unique ; null pour un site PHP (aucun projet Pages).
+  pagesProject     String?      @unique
+  /// Site PHP : version de PHP ("8.3"), dossier public ("public", vide = racine du projet), dossiers persistants
+  /// (un par ligne, gardés d'une version à l'autre et jamais servis : "data").
+  phpVersion       String?
+  phpPublicDir     String?
+  phpPersistentDirs String?
+  /// Site PHP : sortie HTTPS permise (API de paiement en test, suivi de colis), relève IMAP (993) permise.
+  phpHttpsOpen     Boolean      @default(true)
+  phpImapOpen      Boolean      @default(false)
   /// Adresse <projet>.pages.dev renvoyée par Cloudflare : cible du CNAME.
   pagesSubdomain   String?
   dnsRecordId      String?

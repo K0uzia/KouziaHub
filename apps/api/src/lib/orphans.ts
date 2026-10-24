@@ -39,13 +39,14 @@ export class ProjectCounter {
   }
 }
 
-type SiteRow = { id: string; slug: string; pagesProject: string; dnsRecordId: string | null; state: string };
+type SiteRow = { id: string; slug: string; pagesProject: string | null; dnsRecordId: string | null; state: string };
 
-function analyse(records: CfDnsRecord[], projects: CfProject[], sites: SiteRow[], sitesDomain: string): OrphanFinding[] {
+// extraTargets : cibles légitimes hors Pages (tunnel des sites PHP, <id>.cfargotunnel.com).
+function analyse(records: CfDnsRecord[], projects: CfProject[], sites: SiteRow[], sitesDomain: string, extraTargets: string[] = []): OrphanFinding[] {
   const findings: OrphanFinding[] = [];
   const sitesById = new Map(sites.map((s) => [s.id, s]));
   const projectNames = new Set(projects.map((p) => p.name));
-  const projectTargets = new Set(projects.map((p) => p.subdomain.toLowerCase()));
+  const projectTargets = new Set([...projects.map((p) => p.subdomain.toLowerCase()), ...extraTargets.map((t) => t.toLowerCase())]);
   const sitesByProject = new Set(sites.map((s) => s.pagesProject));
   const recordIds = new Set(records.map((r) => r.id));
 
@@ -66,7 +67,8 @@ function analyse(records: CfDnsRecord[], projects: CfProject[], sites: SiteRow[]
   }
   for (const site of sites) {
     if (site.state === "CREATING" || site.state === "DELETING") continue;
-    if (!projectNames.has(site.pagesProject)) {
+    // Site PHP : aucun projet Pages attendu.
+    if (site.pagesProject && !projectNames.has(site.pagesProject)) {
       findings.push({ type: "site", name: `${site.slug}.${sitesDomain}`, detail: `Projet ${site.pagesProject} absent chez Cloudflare.`, deletable: false });
     }
     if (site.dnsRecordId && !recordIds.has(site.dnsRecordId)) {

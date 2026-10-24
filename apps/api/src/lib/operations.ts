@@ -1,3 +1,4 @@
+import { pagesProjectOf } from "@/lib/site-hosting.js";
 import { rm } from "node:fs/promises";
 import path from "node:path";
 import type { Operation, OperationKind, Site } from "@prisma/client";
@@ -38,7 +39,7 @@ const projectStep: StepDef = {
   key: "project",
   label: "Projet Cloudflare créé",
   async run({ services, site }) {
-    const project = await services.cloudflare.createProject(site.pagesProject);
+    const project = await services.cloudflare.createProject(pagesProjectOf(site));
     await prisma.site.update({ where: { id: site.id }, data: { pagesSubdomain: project.subdomain } });
     services.projects.invalidate();
   },
@@ -65,7 +66,7 @@ const domainAddStep: StepDef = {
   key: "domain",
   label: "Adresse ajoutée au projet",
   async run({ services, site, hostname }) {
-    const domain = await services.cloudflare.addDomain(site.pagesProject, hostname);
+    const domain = await services.cloudflare.addDomain(pagesProjectOf(site), hostname);
     await prisma.site.update({ where: { id: site.id }, data: { domainStatus: domainStatusOf(domain.status) } });
   },
 };
@@ -97,7 +98,7 @@ const certificateStep: StepDef = {
   key: "certificate",
   label: "Certificat HTTPS",
   async run({ services, site, hostname }) {
-    const domain = await services.cloudflare.getDomain(site.pagesProject, hostname);
+    const domain = await services.cloudflare.getDomain(pagesProjectOf(site), hostname);
     if (!domain) throw new StepError("adresse absente du projet Cloudflare : reprendre l'opération.");
     if (domain.status === "active") {
       await prisma.site.update({ where: { id: site.id }, data: { domainStatus: "ACTIVE", state: "ONLINE" } });
@@ -129,7 +130,7 @@ const domainRemoveStep: StepDef = {
   label: "Adresse retirée du projet",
   async run({ services, site, hostname }) {
     services.domains.unwatch(site.id);
-    await services.cloudflare.removeDomain(site.pagesProject, hostname);
+    await services.cloudflare.removeDomain(pagesProjectOf(site), hostname);
     await prisma.site.update({ where: { id: site.id }, data: { domainStatus: "NONE" } });
   },
 };
@@ -146,7 +147,7 @@ const projectDeleteStep: StepDef = {
   key: "project",
   label: "Projet Cloudflare supprimé",
   async run({ services, site }) {
-    await services.cloudflare.deleteProject(site.pagesProject);
+    await services.cloudflare.deleteProject(pagesProjectOf(site));
     services.projects.invalidate();
   },
 };
@@ -493,7 +494,7 @@ export class DomainWatcher {
       if (!site || site.domainStatus !== "PENDING" || site.state === "DELETING") return;
       let domain: CfDomain | null;
       try {
-        domain = await this.services.cloudflare.getDomain(site.pagesProject, hostnameOf(site.slug, this.services.sitesDomain));
+        domain = await this.services.cloudflare.getDomain(pagesProjectOf(site), hostnameOf(site.slug, this.services.sitesDomain));
       } catch {
         continue;
       }

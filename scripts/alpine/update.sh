@@ -98,6 +98,7 @@ if [ "$ROLLBACK" -eq 1 ]; then
 fi
 
 # Échec après le changement de code : proposer le retour arrière, sinon relancer ce qui peut l'être.
+# --no-start (migrations) : la base peut être à moitié migrée ; le hub reste arrêté plutôt que de tourner dessus.
 fail_update() {
   warn "$1"
   show_app_errors
@@ -108,6 +109,11 @@ fail_update() {
       do_rollback
       exit 1
     fi
+  fi
+  if [ "${2:-}" = "--no-start" ]; then
+    echo "  Le hub reste arrêté : la base a pu être migrée à moitié, il ne doit pas tourner dessus."
+    echo "  « hubctl rollback » remet le code et la base d'avant la mise à jour (sauvegarde automatique)."
+    exit 1
   fi
   echo "  Plus tard : « hubctl rollback » remet la version d'avant ; « hubctl logs erreurs » montre l'erreur."
   rc_service "$KH_SERVICE" start >/dev/null 2>&1 || true
@@ -178,7 +184,7 @@ if [ "$FORCE_DEPS" -eq 1 ] || deps_needed; then
 else
   ok "package-lock.json inchangé : dépendances gardées"
 fi
-db_migrate || fail_update "Les migrations de la base ont échoué."
+db_migrate || fail_update "Les migrations de la base ont échoué." --no-start
 build_web || fail_update "La construction de l'interface a échoué."
 
 install_openrc_scripts

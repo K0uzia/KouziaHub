@@ -213,7 +213,7 @@ describe("envoi d'un zip", () => {
 describe("publication : délai dépassé après création du déploiement", () => {
   async function failedPublish() {
     await upload([{ filename: "index.html", content: "<h1>v</h1>" }]);
-    const project = (await detail()).pagesProject;
+    const project = (await detail()).pagesProject!;
     const before = hub.cf.deployments(project).length;
     hub.cf.failAfterNext("deploy");
     await publish("première tentative");
@@ -453,7 +453,7 @@ describe("compte rendu d'envoi : fichiers utilisés mais refusés, code serveur"
     expect(body.serverApp).toEqual({ language: "PHP", kind: "files", count: 1, examples: ["contact.php"] });
 
     await publish();
-    const project = (await detail()).pagesProject;
+    const project = (await detail()).pagesProject!;
     const manifest = Object.keys(hub.cf.deployments(project).at(-1)!.manifest);
     expect(manifest.some((p) => p.endsWith("index.html"))).toBe(true);
     expect(manifest.some((p) => /contact\.php$/.test(p))).toBe(false);

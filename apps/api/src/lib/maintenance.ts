@@ -1,4 +1,5 @@
 // Purges (fichiers d'un site, cache du hub, cache Cloudflare) et place utilisée.
+import { pagesProjectOf } from "@/lib/site-hosting.js";
 import { readdir, readFile, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import type { CachePurgeResult, HubCachePurgeInput, HubCachePurgeResult, PurgeCount, SiteFilesPurgeResult, StorageUsage } from "@/contract.js";
@@ -94,7 +95,7 @@ export async function purgeSiteFiles(services: Services, siteId: string, withVer
         continue;
       }
       try {
-        if (v.cfDeploymentId) await services.cloudflare.deleteDeployment(site.pagesProject, v.cfDeploymentId);
+        if (v.cfDeploymentId) await services.cloudflare.deleteDeployment(pagesProjectOf(site), v.cfDeploymentId);
       } catch (err) {
         failed.push({ number: v.number, error: err instanceof Error ? err.message.slice(0, 200) : "erreur Cloudflare" });
         continue;
