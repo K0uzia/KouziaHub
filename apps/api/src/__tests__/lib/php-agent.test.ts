@@ -20,6 +20,7 @@ const probes: Probes = {
   lastUpgrade: () => "2026-10-24",
   disk: () => ({ freeBytes: 20e9, totalBytes: 30e9 }),
   sites: () => 0,
+  tunnelId: () => null,
   now: () => clock,
 };
 

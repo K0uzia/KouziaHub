@@ -1,0 +1,27 @@
+#!/bin/sh
+# Capteur d'e-mails des sites PHP (docs/cadrage.md, section 11.6) : sendmail_path de chaque site. Lancé par PHP sous
+# le compte du site ; lit le message sur l'entrée et le range dans /srv/sites/<slug>/mail/. Il ne l'envoie JAMAIS :
+# le SMTP du CT est fermé. L'écran « E-mails capturés » et la redirection vers les adresses autorisées (par le hub)
+# viennent au lot P5.
+#
+# Usage (par PHP) : mail-capture <slug>   (code 0 : rangé ; 1 : refusé)
+set -eu
+
+slug="${1:-}"
+case "$slug" in
+  ""|-*|*[!a-z0-9-]*) exit 1 ;;
+esac
+dir="/srv/sites/${slug}/mail"
+[ -d "$dir" ] && [ -w "$dir" ] || exit 1
+
+umask 077
+file="${dir}/$(date '+%Y%m%d-%H%M%S')-$$.eml"
+# 25 Mo au plus par message.
+head -c 26214400 > "$file"
+
+# 100 derniers messages gardés.
+# shellcheck disable=SC2012
+ls -1t "$dir" 2>/dev/null | grep '\.eml$' | tail -n +101 | while IFS= read -r old; do
+  rm -f "${dir}/${old}"
+done
+exit 0

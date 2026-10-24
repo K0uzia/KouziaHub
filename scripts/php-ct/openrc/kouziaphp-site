@@ -1,0 +1,41 @@
+#!/sbin/openrc-run
+# OpenRC : PHP-FPM d'un site PHP. Chaque site a son service, kouziaphp-site.<slug>, lien vers ce script posé par
+# l'agent ; réglages dans /etc/conf.d/kouziaphp-site.<slug> (KP_PHP, KP_SITE, limites rc_cgroup_settings).
+# Un maître par site : ses limites CPU, mémoire et processus s'appliquent à lui seul (docs/cadrage.md, 11.2).
+
+description="PHP-FPM d'un site PHP"
+
+: "${KP_SITE:=${RC_SVCNAME#kouziaphp-site.}}"
+: "${KP_PHP:=83}"
+
+command="/usr/sbin/php-fpm${KP_PHP}"
+command_args="--nodaemonize --fpm-config /etc/kouziaphp/fpm/${KP_SITE}.conf"
+supervisor=supervise-daemon
+respawn_delay=5
+respawn_max=10
+extra_started_commands="reload"
+
+depend() {
+  need net
+  after mariadb kouziaphp-firewall
+  before nginx
+}
+
+start_pre() {
+  if [ "$RC_SVCNAME" = "kouziaphp-site" ]; then
+    eerror "Service commun : il se lance par site (kouziaphp-site.<slug>), créé par l'agent."
+    return 1
+  fi
+  checkpath -d -o root:root -m 0755 /run/kouziaphp
+  if ! "$command" -t --fpm-config "/etc/kouziaphp/fpm/${KP_SITE}.conf" >/dev/null 2>&1; then
+    eerror "Configuration PHP-FPM refusée pour ${KP_SITE} : ${command} -t --fpm-config /etc/kouziaphp/fpm/${KP_SITE}.conf"
+    return 1
+  fi
+}
+
+# Nouvelle version publiée : rechargement en douceur (les requêtes en cours finissent).
+reload() {
+  ebegin "Rechargement de PHP pour ${KP_SITE}"
+  supervise-daemon "$RC_SVCNAME" --signal USR2
+  eend $?
+}
