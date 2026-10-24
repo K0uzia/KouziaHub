@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { Operation, SiteDetail, UploadResult } from "@/contract.js";
+import type { FilesResponse, Operation, SiteDetail, UploadResult } from "@/contract.js";
 import { PhpAgentClient } from "@/lib/php-agent/client.js";
 import { createAgent, type Probes } from "../../../../../scripts/php-ct/agent/agent.mjs";
 import { siteOperations, type Paths } from "../../../../../scripts/php-ct/agent/sites.mjs";
@@ -103,6 +103,11 @@ describe("site PHP de bout en bout", () => {
   it("envoi : src/ et composer.json gardés pour un site PHP, .env et README toujours refusés ; publication puis retour arrière", async () => {
     const id = ((await create()).json() as SiteDetail).id;
     await settle(hub);
+    // Onglet Fichiers : règle du site PHP (page d'entrée dans public/), jamais « index.html à la racine ».
+    const filesOf = async () => (await hub.app.inject({ method: "GET", url: `/api/sites/${id}/files`, headers: hub.headers })).json() as FilesResponse;
+    const before = await filesOf();
+    expect(before.hasIndex).toBe(false);
+    expect(before.versionCheck?.message).toContain("Ni index.php ni index.html dans le dossier public « public/ »");
     const sent = await uploadFiles(hub, id, [
       { filename: "public/index.php", content: "<?php require '../src/App.php';" },
       { filename: "src/App.php", content: "<?php class App {}" },
@@ -114,6 +119,8 @@ describe("site PHP de bout en bout", () => {
     expect(body.accepted.sort()).toEqual(["composer.json", "public/index.php", "src/App.php"]);
     expect(body.rejected.map((r) => r.path).sort()).toEqual([".env", "README.md"]);
     expect(body.serverApp).toBeNull();
+    const after = await filesOf();
+    expect([after.hasIndex, after.versionCheck]).toEqual([true, null]);
 
     expect((await post(id, "publish")).statusCode).toBeLessThan(300);
     await settle(hub);

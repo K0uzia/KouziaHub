@@ -4,7 +4,7 @@ import type { Site } from "@prisma/client";
 import { refreshDirty } from "@/lib/files.js";
 import { HttpError } from "@/lib/http.js";
 import { PhpAgentOpError, PhpAgentUnavailableError, type PhpAgentClient, type PhpSiteSpec } from "@/lib/php-agent/client.js";
-import type { PhpSiteSettings, VersionCheck } from "@/contract.js";
+import type { PhpSiteSettings } from "@/contract.js";
 // Règle de validation de l'agent, partagée telle quelle (une seule source de vérité).
 import { checkSiteSpec, OpError, type SiteSpec } from "../../../../scripts/php-ct/agent/sites.mjs";
 import { prisma } from "@/lib/prisma.js";
@@ -120,16 +120,3 @@ export async function phpSettingsFor(services: Services, slug: string, input: Pa
   }
 }
 
-/** Site PHP : une page d'entrée (index.php ou index.html) dans le dossier public, sinon refus sans confirmation. */
-export function phpEntryCheck(paths: string[], publicDir: string): VersionCheck | null {
-  const prefix = publicDir ? `${publicDir}/` : "";
-  if (paths.some((p) => p === `${prefix}index.php` || p === `${prefix}index.html`)) return null;
-  return {
-    code: "no_index",
-    framework: null,
-    command: null,
-    outDir: null,
-    buildScript: null,
-    message: `Ni index.php ni index.html dans ${publicDir ? `le dossier public « ${publicDir}/ »` : "la racine"} : le site n'aurait pas de page d'accueil (dossier public réglable dans la fiche).`,
-  };
-}

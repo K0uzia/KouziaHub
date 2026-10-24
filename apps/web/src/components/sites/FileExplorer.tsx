@@ -612,6 +612,7 @@ export function FilesTab({
 
       <ZipUpload
         siteId={site.id}
+        publicDir={site.php ? site.php.publicDir : null}
         fileCount={siteFiles.length}
         maxZipBytes={limits?.maxZipBytes ?? null}
         busy={!!progress}

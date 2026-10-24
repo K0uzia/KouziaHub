@@ -1,5 +1,5 @@
-import { hostingOf, pagesProjectOf } from "@/lib/site-hosting.js";
-import { deployPhpVersion, phpEntryCheck } from "@/lib/php-sites.js";
+import { hostingOf, pagesProjectOf, phpEntryCheck } from "@/lib/site-hosting.js";
+import { deployPhpVersion } from "@/lib/php-sites.js";
 import type { Version } from "@prisma/client";
 import type { FileRef } from "@/lib/files.js";
 import { refreshDirty } from "@/lib/files.js";
