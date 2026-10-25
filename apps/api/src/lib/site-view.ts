@@ -125,6 +125,7 @@ export async function siteDetail(siteId: string, services: Services): Promise<Si
             memoryLimitMb: site.phpMemoryLimitMb,
             uploadMaxMb: site.phpUploadMaxMb,
             maxExecutionSec: site.phpMaxExecutionSec,
+            excludedPaths: linesOf(site.phpExcludedPaths),
             httpsOpen: site.phpHttpsOpen,
             imapOpen: site.phpImapOpen,
           }

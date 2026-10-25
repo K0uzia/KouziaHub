@@ -77,6 +77,7 @@ export function FilesTab({
   /** Projet non construit reconnu sur le dernier envoi (fichiers écartés compris). */
   const [projectCheck, setProjectCheck] = useState<VersionCheck | null>(null);
   const [confirmClean, setConfirmClean] = useState(false);
+  const [exclusion, setExclusion] = useState<{ path: string; count: number; bytes: number } | null>(null);
   /** Sources d'un projet non construit choisies : prévenu avant l'envoi. */
   const [unbuilt, setUnbuilt] = useState<{ check: VersionCheck; picked: PickedFile[] } | null>(null);
   /** Site complet envoyé sur des fichiers existants : choix « Remplacer tout » ou « Ajouter ». */
@@ -134,7 +135,7 @@ export function FilesTab({
   async function send(picked: PickedFile[], confirmedUnbuilt = false) {
     if (!picked.length || progress) return;
     // Mêmes règles que le serveur, hébergement compris (un site PHP garde src/ et composer.json).
-    const prepared = prepareSelection(picked, files.data?.limits.maxFileBytes ?? null, { allow: site.devFilesAllowed, hosting: site.hosting });
+    const prepared = prepareSelection(picked, files.data?.limits.maxFileBytes ?? null, { allow: site.devFilesAllowed, hosting: site.hosting, exclude: site.php?.excludedPaths ?? [] });
     const skipped = prepared.excluded.map((e) => ({ path: (dir ? `${dir}/` : "") + e.path, reason: e.reason, size: e.size }));
     // Reprise d'un envoi « seulement dist/ » : même choix, sans redemander.
     if (resume && prepared.project && prepared.project.files.length === resume.included.length) {
@@ -288,6 +289,31 @@ export function FilesTab({
     }
   }
 
+  // « Ne plus envoyer ce dossier » (site PHP) : aperçu de ce qui sera retiré du hub, puis ajout confirmé.
+  async function askExclusion(dir: string) {
+    try {
+      setExclusion(await api<{ path: string; count: number; bytes: number }>(`/api/sites/${site.id}/php/exclusions/apercu?path=${encodeURIComponent(dir)}`));
+    } catch (err) {
+      toast.error(errorMessage(err, "Lecture impossible."));
+    }
+  }
+
+  async function confirmExclusion() {
+    if (!exclusion) return;
+    setBusy(true);
+    try {
+      const r = await api<{ removed: number; bytes: number }>(`/api/sites/${site.id}/php/exclusions`, { method: "POST", json: { path: exclusion.path } });
+      setExclusion(null);
+      await files.reload();
+      onFilesChanged();
+      toast.success(`« ${exclusion.path} » ne sera plus envoyé : ${plural(r.removed, "fichier retiré", "fichiers retirés")} du hub`);
+    } catch (err) {
+      toast.error(errorMessage(err, "Exclusion impossible."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function cleanDev() {
     setBusy(true);
     try {
@@ -357,6 +383,26 @@ export function FilesTab({
           travail (<span className="font-mono break-all">{files.data.devFiles.slice(0, 3).join(", ")}</span>
           {files.data.devFiles.length > 3 ? "..." : ""}) :{" "}
           {files.data.devFiles.length > 1 ? "ils ne sont plus servis, mais n'ont rien à faire dans le site." : "il n'est plus servi, mais n'a rien à faire dans le site."}
+        </Banner>
+      ) : null}
+      {files.data?.heavyUnserved?.length ? (
+        <Banner level="info">
+          <p>
+            Fichiers lourds jamais servis par le site (hors du dossier public et des dossiers persistants) : ils alourdissent chaque version
+            envoyée au serveur des sites PHP.
+          </p>
+          <ul className="mt-2 space-y-2">
+            {files.data.heavyUnserved.map((g) => (
+              <li key={g.dir} className="flex flex-wrap items-center justify-between gap-2">
+                <span>
+                  <span className="font-mono break-all">{g.dir}</span> : {plural(g.count, "fichier", "fichiers")}, {formatBytes(g.bytes)}
+                </span>
+                <Button variant="secondary" onClick={() => void askExclusion(g.dir)} disabled={busy}>
+                  Ne plus envoyer ce dossier
+                </Button>
+              </li>
+            ))}
+          </ul>
         </Banner>
       ) : null}
       {files.data?.workingDirty ? (
@@ -711,6 +757,27 @@ export function FilesTab({
         ) : null}
       </Modal>
 
+      <ConfirmDialog
+        open={exclusion !== null}
+        title="Ne plus envoyer ce dossier ?"
+        message={
+          <>
+            <p>
+              {plural(exclusion?.count ?? 0, "fichier", "fichiers")} ({formatBytes(exclusion?.bytes ?? 0)}) de{" "}
+              <span className="font-mono break-all">{exclusion?.path}</span> seront retirés des fichiers de travail du hub. Rien n'est retiré de
+              votre ordinateur.
+            </p>
+            <p className="mt-2 text-[var(--muted)]">
+              Ce dossier ne sera plus jamais envoyé au serveur (refusé à l'envoi, avec la raison). La liste se modifie dans l'onglet
+              Application, Réglages de PHP. Le site en ligne change à la prochaine publication.
+            </p>
+          </>
+        }
+        confirmLabel="Ne plus envoyer"
+        busy={busy}
+        onConfirm={() => void confirmExclusion()}
+        onClose={() => setExclusion(null)}
+      />
       <ConfirmDialog
         open={confirmClean}
         title="Nettoyer les fichiers de développement ?"

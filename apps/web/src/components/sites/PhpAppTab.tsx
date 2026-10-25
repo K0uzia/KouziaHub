@@ -64,6 +64,7 @@ function PhpSettingsCard({ site, onSite }: { site: SiteDetail; onSite: (s: SiteD
       memoryLimitMb: Number(form.memoryLimitMb),
       uploadMaxMb: Number(form.uploadMaxMb),
       maxExecutionSec: Number(form.maxExecutionSec),
+      excludedPaths: lines(form.excludedPaths),
     };
     try {
       const updated = await api<SiteDetail>(`/api/sites/${site.id}/php`, { method: "PATCH", json: body });
@@ -112,6 +113,12 @@ function PhpSettingsCard({ site, onSite }: { site: SiteDetail; onSite: (s: SiteD
             <Textarea value={form.publicPersistentDirs} onChange={set("publicPersistentDirs")} rows={2} autoComplete="off" spellCheck={false} className="font-mono" />
           </Field>
         </div>
+        <Field
+          label="Ne pas envoyer"
+          hint="Un par ligne : dossier terminé par / (ex. src/produit/) ou fichier exact. Refusés à l'envoi avec la raison, retirés des fichiers de travail du hub à l'enregistrement (jamais de votre ordinateur)."
+        >
+          <Textarea value={form.excludedPaths} onChange={set("excludedPaths")} rows={2} autoComplete="off" spellCheck={false} className="font-mono" />
+        </Field>
         <div className="grid gap-4 sm:grid-cols-3">
           <Field
             label="Mémoire par requête (Mo)"
@@ -150,6 +157,7 @@ function toForm(php: NonNullable<SiteDetail["php"]>) {
     memoryLimitMb: String(php.memoryLimitMb),
     uploadMaxMb: String(php.uploadMaxMb),
     maxExecutionSec: String(php.maxExecutionSec),
+    excludedPaths: php.excludedPaths.join("\n"),
   };
 }
 

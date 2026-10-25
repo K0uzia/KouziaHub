@@ -9,6 +9,8 @@ import { HttpError } from "@/lib/http.js";
 import { PhpAgentOpError, PhpAgentUnavailableError } from "@/lib/php-agent/client.js";
 import { agentOf, envOf } from "@/lib/php-sites.js";
 import { prisma } from "@/lib/prisma.js";
+import { applyWorkingChanges } from "@/lib/files.js";
+import { isExcludedPath, normalizeSitePath } from "@/lib/site-paths.js";
 import type { Services } from "@/lib/services.js";
 // Règles de l'agent, partagées telles quelles : le hub refuse avant d'appeler, l'agent refuse de nouveau.
 import { checkEnvVars, dbVars, OpError } from "../../../../scripts/php-ct/agent/sites.mjs";
@@ -157,4 +159,45 @@ export function startPhpBackups(services: Services, intervalMs = 15 * 60_000): N
   const timer = setInterval(() => void tick(), intervalMs);
   timer.unref();
   return timer;
+}
+
+// --- Chemins jamais envoyés (« Ne pas envoyer ») ---
+
+export const MAX_EXCLUDED_PATHS = 50;
+
+/** Liste saisie : « dossier/ » ou fichier exact, normalisés comme les fichiers du site, sans joker ni doublon. */
+export function parseExcludedPaths(raw: string[]): string[] {
+  const out: string[] = [];
+  for (const line of raw.map((l) => l.trim().replace(/^\/+/, "")).filter(Boolean)) {
+    if (/[*?[\]]/.test(line)) throw new HttpError(400, `« ${line.slice(0, 80)} » : dossier (terminé par /) ou fichier exact attendu, sans joker.`, "php_excluded");
+    const dir = line.endsWith("/");
+    const checked = normalizeSitePath(dir ? line.slice(0, -1) : line);
+    if (!checked.ok) throw new HttpError(400, `« ${line.slice(0, 80)} » : ${checked.reason}`, "php_excluded");
+    const value = dir ? `${checked.path}/` : checked.path;
+    if (!out.includes(value)) out.push(value);
+  }
+  if (out.length > MAX_EXCLUDED_PATHS) throw new HttpError(400, `${MAX_EXCLUDED_PATHS} chemins au plus.`, "php_excluded");
+  return out;
+}
+
+/** Fichiers de travail visés par des exclusions : nombre et taille (retirés du hub, jamais du PC). */
+export async function excludedWorkingFiles(siteId: string, exclude: string[]): Promise<{ paths: string[]; bytes: number }> {
+  const files = await prisma.workingFile.findMany({ where: { siteId }, select: { path: true, size: true } });
+  const hit = files.filter((f) => isExcludedPath(f.path, exclude));
+  return { paths: hit.map((f) => f.path), bytes: hit.reduce((s, f) => s + f.size, 0) };
+}
+
+/** Enregistre la liste et retire des fichiers de travail ce qu'elle vise ; rend ce qui a été retiré. */
+export async function saveExclusions(site: Site, exclude: string[]): Promise<{ removed: number; bytes: number }> {
+  const hit = await excludedWorkingFiles(site.id, exclude);
+  if (hit.paths.length) await applyWorkingChanges(site.id, { deletePaths: hit.paths });
+  await prisma.site.update({ where: { id: site.id }, data: { phpExcludedPaths: exclude.join("\n") || null } });
+  await audit({
+    action: "site.php.exclusions",
+    result: "ok",
+    siteId: site.id,
+    siteSlug: site.slug,
+    detail: `${exclude.length} chemin(s) ; ${hit.paths.length} fichier(s) retiré(s) du hub, ${Math.round(hit.bytes / 1024 / 1024)} Mio`,
+  });
+  return { removed: hit.paths.length, bytes: hit.bytes };
 }

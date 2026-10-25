@@ -12,6 +12,8 @@ export type SiteExtras = {
   siteCsp: string | null;
   /** Hébergement du site : décide de ce qu'un envoi garde (un site PHP garde src/ et composer.json). */
   hosting: "pages" | "php";
+  /** Site PHP : chemins jamais envoyés (« Ne pas envoyer »). */
+  exclude: string[];
 };
 
 export const MAX_ALLOWED_PATHS = 50;
@@ -25,20 +27,22 @@ const CSP_DIRECTIVES = new Set([
   "report-uri", "report-to", "require-trusted-types-for", "trusted-types",
 ]);
 
-export function extrasOf(site: Pick<Site, "devFilesAllowed" | "siteCsp"> & { hosting?: string }): SiteExtras {
+export function extrasOf(site: Pick<Site, "devFilesAllowed" | "siteCsp"> & { hosting?: string; phpExcludedPaths?: string | null }): SiteExtras {
+  const hosting = site.hosting === "php" ? "php" : "pages";
   return {
     devFilesAllowed: (site.devFilesAllowed ?? "").split("\n").filter(Boolean),
     siteCsp: site.siteCsp || null,
-    hosting: site.hosting === "php" ? "php" : "pages",
+    hosting,
+    exclude: hosting === "php" ? (site.phpExcludedPaths ?? "").split("\n").filter(Boolean) : [],
   };
 }
 
 /** Règles d'envoi d'un site (exceptions et hébergement), pour classifySitePath. */
-export const rulesOf = (extras: SiteExtras) => ({ allow: extras.devFilesAllowed, hosting: extras.hosting });
+export const rulesOf = (extras: SiteExtras) => ({ allow: extras.devFilesAllowed, hosting: extras.hosting, exclude: extras.exclude });
 
 export async function siteExtras(siteId: string): Promise<SiteExtras> {
-  const site = await prisma.site.findUnique({ where: { id: siteId }, select: { devFilesAllowed: true, siteCsp: true, hosting: true } });
-  return site ? extrasOf(site) : { devFilesAllowed: [], siteCsp: null, hosting: "pages" };
+  const site = await prisma.site.findUnique({ where: { id: siteId }, select: { devFilesAllowed: true, siteCsp: true, hosting: true, phpExcludedPaths: true } });
+  return site ? extrasOf(site) : { devFilesAllowed: [], siteCsp: null, hosting: "pages", exclude: [] };
 }
 
 /** Exceptions saisies : chemins exacts, normalisés comme les fichiers du site, sans dossier ni joker, sans doublon. */

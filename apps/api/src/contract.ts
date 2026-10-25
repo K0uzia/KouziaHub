@@ -169,6 +169,8 @@ export type PhpSiteSettings = {
   memoryLimitMb: number;
   uploadMaxMb: number;
   maxExecutionSec: number;
+  /** Chemins jamais envoyés (« dossier/ » ou fichier exact). */
+  excludedPaths: string[];
 };
 
 /** Bornes des limites d'un site PHP (mêmes que l'agent). */
@@ -261,6 +263,8 @@ export type FilesResponse = {
   devFiles: string[];
   workingDirty: boolean;
   limits: { maxFiles: number; maxFileBytes: number; maxZipBytes: number };
+  /** Site PHP : fichiers lourds jamais servis (hors du dossier public et des dossiers persistants), par dossier. */
+  heavyUnserved?: Array<{ dir: string; count: number; bytes: number }>;
 };
 
 /** Fichier écarté lors d'un envoi, avec la raison affichable. */

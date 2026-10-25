@@ -11,8 +11,8 @@ import { audit } from "@/lib/audit.js";
 import { requireAuth } from "@/lib/auth.js";
 import { HttpError } from "@/lib/http.js";
 import { idParams } from "@/lib/http-input.js";
-import { dbView, envView, nightlyDumps, phpDumpsDir, phpSite, saveEnv, scriptsOf, viaAgent } from "@/lib/php-app.js";
-import { agentOf, phpSettingsFor, specOf } from "@/lib/php-sites.js";
+import { dbView, envView, excludedWorkingFiles, nightlyDumps, parseExcludedPaths, phpDumpsDir, phpSite, saveEnv, saveExclusions, scriptsOf, viaAgent } from "@/lib/php-app.js";
+import { agentOf, linesOf, phpSettingsFor, specOf } from "@/lib/php-sites.js";
 import { prisma } from "@/lib/prisma.js";
 import type { Services } from "@/lib/services.js";
 import { siteDetail } from "@/lib/site-view.js";
@@ -32,8 +32,10 @@ const settingsSchema = z
     memoryLimitMb: z.number().int().min(PHP_LIMITS.memoryLimitMb.min).max(PHP_LIMITS.memoryLimitMb.max).optional(),
     uploadMaxMb: z.number().int().min(PHP_LIMITS.uploadMaxMb.min).max(PHP_LIMITS.uploadMaxMb.max).optional(),
     maxExecutionSec: z.number().int().min(PHP_LIMITS.maxExecutionSec.min).max(PHP_LIMITS.maxExecutionSec.max).optional(),
+    excludedPaths: z.array(z.string().max(300)).max(60).optional(),
   })
   .strict();
+const exclusionSchema = z.object({ path: z.string().min(1).max(300) }).strict();
 const envSchema = z.object({ vars: z.array(z.object({ name: z.string().max(64), value: z.string().max(4096) }).strict()).max(100) }).strict();
 const confirmSchema = z.object({ confirm: z.string().max(64) }).strict();
 const restoreSchema = z.object({ version: z.number().int().positive(), confirm: z.string().max(64) }).strict();
@@ -64,6 +66,7 @@ export function phpSiteRoutes(services: Services): FastifyPluginAsync {
       if (!parsed.success) throw badRequest(parsed.error);
       const site = await phpSite(id);
       const current = (await siteDetail(id, services)).php!;
+      const exclude = parsed.data.excludedPaths !== undefined ? parseExcludedPaths(parsed.data.excludedPaths) : null;
       const spec = await phpSettingsFor(services, site.slug, { ...current, ...parsed.data });
       const data = {
         phpVersion: spec.php,
@@ -77,6 +80,8 @@ export function phpSiteRoutes(services: Services): FastifyPluginAsync {
       // Posés sur le CT d'abord : en cas de refus, le hub garde les réglages qui y tournent.
       await viaAgent(() => agentOf(services).upsertSite(specOf({ ...site, ...data }, services.sitesDomain)));
       await prisma.site.update({ where: { id }, data });
+      // Chemins jamais envoyés : enregistrés, et retirés des fichiers de travail (du hub, jamais du PC).
+      if (exclude) await saveExclusions(site, exclude);
       await audit({
         action: "site.php.settings",
         result: "ok",
@@ -85,6 +90,27 @@ export function phpSiteRoutes(services: Services): FastifyPluginAsync {
         detail: `PHP ${spec.php}, ${spec.memoryLimitMb} Mo par requête, envoi ${spec.uploadMaxMb} Mo, ${spec.maxExecutionSec} s`,
       });
       return siteDetail(id, services);
+    });
+
+    // Bouton « Ne plus envoyer ce dossier » : aperçu (fichiers et taille retirés du hub), puis ajout confirmé.
+    app.get("/api/sites/:id/php/exclusions/apercu", async (request): Promise<{ path: string; count: number; bytes: number }> => {
+      const { id } = idParams.parse(request.params);
+      const parsed = exclusionSchema.safeParse(request.query);
+      if (!parsed.success) throw badRequest(parsed.error);
+      const site = await phpSite(id);
+      const [path] = parseExcludedPaths([parsed.data.path]);
+      const hit = await excludedWorkingFiles(site.id, [path!]);
+      return { path: path!, count: hit.paths.length, bytes: hit.bytes };
+    });
+
+    app.post("/api/sites/:id/php/exclusions", async (request): Promise<{ excludedPaths: string[]; removed: number; bytes: number }> => {
+      const { id } = idParams.parse(request.params);
+      const parsed = exclusionSchema.safeParse(request.body);
+      if (!parsed.success) throw badRequest(parsed.error);
+      const site = await phpSite(id);
+      const exclude = parseExcludedPaths([...linesOf(site.phpExcludedPaths), parsed.data.path]);
+      const done = await saveExclusions(site, exclude);
+      return { excludedPaths: exclude, ...done };
     });
 
     // --- Variables ---

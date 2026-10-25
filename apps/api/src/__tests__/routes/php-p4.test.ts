@@ -143,6 +143,46 @@ describe("envoi d'un site PHP : limite par fichier propre (pas celle de Cloudfla
   });
 });
 
+describe("fichiers lourds jamais servis et « Ne pas envoyer »", () => {
+  it("signalés par dossier ; aperçu puis exclusion confirmée (retirés du hub) ; refusés ensuite avec la raison ; liste modifiable", async () => {
+    const id = await site({ publicPersistentDirs: ["public/assets/img/oeuvres"] });
+    const mb = (n: number) => Buffer.alloc(n * 1024 * 1024 + 1, 1);
+    await uploadFiles(hub, id, [
+      { filename: "public/index.php", content: "<?php" },
+      { filename: "public/assets/img/oeuvres/vase-1600.webp", content: mb(2) },
+      { filename: "data/originaux/vase.jpg", content: mb(3) },
+      { filename: "src/produit/vase.jpg", content: mb(4) },
+      { filename: "src/produit/bol.jpg", content: mb(5) },
+      { filename: "src/App.php", content: Buffer.alloc(2 * 1024 * 1024, 32) },
+    ]);
+    type Files = { heavyUnserved?: Array<{ dir: string; count: number; bytes: number }>; files: Array<{ path: string }> };
+    const files = (await call("GET", `/api/sites/${id}/files`)).json() as Files;
+    // Ni le dossier public, ni les dossiers persistants, ni le code : seuls les originaux de src/produit/.
+    expect(files.heavyUnserved).toEqual([{ dir: "src/produit/", count: 2, bytes: 9 * 1024 * 1024 + 2 }]);
+
+    const preview = await call("GET", `/api/sites/${id}/php/exclusions/apercu?path=${encodeURIComponent("src/produit/")}`);
+    expect(preview.json()).toEqual({ path: "src/produit/", count: 2, bytes: 9 * 1024 * 1024 + 2 });
+    const done = await call("POST", `/api/sites/${id}/php/exclusions`, { path: "src/produit/" });
+    expect(done.json()).toEqual({ excludedPaths: ["src/produit/"], removed: 2, bytes: 9 * 1024 * 1024 + 2 });
+    const after = (await call("GET", `/api/sites/${id}/files`)).json() as Files;
+    expect(after.files.map((f) => f.path)).not.toContain("src/produit/vase.jpg");
+    expect(after.files.map((f) => f.path)).toContain("src/App.php");
+    expect(after.heavyUnserved).toEqual([]);
+    expect(((await call("GET", `/api/sites/${id}`)).json() as SiteDetail).php?.excludedPaths).toEqual(["src/produit/"]);
+
+    // Envoi suivant : refusé, jamais en silence.
+    const again = await uploadFiles(hub, id, [{ filename: "src/produit/tasse.jpg", content: "x" }]);
+    expect(again.json()).toMatchObject({ accepted: [], rejected: [{ path: "src/produit/tasse.jpg", reason: expect.stringMatching(/^Exclu par le réglage du site/) }] });
+
+    // Liste vidée dans les réglages : l'envoi repasse.
+    expect((await call("PATCH", `/api/sites/${id}/php`, { excludedPaths: [] })).statusCode).toBe(200);
+    expect((await uploadFiles(hub, id, [{ filename: "src/produit/tasse.jpg", content: "x" }])).json()).toMatchObject({ accepted: ["src/produit/tasse.jpg"] });
+    for (const bad of [["src/*.jpg"], ["../etc/"]]) {
+      expect((await call("PATCH", `/api/sites/${id}/php`, { excludedPaths: bad })).json(), JSON.stringify(bad)).toMatchObject({ code: "php_excluded" });
+    }
+  });
+});
+
 describe("variables d'environnement", () => {
   it("propositions ; enregistrement chiffré dans le hub, .env posé sur le CT ; clé live et DB_* refusées sans rien changer", async () => {
     const id = await site();

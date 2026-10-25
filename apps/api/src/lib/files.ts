@@ -1,5 +1,5 @@
 import type { FilesResponse, VersionCheck } from "@/contract.js";
-import { hostingOf, phpEntryCheck } from "@/lib/site-hosting.js";
+import { heavyUnserved, hostingOf, phpEntryCheck } from "@/lib/site-hosting.js";
 import type { BlobStore } from "@/lib/blobs.js";
 import { checkVersion } from "@/lib/version-check.js";
 import { classifySitePath } from "@/lib/site-paths.js";
@@ -61,10 +61,15 @@ export async function leftoverDevFiles(siteId: string, paths: string[]): Promise
   return paths.filter((p) => classifySitePath(p, rules).action === "reject");
 }
 
+const lines = (text: string | null) => (text ?? "").split("\n").map((d) => d.trim()).filter(Boolean);
+
 export async function listFiles(siteId: string, blobs: BlobStore): Promise<FilesResponse> {
   const [files, site] = await Promise.all([
     prisma.workingFile.findMany({ where: { siteId }, orderBy: { path: "asc" } }),
-    prisma.site.findUniqueOrThrow({ where: { id: siteId }, select: { workingDirty: true, hosting: true, phpPublicDir: true } }),
+    prisma.site.findUniqueOrThrow({
+      where: { id: siteId },
+      select: { workingDirty: true, hosting: true, phpPublicDir: true, phpPersistentDirs: true, phpPublicPersistentDirs: true },
+    }),
   ]);
   // Site PHP : page d'entrée (index.php ou index.html) dans le dossier public ; site Pages : index.html à la racine.
   const phpCheck = hostingOf(site) === "php" ? phpEntryCheck(files.map((f) => f.path), site.phpPublicDir ?? "") : undefined;
@@ -76,6 +81,15 @@ export async function listFiles(siteId: string, blobs: BlobStore): Promise<Files
     devFiles: await leftoverDevFiles(siteId, files.map((f) => f.path)),
     workingDirty: site.workingDirty,
     limits: { ...FILE_LIMITS, maxFileBytes: maxFileBytesFor(hostingOf(site)) },
+    ...(hostingOf(site) === "php"
+      ? {
+          heavyUnserved: heavyUnserved(files, {
+            publicDir: site.phpPublicDir ?? "",
+            persistentDirs: lines(site.phpPersistentDirs),
+            publicPersistentDirs: lines(site.phpPublicPersistentDirs),
+          }),
+        }
+      : {}),
   };
 }
 

@@ -129,6 +129,9 @@ model Site {
   phpUploadMaxMb   Int          @default(32)
   phpMemoryLimitMb Int          @default(256)
   phpMaxExecutionSec Int        @default(30)
+  /// Site PHP : chemins jamais envoyés (un par ligne ; « dossier/ » ou fichier exact, 50 au plus), refusés à l'envoi
+  /// avec leur raison et retirés des fichiers de travail (fichiers lourds jamais servis : originaux, sources).
+  phpExcludedPaths String?
   /// Adresse <projet>.pages.dev renvoyée par Cloudflare : cible du CNAME.
   pagesSubdomain   String?
   dnsRecordId      String?

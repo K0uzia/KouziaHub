@@ -154,7 +154,13 @@ export type ClassifyOptions = {
    * composer.json/composer.lock en font partie. Le reste (.env, .git, README, node_modules...) reste refusé.
    */
   hosting?: "pages" | "php";
+  /** Site PHP : chemins jamais envoyés (« dossier/ » ou fichier exact), réglés dans la fiche du site. */
+  exclude?: readonly string[];
 };
+
+/** Vrai si le chemin est exclu par le réglage du site (dossier : préfixe ; sinon chemin exact). */
+export const isExcludedPath = (sitePath: string, exclude: readonly string[] = []) =>
+  exclude.some((e) => (e.endsWith("/") ? sitePath.startsWith(e) : sitePath === e));
 
 /** Outillage d'un site statique qui fait partie d'une application PHP (comparé en minuscules). */
 const PHP_RUNTIME_TOOLING = new Set(["src/", "composer.json", "composer.lock"]);
@@ -168,6 +174,10 @@ export function classifySitePath(sitePath: string, options: ClassifyOptions = {}
 
   if (lowerSegments.includes("__macosx") || IGNORED_NAMES.has(lowerBase)) {
     return { action: "ignore", reason: "Fichier système écarté." };
+  }
+  // Jamais refusé sans le dire : le compte rendu donne la raison.
+  if (isExcludedPath(sitePath, options.exclude)) {
+    return { action: "reject", reason: "Exclu par le réglage du site (« Ne pas envoyer ») : jamais envoyé au serveur des sites PHP." };
   }
   // Premier segment, fichier ou dossier : Pages exécute aussi un dossier _worker.js/ (index.js) à la racine.
   if (lowerSegments[0] === "_worker.js") {
