@@ -337,7 +337,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     limitsEffective: () => systemProbes.cgroups().result === "ok",
     httpStatus: (host, p) =>
       new Promise((resolve) => {
-        const r = httpRequest({ host: "127.0.0.1", port: 8080, path: p, method: "GET", headers: { host }, timeout: 5000 }, (res) => {
+        const r = httpRequest({ host: "127.0.0.1", port: 8080, path: p, method: "GET", headers: { host }, timeout: 2000 }, (res) => {
           res.resume();
           resolve(res.statusCode ?? 0);
         });

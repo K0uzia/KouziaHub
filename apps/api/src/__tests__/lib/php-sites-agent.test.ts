@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createAgent, tunnelIdOf, type Probes } from "../../../../../scripts/php-ct/agent/agent.mjs";
 import { memorySys } from "../helpers/php-memory.js";
 import {
+  CHECK_PATHS,
   allocateUid,
   checkArchiveListing,
   checkSiteSpec,
@@ -56,6 +57,16 @@ describe("réglages d'un site PHP (validation stricte, l'agent tourne en root)",
     const passwd = "root:x:0:0::/:/bin/sh\nphp-a:x:20000:20000::/:/x\nphp-b:x:20002:20002::/:/x\nnginx:x:100:101::/:/x";
     expect(allocateUid(passwd, "php-b")).toEqual({ uid: 20002, exists: true });
     expect(allocateUid(passwd, "php-c")).toEqual({ uid: 20001, exists: false });
+  });
+
+  it("contrôle anti-fuite : chaque chemin sondé est refusé par nginx lui-même (pas de passage par PHP, réponse immédiate)", () => {
+    // Première location regex qui correspond, comme nginx (ordre du fichier) ; « ~* » : sans casse.
+    const rules = [...nginxConf(checkSiteSpec(spec, ctx), paths).matchAll(/^\s*location (~\*?) (\S+) \{ (.*) \}$/gm)].map((m) => ({
+      re: new RegExp(m[2]!, m[1] === "~*" ? "i" : ""),
+      action: m[3]!,
+    }));
+    expect(rules.length).toBeGreaterThan(3);
+    for (const p of CHECK_PATHS) expect(rules.find((r) => r.re.test(p))?.action, p).toBe("return 403;");
   });
 
   it("nginx : dossier public seul, noindex, fichiers sensibles refusés, PHP par le socket du site", () => {
@@ -142,7 +153,7 @@ describe("cycle de vie d'un site sur le CT (système simulé)", () => {
     expect(kept).toEqual(["1", "3", "4", "5", "6", "7"]);
 
     // Contrôle anti-fuite : tout refusé, puis une fuite simulée sur /.env.
-    expect(await ops.check("mytakumi")).toMatchObject({ ok: true, results: expect.arrayContaining([{ path: "/data/", status: 403 }]) });
+    expect(await ops.check("mytakumi")).toMatchObject({ ok: true, results: CHECK_PATHS.map((p) => ({ path: p, status: 403 })) });
     served = new Set(["/.env"]);
     expect(await ops.check("mytakumi")).toMatchObject({ ok: false, results: expect.arrayContaining([{ path: "/.env", status: 200 }]) });
     served = new Set();

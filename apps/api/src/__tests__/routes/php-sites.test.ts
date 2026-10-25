@@ -31,11 +31,13 @@ let hub: TestHub;
 let server: Server;
 let mem: ReturnType<typeof memorySys>;
 let leaks: Set<string>;
+let silent: Set<string>;
 const incoming = mkdtempSync(join(tmpdir(), "kouzia-php-in-"));
 
 beforeEach(async () => {
   await resetDb();
   leaks = new Set();
+  silent = new Set();
   // tar simulé : la liste annonce un fichier ordinaire, l'extraction ne fait rien (mémoire).
   mem = memorySys((file, args) =>
     file === "/bin/tar" && args[0] === "-tvzf" ? { code: 0, stdout: "-rw-r--r-- 0/0 1 2026-10-25 10:00 public/index.html\n", stderr: "" } : { code: 0, stdout: "", stderr: "" },
@@ -45,7 +47,7 @@ beforeEach(async () => {
     domain: "kouzia.com",
     phpInstalled: () => ["8.3"],
     limitsEffective: () => true,
-    httpStatus: async (_host, p) => (leaks.has(p) ? 200 : 404),
+    httpStatus: async (_host, p) => (silent.has(p) ? 0 : leaks.has(p) ? 200 : 404),
     sys: mem.sys,
   });
   const probes = {
@@ -168,6 +170,19 @@ describe("site PHP de bout en bout", () => {
     expect(op.steps.map((s) => s.label)).toEqual(["Fichiers envoyés au serveur des sites PHP", "Anciennes versions purgées"]);
     expect(op.error).toMatch(/^Fichiers envoyés au serveur des sites PHP : .*injoignable/i);
     expect(op.error).not.toMatch(/inattendue/);
+  });
+
+  it("nginx muet sur un chemin sondé : contrôle incomplet, site coupé par prudence, cause dite", async () => {
+    const id = ((await create()).json() as SiteDetail).id;
+    await settle(hub);
+    await uploadFiles(hub, id, [{ filename: "public/index.php", content: "<?php echo 1;" }]);
+    silent = new Set(["/composer.json"]);
+    await post(id, "publish");
+    await settle(hub);
+    const op = (await detail(id)).operation as Operation;
+    expect(op).toMatchObject({ kind: "PUBLISH", status: "FAILED" });
+    expect(op.error).toBe("Fichiers envoyés au serveur des sites PHP : Contrôle anti-fuite incomplet, site coupé par prudence : pas de réponse de nginx en 2 s sur /composer.json.");
+    expect(mem.nodes.has("/etc/nginx/kouziaphp-sites/mytakumi.conf.off")).toBe(true);
   });
 
   it("coupure, rallumage, suppression : CNAME retiré puis reposé, site retiré du CT", async () => {

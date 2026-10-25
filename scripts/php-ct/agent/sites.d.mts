@@ -64,6 +64,7 @@ export function checkSiteSpec(input: unknown, ctx: Pick<SiteContext, "domain" | 
 export function userOf(slug: string): string;
 export function serviceOf(slug: string): string;
 export function allocateUid(passwdText: string, user: string): { uid: number; exists: boolean };
+export const CHECK_PATHS: string[];
 export function nginxConf(spec: SiteSpec, paths: Paths): string;
 export function fpmConf(spec: SiteSpec, paths: Paths): string;
 export function serviceConf(spec: SiteSpec, limits: boolean): string;

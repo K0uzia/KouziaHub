@@ -26,6 +26,11 @@ export class PhpAgentOpError extends Error {
   }
 }
 
+// Délais : lecture d'état 5 s (défaut) ; opération sur un site (services relancés, nginx rechargé) 60 s ;
+// contrôle anti-fuite 30 s (l'agent borne chaque sonde de nginx à 2 s).
+const OPERATION_TIMEOUT_MS = 60_000;
+const CHECK_TIMEOUT_MS = 30_000;
+
 const sha256Hex = (body: string) => createHash("sha256").update(body).digest("hex");
 
 export function signAgentRequest(secret: string, timestamp: string, nonce: string, method: string, path: string, body: string): string {
@@ -86,7 +91,13 @@ export class PhpAgentClient {
   }
 
   /** Requête signée ; réponse vérifiée (signature liée au nonce) avant d'être lue. */
-  private async request(method: "GET" | "POST" | "PUT" | "DELETE", path: string, payload?: unknown, stream?: { file: string; sha256: string }): Promise<unknown> {
+  private async request(
+    method: "GET" | "POST" | "PUT" | "DELETE",
+    path: string,
+    payload?: unknown,
+    stream?: { file: string; sha256: string },
+    timeoutMs = this.timeoutMs,
+  ): Promise<unknown> {
     const body = payload === undefined ? "" : JSON.stringify(payload);
     const timestamp = String(Math.floor(this.now() / 1000));
     const nonce = randomBytes(16).toString("hex");
@@ -109,9 +120,13 @@ export class PhpAgentClient {
           : body
             ? { body }
             : {}),
-        signal: AbortSignal.timeout(stream ? 15 * 60_000 : this.timeoutMs),
+        signal: AbortSignal.timeout(stream ? 15 * 60_000 : timeoutMs),
       } as RequestInit);
-    } catch {
+    } catch (err) {
+      // Délai dépassé : l'agent a reçu la demande mais n'a pas fini à temps ; ce n'est pas « injoignable ».
+      if (err instanceof Error && err.name === "TimeoutError") {
+        throw new PhpAgentUnavailableError(`Serveur des sites PHP : pas de réponse en ${Math.round((stream ? 15 * 60_000 : timeoutMs) / 1000)} s (${method} ${path}).`);
+      }
       throw new PhpAgentUnavailableError();
     }
     const text = await res.text().catch(() => "");
@@ -149,7 +164,7 @@ export class PhpAgentClient {
 
   /** Crée ou met à jour le site sur le CT (rejouable). */
   async upsertSite(spec: PhpSiteSpec): Promise<void> {
-    await this.request("POST", "/v1/sites", spec);
+    await this.request("POST", "/v1/sites", spec, undefined, OPERATION_TIMEOUT_MS);
   }
 
   /** Envoie l'archive d'une version (flux, empreinte signée). */
@@ -158,24 +173,24 @@ export class PhpAgentClient {
   }
 
   async publish(slug: string, number: number): Promise<void> {
-    await this.request("POST", `/v1/sites/${slug}/publier`, { version: number });
+    await this.request("POST", `/v1/sites/${slug}/publier`, { version: number }, undefined, OPERATION_TIMEOUT_MS);
   }
 
   async setEnabled(slug: string, enabled: boolean): Promise<void> {
-    await this.request("POST", `/v1/sites/${slug}/${enabled ? "rallumer" : "couper"}`);
+    await this.request("POST", `/v1/sites/${slug}/${enabled ? "rallumer" : "couper"}`, undefined, undefined, OPERATION_TIMEOUT_MS);
   }
 
   /** Contrôle anti-fuite : chaque chemin sensible doit répondre 403 ou 404 sur nginx local. */
   async check(slug: string): Promise<{ ok: boolean; results: Array<{ path: string; status: number }> }> {
     const parsed = z
       .object({ ok: z.boolean(), results: z.array(z.object({ path: z.string().max(300), status: z.number().int() })).max(50) })
-      .safeParse(await this.request("GET", `/v1/sites/${slug}/verifier`));
+      .safeParse(await this.request("GET", `/v1/sites/${slug}/verifier`, undefined, undefined, CHECK_TIMEOUT_MS));
     if (!parsed.success) throw new PhpAgentUnavailableError("Serveur des sites PHP : contrôle illisible.");
     return parsed.data;
   }
 
   async removeSite(slug: string): Promise<void> {
-    await this.request("DELETE", `/v1/sites/${slug}`);
+    await this.request("DELETE", `/v1/sites/${slug}`, undefined, undefined, OPERATION_TIMEOUT_MS);
   }
 }
 

@@ -80,6 +80,9 @@ export async function deployPhpVersion(services: Services, siteId: string, versi
   const check = await agent.check(site.slug);
   if (!check.ok) {
     await agent.setEnabled(site.slug, false).catch(() => undefined);
+    // Statut 0 : nginx n'a pas répondu (délai de 2 s ou refus) ; le site est coupé quand même, par prudence.
+    const silent = check.results.filter((r) => r.status === 0).map((r) => r.path);
+    if (silent.length) throw new HttpError(500, `Contrôle anti-fuite incomplet, site coupé par prudence : pas de réponse de nginx en 2 s sur ${silent.join(", ")}.`, "php_check");
     const leaks = check.results.filter((r) => r.status !== 403 && r.status !== 404).map((r) => `${r.path} (${r.status})`);
     throw new HttpError(500, `Fuite détectée après publication, site coupé : ${leaks.join(", ")} répond(ent) au lieu d'être refusé(s).`, "php_leak");
   }

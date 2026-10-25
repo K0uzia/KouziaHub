@@ -85,6 +85,18 @@ describe("protocole de l'agent des sites PHP", () => {
     await expect(client({ fetch: forged }).state()).rejects.toBeInstanceOf(PhpAgentUnavailableError);
   });
 
+  it("délai dépassé : dit comme tel (« pas de réponse en N s »), pas « injoignable » ; refus de connexion : injoignable", async () => {
+    const slow: typeof fetch = async () => {
+      throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    };
+    await expect(client({ fetch: slow }).check("recette-php")).rejects.toThrow("Serveur des sites PHP : pas de réponse en 30 s (GET /v1/sites/recette-php/verifier).");
+    await expect(client({ fetch: slow }).state()).rejects.toThrow(/pas de réponse en 5 s \(GET \/v1\/etat\)/);
+    const refused: typeof fetch = async () => {
+      throw new TypeError("fetch failed");
+    };
+    await expect(client({ fetch: refused }).state()).rejects.toThrow("Serveur des sites PHP injoignable.");
+  });
+
   it("configuration : URL sans secret ou mal formée refusée ; rien posé : pas de serveur PHP", () => {
     expect(phpAgentFromEnv({})).toBeNull();
     expect(() => phpAgentFromEnv({ PHP_AGENT_URL: "http://192.168.1.40:8790" })).toThrow(/PHP_AGENT_SECRET/);

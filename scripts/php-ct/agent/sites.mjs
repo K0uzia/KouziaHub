@@ -84,6 +84,9 @@ export function allocateUid(passwdText, user) {
 }
 
 /** Bloc nginx du site : dossier public seul servi, PHP exécuté seulement là, fichiers sensibles refusés. */
+/** Chemins du contrôle anti-fuite : chacun refusé par une règle de nginxConf, sans passer par PHP (réponse immédiate). */
+export const CHECK_PATHS = ["/.env", "/.git/config", "/composer.json", "/composer.lock", "/vendor/autoload.php"];
+
 export function nginxConf(spec, paths) {
   const root = path.posix.join(paths.sitesDir, spec.slug, "current", spec.publicDir);
   const noindex = spec.indexing ? "" : '    add_header X-Robots-Tag "noindex, nofollow" always;\n';
@@ -336,14 +339,15 @@ export function siteOperations(ctx) {
     },
 
     /**
-     * Contrôle anti-fuite (docs/cadrage.md, 11.8) : nginx local, sous le nom du site, ne doit servir ni secrets,
-     * ni dépendances, ni dossiers persistants. Chaque chemin doit répondre 403 ou 404.
+     * Contrôle anti-fuite (docs/cadrage.md, 11.8) : nginx local, sous le nom du site, ne doit servir ni secrets ni
+     * dépendances. Chaque chemin doit répondre 403 ou 404. Les dossiers persistants ne sont pas sondés : hors du
+     * dossier public par construction (checkSiteSpec), un chemin vers eux tombe dans index.php (lent, et 200).
      */
     async check(slug) {
       const spec = await known(slug);
-      const probes = ["/.env", "/.git/config", "/composer.json", "/composer.lock", "/vendor/autoload.php", ...spec.persistentDirs.map((d) => `/${d}/`)];
-      const results = [];
-      for (const p of probes) results.push({ path: p, status: await ctx.httpStatus(spec.hostname, p) });
+      const probes = CHECK_PATHS;
+      // En parallèle : chaque sonde est bornée par httpStatus (2 s), le contrôle entier aussi.
+      const results = await Promise.all(probes.map(async (p) => ({ path: p, status: await ctx.httpStatus(spec.hostname, p) })));
       const leaks = results.filter((r) => r.status !== 403 && r.status !== 404);
       return { slug: spec.slug, ok: leaks.length === 0, results };
     },
