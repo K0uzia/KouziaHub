@@ -52,8 +52,15 @@ activate_controllers() {
 }
 
 if [ "${1:-}" = "activer" ]; then
-  activate_controllers
-  exit $?
+  activate_controllers && exit 0
+  # Échec au démarrage : noté, pour que l'agent ne pose plus de limites que rien n'appliquerait.
+  mkdir -p "$KP_STATE_DIR"
+  {
+    echo "date $(date '+%Y-%m-%d %H:%M')"
+    echo "resultat echec"
+    echo "ÉCHEC contrôleurs non activés au démarrage (manquants : $(controllers_missing)) : kouziaphpctl cgroups"
+  } > "${KP_STATE_DIR}/cgroups"
+  exit 1
 fi
 
 _svc="kouziaphp-cgtest"

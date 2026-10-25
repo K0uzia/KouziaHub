@@ -630,6 +630,16 @@ kouziaphpctl status
 
 Dans un CT LXC, la racine des groupes de contrôle du CT n'active ses contrôleurs pour les services que si aucun processus n'y vit. Le service `kouziaphp-cgroups` (niveau boot, posé par `install`) range ces processus dans `kouziaphp.init` puis active `memory`, `cpu` et `pids` à chaque démarrage ; `cgroups` fait de même avant son essai. Aucun réglage Proxmox n'est nécessaire.
 
+**Vérifier après activation** (les processus de la racine du CT ont été déplacés : l'entrée dans le CT doit marcher comme avant). Dans le Shell du nœud :
+
+```sh
+pct exec $CTID -- cat /sys/fs/cgroup/cgroup.subtree_control
+pct exec $CTID -- /bin/true; echo "code $?"
+pct enter $CTID
+```
+
+La première ligne affiche `cpu memory pids` (d'autres contrôleurs peuvent s'y ajouter), la deuxième `code 0`, la troisième ouvre un shell dans le CT (en sortir par `exit`). Puis redémarrer le CT (`pct reboot $CTID`) et refaire les trois : l'activation est rejouée à chaque démarrage.
+
 ### 11.7 Au quotidien
 
 | Commande (dans le CT) | Rôle |
@@ -694,6 +704,7 @@ But : vérifier en réel ce qui n'a tourné qu'en simulation (scripts Alpine, ag
 | 5 | Installer (11.5) | se termine par l'état du CT : nginx et MariaDB « en marche », PHP « 83 », pare-feu du CT « posé » (ou « absent » : me le dire) |
 | 6 | Dans le CT : `kouziaphpctl tunnel`, puis `kouziaphpctl upgrade` | « Tunnel démarré » ; dans Cloudflare, le tunnel passe « Sain » ; puis « Système déjà à jour » ou la liste des paquets mis à jour |
 | 7 | Dans le CT : `kouziaphpctl cgroups` | une suite de lignes OK, ou ÉCHEC avec la raison : **me renvoyer toute la sortie**, quel que soit le résultat |
+| 7 bis | Shell du nœud : « Vérifier après activation » (11.6), avant et après `pct reboot $CTID` | `cpu memory pids` ; `code 0` ; `pct enter` ouvre un shell dans le CT |
 | 8 | Agent (11.8, les quatre lignes) | « Agent démarré » ; dans le hub, tuile « Serveur des sites PHP » à « Configuré » avec PHP 8.3 ; `wget` depuis le hub : `HTTP/1.1 401 Unauthorized` |
 | 9 | Hub : « Nouveau site », Perso, libellé « Recette PHP », sous-domaine `recette-php`, hébergement **PHP**, dossier public `public`, dossier persistant `data` | étapes « Site posé sur le serveur PHP », « Page d'attente publiée », « Enregistrement DNS créé », « Site en ligne » ; `https://recette-php.kouzia.com` montre la page d'attente |
 | 10 | Récupérer la page de test : sur GitHub, dépôt KouziaHub, fichier `scripts/php-ct/recette/public/index.php`, « Download raw file ». Si la box n'est pas en 192.168.1.1, corriger la ligne `IP_DE_LA_BOX` | un fichier `index.php` sur le PC |
@@ -701,7 +712,7 @@ But : vérifier en réel ce qui n'a tourné qu'en simulation (scripts Alpine, ag
 | 12 | Ouvrir `https://recette-php.kouzia.com` | « Tous les points sont conformes. » et huit lignes OK : PHP 8.3, visite n° 1, lecture hors du site refusée, commandes coupées, Stripe en 401, réseau local et SMTP injoignables, e-mail capturé |
 | 13 | Recharger la page deux fois | visite n° 2, puis n° 3 |
 | 14 | Republier la même version (onglet Versions, « Republier ») puis recharger | visite n° 4 : `data/` a survécu à la publication |
-| 15 | Ouvrir `https://recette-php.kouzia.com/.env`, puis `/data/visites.txt`, puis `/../data/visites.txt` | 403 ou 404 à chaque fois, jamais un contenu |
+| 15 | Ouvrir `https://recette-php.kouzia.com/.env`, puis `/data/visites.txt`, puis `/../data/visites.txt` | `.env` : 403 ; `/data/visites.txt` : la page de test (index.php répond, `data/` est hors du dossier public), jamais le compteur seul ; `/../data/visites.txt` : 400 ou la page de test |
 | 16 | Fiche : couper le site, recharger l'adresse ; puis le rallumer | coupé : erreur Cloudflare (l'adresse ne répond plus) ; rallumé : la page revient en moins d'une minute, visite suivante |
 | 17 | Dans le CT : `ls /srv/sites/recette-php/mail/` | un ou plusieurs fichiers `.eml` (e-mails capturés, jamais envoyés) |
 | 18 | Fiche, Réglages : supprimer le site `recette-php` | site retiré du hub ; dans le CT, `ls /srv/sites` ne le montre plus ; plus d'enregistrement DNS `recette-php` dans Cloudflare |
