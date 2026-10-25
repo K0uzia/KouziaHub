@@ -78,6 +78,23 @@ describe("scripts des CT Alpine : dossiers de destination", () => {
 
 // Sous set -e, une fonction dont la dernière commande est « [ test ] && action » renvoie 1 quand le test est
 // faux : appelée dans « x="$(f)" », elle arrête le script (status.sh coupé après la ligne Alpine, 25/10/2026).
+// pct exec (lxc-attach) garde un PATH minimal, sans /usr/local/sbin ni /usr/local/bin : un outil que les scripts
+// y posent s'appelle par son chemin complet (recette du 25/10/2026, 11.8 : « Failed to exec "kouziaphpctl" »).
+describe("README : commandes pct exec", () => {
+  it("les outils posés dans /usr/local par les scripts sont appelés par leur chemin complet", () => {
+    const files = [...shellFiles(join(ROOT, "php-ct")), ...shellFiles(join(ROOT, "alpine"))];
+    const tools = new Set(files.flatMap((f) => destinations(readFileSync(f, "utf8")).map((d) => d.dest)).filter((d) => d.startsWith("/usr/local/")).map((d) => posix.basename(d)));
+    expect([...tools]).toEqual(expect.arrayContaining(["hubctl", "kouziaphpctl"]));
+    const readme = readFileSync(join(ROOT, "../README.md"), "utf8");
+    const bare = readme
+      .split("\n")
+      .map((l, i) => ({ l, n: i + 1 }))
+      .filter(({ l }) => /pct exec /.test(l) && [...tools].some((t) => new RegExp(`(^|[^/\\w-])${t}\\b`).test(l.slice(l.indexOf("pct exec ")))))
+      .map(({ l, n }) => `README.md:${n} ${l.trim()}`);
+    expect(bare).toEqual([]);
+  });
+});
+
 describe("scripts des CT Alpine : fonctions sûres sous set -e", () => {
   const files = [...shellFiles(join(ROOT, "php-ct")), ...shellFiles(join(ROOT, "alpine"))];
 

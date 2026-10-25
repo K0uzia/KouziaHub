@@ -650,12 +650,12 @@ Le secret est créé dans le Shell du nœud Proxmox et posé dans les deux CT **
 
 ```sh
 SECRET=$(openssl rand -hex 32)
-printf '%s\n%s\n' "$HUB_IP" "$SECRET" | pct exec $CTID -- kouziaphpctl agent
-printf '%s\n%s\n' "${IP%/*}" "$SECRET" | pct exec $HUB -- hubctl secrets php
+printf '%s\n%s\n' "$HUB_IP" "$SECRET" | pct exec $CTID -- /usr/local/sbin/kouziaphpctl agent
+printf '%s\n%s\n' "${IP%/*}" "$SECRET" | pct exec $HUB -- /usr/local/bin/hubctl secrets php
 unset SECRET
 ```
 
-La première ligne règle l'agent (IP du hub seule autorisée, secret), la deuxième donne au hub l'adresse du CT PHP et le même secret ; le hub redémarre seul.
+La première ligne règle l'agent (IP du hub seule autorisée, secret), la deuxième donne au hub l'adresse du CT PHP et le même secret ; le hub redémarre seul. Chemins complets : `pct exec` ne cherche pas dans `/usr/local/sbin` ni `/usr/local/bin`.
 
 **Vérifier** :
 
