@@ -9,6 +9,7 @@
 # Le service de test est retiré à la fin, quoi qu'il arrive. Résultat gardé pour « kouziaphpctl status ».
 #
 # Usage, en root : sh cgroups.sh   (code 0 : limites effectives ; 1 : non)
+#        sh cgroups.sh activer   (activation seule, sans essai : service kouziaphp-cgroups au démarrage)
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -16,6 +17,44 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "${SCRIPT_DIR}/lib.sh"
 
 require_root
+
+_root="/sys/fs/cgroup"
+_wanted="memory cpu pids"
+
+# Contrôleurs actifs pour les groupes enfants (cgroup.subtree_control de la racine du CT) ; liste les manquants.
+controllers_missing() {
+  _active=" $(cat "${_root}/cgroup.subtree_control" 2>/dev/null || true) "
+  for _c in $_wanted; do
+    case "$_active" in
+      *" ${_c} "*) ;;
+      *) printf "%s " "$_c" ;;
+    esac
+  done
+}
+
+# Dans un CT LXC, la racine des cgroups du CT est un groupe intérieur de l'hôte : le noyau refuse d'y activer un
+# contrôleur (« Device or resource busy ») tant que des processus y vivent. Ils vont dans « kouziaphp.init »,
+# puis chaque contrôleur est activé. Rejouable ; rien ne survit à un redémarrage du CT.
+activate_controllers() {
+  [ -n "$(controllers_missing)" ] || return 0
+  grep -q " ${_root} cgroup2 " /proc/mounts || return 1
+  mkdir -p "${_root}/kouziaphp.init"
+  # Deux passes : un processus né pendant la première (fils d'un processus pas encore déplacé) est repris.
+  for _pass in 1 2; do
+    while read -r _p; do
+      echo "$_p" > "${_root}/kouziaphp.init/cgroup.procs" 2>/dev/null || true
+    done < "${_root}/cgroup.procs"
+  done
+  for _c in $(controllers_missing); do
+    echo "+${_c}" > "${_root}/cgroup.subtree_control" 2>/dev/null || true
+  done
+  [ -z "$(controllers_missing)" ]
+}
+
+if [ "${1:-}" = "activer" ]; then
+  activate_controllers
+  exit $?
+fi
 
 _svc="kouziaphp-cgtest"
 _init="/etc/init.d/${_svc}"
@@ -89,6 +128,12 @@ for _c in memory cpu pids; do
     *) fail "Contrôleur ${_c} absent de /sys/fs/cgroup/cgroup.controllers (« ${_ctrl:-vide} ») : non délégué au CT par Proxmox." ;;
   esac
 done
+if activate_controllers; then
+  pass "Contrôleurs ${_wanted} actifs pour les groupes des services (cgroup.subtree_control)."
+else
+  _left="$(cat "${_root}/cgroup.procs" 2>/dev/null | wc -l | tr -d " ")"
+  fail "Contrôleurs non activés pour les groupes des services (manquants : $(controllers_missing)) ; processus restés à la racine du CT : ${_left}. Détail : cat ${_root}/cgroup.subtree_control"
+fi
 
 # 2. Service de test avec des limites basses.
 cat > "$_init" <<'EOF'

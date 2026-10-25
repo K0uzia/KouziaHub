@@ -1,0 +1,19 @@
+#!/sbin/openrc-run
+# OpenRC : active les contrôleurs memory, cpu et pids pour les groupes des services (limites par site). Dans un CT
+# LXC, la racine des cgroups du CT n'est pas celle de l'hôte : le noyau refuse d'y activer un contrôleur tant que
+# des processus y vivent. Ils sont rangés dans « kouziaphp.init », puis les contrôleurs sont activés. À chaque
+# démarrage (rien de ce qui est fait ici ne survit à un redémarrage du CT), au niveau boot, avant les services.
+
+description="Sites PHP : contrôleurs des groupes de contrôle (limites par site)"
+
+: "${KP_LIB_DIR:=/usr/local/lib/kouziaphp}"
+
+depend() {
+  after cgroups
+}
+
+start() {
+  ebegin "Contrôleurs memory, cpu et pids pour les services (limites par site)"
+  sh "${KP_LIB_DIR}/cgroups.sh" activer
+  eend $? "Contrôleurs non activés : limites de PHP et du CT seules (détail : kouziaphpctl cgroups)"
+}

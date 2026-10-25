@@ -134,11 +134,11 @@ if [ "$SCRIPT_DIR" != "$KP_LIB_DIR" ]; then
     install -o root -g root -m 644 "${SCRIPT_DIR}/agent/${_f}" "${KP_LIB_DIR}/agent/${_f}"
   done
   install -o root -g root -m 755 "${SCRIPT_DIR}/mail-capture" "${KP_LIB_DIR}/mail-capture"
-  for _f in kouziaphp-firewall cloudflared kouziaphp-agent kouziaphp-site; do
+  for _f in kouziaphp-firewall kouziaphp-cgroups cloudflared kouziaphp-agent kouziaphp-site; do
     install -o root -g root -m 755 "${SCRIPT_DIR}/openrc/${_f}" "${KP_LIB_DIR}/openrc/${_f}"
   done
 fi
-for _f in kouziaphp-firewall cloudflared kouziaphp-agent kouziaphp-site; do
+for _f in kouziaphp-firewall kouziaphp-cgroups cloudflared kouziaphp-agent kouziaphp-site; do
   install -o root -g root -m 755 "${KP_LIB_DIR}/openrc/${_f}" "/etc/init.d/${_f}"
 done
 mkdir -p "${KP_ETC_DIR}/sites" "${KP_ETC_DIR}/fpm"
@@ -165,6 +165,8 @@ if grep -q ' /sys/fs/cgroup cgroup2 ' /proc/mounts; then
     printf '%s\n' 'rc_cgroup_mode="unified"' >> /etc/rc.conf
   fi
 fi
+# Contrôleurs activés à chaque démarrage, au niveau boot : avant nginx, PHP-FPM et les services des sites.
+rc-update add kouziaphp-cgroups boot >/dev/null 2>&1 || true
 sh "${KP_LIB_DIR}/cgroups.sh" || warn "Limites par site indisponibles pour l'instant : voir le détail ci-dessus (docs/cadrage.md, section 11.2)."
 
 title "Tunnel Cloudflare"

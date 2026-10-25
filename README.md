@@ -628,6 +628,8 @@ kouziaphpctl status
 
 `cgroups` dit si les limites CPU, mémoire et processus **par site** fonctionnent dans ce CT : il lance un service d'essai borné, vérifie que les limites sont posées, puis qu'elles agissent vraiment (un processus qui dépasse la mémoire est arrêté, un trop-plein de processus est refusé). Si ce n'est pas le cas, les limites de PHP et celles du CT restent en place, et la suite se décide avec ce résultat.
 
+Dans un CT LXC, la racine des groupes de contrôle du CT n'active ses contrôleurs pour les services que si aucun processus n'y vit. Le service `kouziaphp-cgroups` (niveau boot, posé par `install`) range ces processus dans `kouziaphp.init` puis active `memory`, `cpu` et `pids` à chaque démarrage ; `cgroups` fait de même avant son essai. Aucun réglage Proxmox n'est nécessaire.
+
 ### 11.7 Au quotidien
 
 | Commande (dans le CT) | Rôle |

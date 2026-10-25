@@ -74,6 +74,14 @@ describe("scripts des CT Alpine : dossiers de destination", () => {
     });
     expect(missing).toEqual([]);
   });
+
+  it("CT PHP : chaque service OpenRC du dépôt est copié et posé par install.sh", () => {
+    const install = readFileSync(join(ROOT, "php-ct/install.sh"), "utf8");
+    const loops = [...install.matchAll(/^\s*for _f in ([\w -]+); do\n\s*install [^\n]*\/openrc\/\$\{_f\}/gm)].map((m) => m[1]!.split(" ").sort());
+    const services = readdirSync(join(ROOT, "php-ct/openrc")).sort();
+    expect(loops).toEqual([services, services]);
+    expect(install).toMatch(/rc-update add kouziaphp-cgroups boot/);
+  });
 });
 
 // Sous set -e, une fonction dont la dernière commande est « [ test ] && action » renvoie 1 quand le test est
