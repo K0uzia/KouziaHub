@@ -3,6 +3,8 @@
 # pare-feu du CT n'est pas touché). Règle écrite par kouziaphpctl : /etc/kouziaphp/nftables.nft
 
 description="Sites PHP : sortie réseau des comptes des sites filtrée"
+extra_started_commands="reload"
+description_reload="Recharger la règle sans retirer la table (remplacement atomique)"
 
 : "${KP_NFT_FILE:=/etc/kouziaphp/nftables.nft}"
 
@@ -19,6 +21,13 @@ start() {
   fi
   nft -f "$KP_NFT_FILE" && nft list table inet kouziaphp | grep -q "jump sites"
   eend $? "Pose refusée (CT non privilégié ? la règle Proxmox reste la protection principale)"
+}
+
+# Le fichier remplace la table en une seule transaction (table, delete table, table) : aucun instant sans règle.
+reload() {
+  ebegin "Rechargement du pare-feu des sites PHP"
+  nft -f "$KP_NFT_FILE" && nft list table inet kouziaphp | grep -q "jump sites"
+  eend $?
 }
 
 stop() {

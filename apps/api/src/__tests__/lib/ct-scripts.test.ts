@@ -104,7 +104,7 @@ describe("CT PHP : pare-feu", () => {
   it("la table n'est chargée que par le service kouziaphp-firewall", () => {
     const direct = all.filter((f) => !f.endsWith("kouziaphp-firewall") && /\bnft -f\b/.test(text(f)));
     expect(direct).toEqual([]);
-    expect(text(join(ROOT, "php-ct/firewall.sh"))).toMatch(/rc-update add "\$KP_FIREWALL_SERVICE" default[\s\S]*rc_service "\$KP_FIREWALL_SERVICE" restart/);
+    expect(text(join(ROOT, "php-ct/firewall.sh"))).toMatch(/rc-update add "\$KP_FIREWALL_SERVICE" default[\s\S]*rc_service "\$KP_FIREWALL_SERVICE" "\$_action"/);
   });
 
   it("ni flush ruleset ni service nftables d'Alpine", () => {
