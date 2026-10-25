@@ -792,6 +792,7 @@ install_root_scripts() {
   if [ -d "$KH_LIB_DIR" ]; then mv "$KH_LIB_DIR" "${KH_LIB_DIR}.old"; fi
   mv "$_tmp" "$KH_LIB_DIR"
   rm -rf "${KH_LIB_DIR}.old"
+  mkdir -p /usr/local/bin
   ln -sfn "${KH_LIB_DIR}/hubctl" /usr/local/bin/hubctl
 }
 
@@ -811,6 +812,7 @@ install_openrc_scripts() {
 }
 
 install_system_conf() {
+  mkdir -p /etc/logrotate.d /etc/periodic/daily
   install -o root -g root -m 644 "${KH_LIB_DIR}/conf/logrotate.kouziahub" /etc/logrotate.d/kouziahub
   cat > /etc/periodic/daily/kouziahub-backup <<EOF
 #!/bin/sh

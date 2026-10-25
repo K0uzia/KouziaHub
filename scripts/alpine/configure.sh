@@ -61,6 +61,7 @@ install_cloudflared() {
   _tmp="$(mktemp)"
   curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${_arch}" -o "$_tmp" \
     || { rm -f "$_tmp"; die "Téléchargement de cloudflared impossible (réseau)."; }
+  mkdir -p "$(dirname "$KH_CLOUDFLARED_BIN")"
   install -o root -g root -m 755 "$_tmp" "$KH_CLOUDFLARED_BIN"
   rm -f "$_tmp"
   ok "cloudflared installé : $("$KH_CLOUDFLARED_BIN" --version 2>/dev/null | head -n 1)"

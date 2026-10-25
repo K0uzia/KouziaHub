@@ -148,6 +148,8 @@ chmod 755 "${KP_ETC_DIR}/fpm"
 if [ -s "${KP_ETC_DIR}/agent.secret" ]; then
   rc_service kouziaphp-agent restart >/dev/null 2>&1 || warn "L'agent n'a pas redémarré : kouziaphpctl status"
 fi
+# Absent de l'Alpine minimale (recette du 25/10/2026).
+mkdir -p /usr/local/sbin
 ln -sf "${KP_LIB_DIR}/kouziaphpctl" /usr/local/sbin/kouziaphpctl
 ok "kouziaphpctl installé (scripts copiés dans ${KP_LIB_DIR}, à root, lecture seule pour les autres)."
 
