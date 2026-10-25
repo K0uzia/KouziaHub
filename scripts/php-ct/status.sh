@@ -18,7 +18,14 @@ svc_state() {
 }
 
 title "CT des sites PHP"
-echo "  Alpine                 : $(cat /etc/alpine-release 2>/dev/null || echo '?') (${KP_ALPINE_MIN} ou plus attendu)"
+_alpine="$(cat /etc/alpine-release 2>/dev/null || true)"
+if [ -z "$_alpine" ]; then
+  echo "  Alpine                 : ${C_RED}illisible${C_RESET} (/etc/alpine-release absent)"
+elif alpine_at_least "$KP_ALPINE_MIN"; then
+  echo "  Alpine                 : ${_alpine} (minimum ${KP_ALPINE_MIN} : OK)"
+else
+  echo "  Alpine                 : ${C_RED}${_alpine}${C_RESET} (minimum ${KP_ALPINE_MIN} : trop ancienne)"
+fi
 _versions="$(php_versions_installed)"
 echo "  PHP installés          : ${_versions:-aucun} (défaut des sites : ${KP_PHP_DEFAULT})"
 echo "  Sites                  : $(find "$KP_SITES_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ') (lot P3)"

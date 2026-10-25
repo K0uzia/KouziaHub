@@ -126,10 +126,11 @@ apk_available() {
   apk search -x "$1" 2>/dev/null | grep -q .
 }
 
-# Versions de PHP installées, « 82 83 84 » (paquets phpXY-fpm présents).
+# Versions de PHP installées, « 82 83 84 » (paquets phpXY-fpm présents). Code 0 toujours : appelée dans
+# « $(...) » sous set -e, un dernier test faux arrêterait le script (status.sh, recette du 25/10/2026).
 php_versions_installed() {
   for _v in 82 83 84 85; do
-    [ -x "/usr/sbin/php-fpm${_v}" ] && printf '%s ' "$_v"
+    if [ -x "/usr/sbin/php-fpm${_v}" ]; then printf '%s ' "$_v"; fi
   done
 }
 

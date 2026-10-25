@@ -1,4 +1,6 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, posix } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -71,5 +73,47 @@ describe("scripts des CT Alpine : dossiers de destination", () => {
         .map((d) => `${f.slice(ROOT.length + 1).replace(/\\/g, "/")}:${d.line} ${d.dest}`);
     });
     expect(missing).toEqual([]);
+  });
+});
+
+// Sous set -e, une fonction dont la dernière commande est « [ test ] && action » renvoie 1 quand le test est
+// faux : appelée dans « x="$(f)" », elle arrête le script (status.sh coupé après la ligne Alpine, 25/10/2026).
+describe("scripts des CT Alpine : fonctions sûres sous set -e", () => {
+  const files = [...shellFiles(join(ROOT, "php-ct")), ...shellFiles(join(ROOT, "alpine"))];
+
+  /** Dernière commande de chaque fonction (y compris celle de sa dernière boucle). */
+  function lastCommands(text: string): Array<{ fn: string; line: number; cmd: string }> {
+    const out: Array<{ fn: string; line: number; cmd: string }> = [];
+    const lines = text.split("\n");
+    let fn: string | null = null;
+    lines.forEach((raw, i) => {
+      const open = /^([a-z_]\w*)\(\) \{\s*$/.exec(raw);
+      if (open) fn = open[1]!;
+      else if (fn && raw === "}") {
+        const body = lines.slice(0, i).map((l, n) => ({ l: l.trim(), n })).filter((x) => x.l && !x.l.startsWith("#")).reverse();
+        const [last, before] = body;
+        const target = last?.l === "done" && before ? before : last;
+        if (target) out.push({ fn, line: target.n + 1, cmd: target.l });
+        fn = null;
+      }
+    });
+    return out;
+  }
+
+  it("aucune fonction ne finit sur « [ test ] && action »", () => {
+    const risky = files.flatMap((f) =>
+      lastCommands(readFileSync(f, "utf8"))
+        .filter((c) => /^(\[|test )[^|]*&& /.test(c.cmd))
+        .map((c) => `${f.slice(ROOT.length + 1).replace(/\\/g, "/")}:${c.line} ${c.fn}`),
+    );
+    expect(risky).toEqual([]);
+  });
+
+  const shAvailable = spawnSync("sh", ["-c", "exit 0"]).status === 0;
+  it.runIf(shAvailable)("status.sh va jusqu'au bout sans Alpine ni PHP (binaires absents)", () => {
+    const run = spawnSync("sh", [join(ROOT, "php-ct/status.sh")], { encoding: "utf8", env: { ...process.env, KP_SITES_DIR: mkdtempSync(join(tmpdir(), "kouzia-ct-")) } });
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.stdout).toContain("PHP installés          : aucun");
+    expect(run.stdout).toContain("== Sécurité ==");
   });
 });
