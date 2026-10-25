@@ -1,9 +1,11 @@
 // Garde réseau de la surveillance (SSRF) et lancement de Chromium pour la mesure de vitesse.
 // Aucun DNS ni réseau extérieur : résolveurs et connecteurs injectés, serveurs sur 127.0.0.1.
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { createServer, type IncomingHttpHeaders } from "node:http";
 import { tmpdir } from "node:os";
+import { PassThrough } from "node:stream";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -19,7 +21,7 @@ import {
   type PinnedConnect,
   type ResolvedAddress,
 } from "@/lib/monitor/checks.js";
-import { portLaunchArgs, startForCdp, type SpawnBrowser } from "@/lib/chromium.js";
+import { portLaunchArgs, startChromium, startForCdp, stopChild, type Browser, type SpawnBrowser } from "@/lib/chromium.js";
 import { measureSpeed, speedLauncher, speedRequestAllowed, speedStatus } from "@/lib/monitor/speed.js";
 import { resolveChromium } from "@/lib/thumbnails.js";
 
@@ -219,6 +221,44 @@ describe("mesure de vitesse : lancement", () => {
     const outside = path.join(dir, "faux-lanceur-dehors.cjs");
     await writeFile(outside, "process.stderr.write('DevTools listening on ws://0.0.0.0:45678/devtools/browser/abc\\n'); setTimeout(() => {}, 60000);\n");
     await expect(startForCdp("x", ((_e: string, a: string[]) => spawn(process.execPath, [outside, ...a], { stdio: ["ignore", "ignore", "pipe"] })) as SpawnBrowser, 10_000)).rejects.toThrow(/hors de 127\.0\.0\.1/);
+  });
+
+  it("Chromium sous un autre compte (doas) : kill en EPERM ne fait pas échouer la fermeture", async () => {
+    // Comme Node : kill() vers un processus d'un autre compte émet « error » (EPERM) ; sans écouteur, c'est levé.
+    const child = Object.assign(new EventEmitter(), {
+      exitCode: null,
+      signalCode: null,
+      stderr: new PassThrough(),
+      kills: 0,
+      kill(this: EventEmitter & { kills: number }) {
+        this.kills++;
+        this.emit("error", Object.assign(new Error("kill EPERM"), { code: "EPERM" }));
+        return false;
+      },
+    });
+    const started = await startChromium("/usr/local/lib/kouziahub/chromium-launch", {
+      timeoutMs: 5_000,
+      launch: async () => {
+        throw new Error("pipe fermé par doas");
+      },
+      spawnBrowser: () => {
+        setImmediate(() => child.stderr.write("DevTools listening on ws://127.0.0.1:45678/devtools/browser/abc\n"));
+        return child as unknown as ChildProcess;
+      },
+      connect: async () => ({ newBrowserCDPSession: async () => null, close: async () => undefined }) as unknown as Browser,
+    });
+    expect(started.via).toBe("port");
+    const close = started.close();
+    child.emit("exit", null, null);
+    Object.assign(child, { exitCode: 0 });
+    await expect(close).resolves.toBeUndefined();
+    // Processus déjà sorti : plus de kill du tout.
+    expect(child.kills).toBe(0);
+
+    // Toujours là après Browser.close : kill tenté une fois, EPERM avalé.
+    const stuck = Object.assign(new EventEmitter(), { exitCode: null, signalCode: null, kills: 0, kill: child.kill });
+    expect(() => stopChild(stuck as unknown as ChildProcess)).not.toThrow();
+    expect(stuck.kills).toBe(1);
   });
 
   it("requêtes de la page : schéma http(s), adresse résolue publique", async () => {

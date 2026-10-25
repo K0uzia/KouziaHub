@@ -81,6 +81,32 @@ export const portLaunchArgs = (extra: string[]): string[] => [
 ];
 
 /**
+ * Arrêt du lanceur sans jamais lever. Sous doas, Chromium tourne sous le compte kouziahub-chromium : kill renvoie
+ * EPERM, que Node émet en événement « error » (levé faute d'écouteur). Chromium se ferme alors par CDP.
+ */
+export function stopChild(child: ChildProcess): void {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  child.on("error", () => undefined);
+  try {
+    child.kill();
+  } catch {
+    // Autre compte : rien à faire de plus ici.
+  }
+}
+
+/** Attend la fin du processus, au plus ms millisecondes. */
+function exited(child: ChildProcess, ms: number): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    child.once("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
+/**
  * Chromium démarré par son lanceur avec --remote-debugging-port=0 : l'adresse CDP est lue sur sa sortie
  * d'erreur (« DevTools listening on ws://... »), refusée si elle n'est pas en 127.0.0.1.
  */
@@ -93,9 +119,12 @@ export function startForCdp(
   return new Promise((resolve, reject) => {
     const child = spawnBrowser(executablePath, portLaunchArgs(extra));
     let stderr = "";
+    let settled = false;
     const fail = (reason: string) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
-      child.kill();
+      stopChild(child);
       reject(new Error(reason));
     };
     const timer = setTimeout(() => fail("adresse DevTools non reçue à temps"), timeoutMs);
@@ -105,6 +134,8 @@ export function startForCdp(
       const m = /DevTools listening on (ws:\/\/[^\s]+)/.exec(stderr);
       if (!m) return;
       if (new URL(m[1]!).hostname !== "127.0.0.1") return fail("adresse DevTools hors de 127.0.0.1");
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       resolve({ wsUrl: m[1]!, child });
     });
@@ -156,11 +187,12 @@ export async function startChromium(executablePath: string, options: StartOption
           const cdp = await browser.newBrowserCDPSession().catch(() => null);
           await cdp?.send("Browser.close").catch(() => undefined);
           await browser.close().catch(() => undefined);
-          proc.kill();
+          await exited(proc, 5_000);
+          stopChild(proc);
         },
       };
     } catch (portErr) {
-      child?.kill();
+      if (child) stopChild(child);
       throw new ChromiumStartError(`Chromium ne démarre pas avec son bac à sable (pipe : ${firstLine(pipeErr)} ; port : ${firstLine(portErr)})`);
     }
   }
