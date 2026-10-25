@@ -83,8 +83,11 @@ _tmp="$(mktemp "${KP_NFT_FILE}.XXXXXX")"
 chmod 600 "$_tmp"
 mv -f "$_tmp" "$KP_NFT_FILE"
 
-if nft -f "$KP_NFT_FILE" 2>/dev/null && nft list table inet kouziaphp 2>/dev/null | grep -q "jump sites"; then
-  rc-update add "$KP_FIREWALL_SERVICE" default >/dev/null 2>&1 || true
+# Chargée par le service OpenRC kouziaphp-firewall, pas par « nft -f » direct : OpenRC le sait démarré (état lu par
+# l'agent et status) et le relance au démarrage du CT. Pas le service « nftables » d'Alpine : son
+# /etc/nftables.nft commence par « flush ruleset » et refuse toute entrée (le port de l'agent avec).
+rc-update add "$KP_FIREWALL_SERVICE" default >/dev/null 2>&1 || true
+if rc_service "$KP_FIREWALL_SERVICE" restart >/dev/null 2>&1 && nft list table inet kouziaphp 2>/dev/null | grep -q "jump sites"; then
   ok "Pare-feu du CT posé (table inet kouziaphp) : comptes des sites limités au DNS, à HTTPS et au capteur d'e-mails."
   exit 0
 fi

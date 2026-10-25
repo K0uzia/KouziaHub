@@ -59,7 +59,10 @@ function readText(path) {
 
 async function serviceState(name) {
   if (!existsSync(`/etc/init.d/${name}`)) return "absent";
-  return (await run("/sbin/rc-service", [name, "status"])) ? "running" : "stopped";
+  if (!(await run("/sbin/rc-service", [name, "status"]))) return "stopped";
+  // Pare-feu : le service démarré ne suffit pas, sa table doit être chargée.
+  if (name === "kouziaphp-firewall" && !(await run("/usr/sbin/nft", ["list", "table", "inet", "kouziaphp"]))) return "stopped";
+  return "running";
 }
 
 export const systemProbes = {

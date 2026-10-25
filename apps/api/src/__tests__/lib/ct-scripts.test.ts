@@ -95,6 +95,24 @@ describe("README : commandes pct exec", () => {
   });
 });
 
+// Pare-feu du CT PHP : chargé par son service OpenRC (état connu d'OpenRC, relancé au démarrage), jamais par le
+// service « nftables » d'Alpine dont le fichier par défaut vide tout (flush ruleset) et refuse toute entrée.
+describe("CT PHP : pare-feu", () => {
+  const all = [...shellFiles(join(ROOT, "php-ct")), join(ROOT, "php-ct/openrc/kouziaphp-firewall")];
+  const text = (f: string) => readFileSync(f, "utf8").split("\n").filter((l) => !l.trim().startsWith("#")).join("\n");
+
+  it("la table n'est chargée que par le service kouziaphp-firewall", () => {
+    const direct = all.filter((f) => !f.endsWith("kouziaphp-firewall") && /\bnft -f\b/.test(text(f)));
+    expect(direct).toEqual([]);
+    expect(text(join(ROOT, "php-ct/firewall.sh"))).toMatch(/rc-update add "\$KP_FIREWALL_SERVICE" default[\s\S]*rc_service "\$KP_FIREWALL_SERVICE" restart/);
+  });
+
+  it("ni flush ruleset ni service nftables d'Alpine", () => {
+    const risky = all.filter((f) => /flush ruleset|rc-update add nftables|rc-service nftables/.test(text(f)));
+    expect(risky).toEqual([]);
+  });
+});
+
 describe("scripts des CT Alpine : fonctions sûres sous set -e", () => {
   const files = [...shellFiles(join(ROOT, "php-ct")), ...shellFiles(join(ROOT, "alpine"))];
 

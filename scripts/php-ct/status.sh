@@ -51,8 +51,12 @@ if [ ! -s "$KP_TUNNEL_TOKEN_FILE" ]; then
 fi
 
 title "Sécurité"
-if command -v nft >/dev/null 2>&1 && nft list table inet kouziaphp 2>/dev/null | grep -q "jump sites"; then
-  echo "  Pare-feu du CT         : posé (comptes des sites : DNS, HTTPS, capteur d'e-mails)"
+_table=0
+if command -v nft >/dev/null 2>&1 && nft list table inet kouziaphp 2>/dev/null | grep -q "jump sites"; then _table=1; fi
+if [ "$_table" -eq 1 ] && service_running "$KP_FIREWALL_SERVICE" && rc-update show default 2>/dev/null | grep -q "$KP_FIREWALL_SERVICE"; then
+  echo "  Pare-feu du CT         : posé (comptes des sites : DNS, HTTPS, capteur d'e-mails), relancé au démarrage"
+elif [ "$_table" -eq 1 ]; then
+  echo "  Pare-feu du CT         : ${C_YELLOW}règles chargées, service ${KP_FIREWALL_SERVICE} arrêté ou hors démarrage${C_RESET} (perdues au redémarrage : kouziaphpctl firewall)"
 else
   echo "  Pare-feu du CT         : ${C_YELLOW}absent${C_RESET} (kouziaphpctl firewall ; la règle Proxmox reste la première protection)"
 fi
