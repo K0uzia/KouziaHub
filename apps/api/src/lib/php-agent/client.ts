@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { rm } from "node:fs/promises";
+import { rm, stat } from "node:fs/promises";
+import { failureText, fetchSend, httpSend, type Send } from "@/lib/php-agent/transport.js";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
@@ -35,6 +36,10 @@ const OPERATION_TIMEOUT_MS = 60_000;
 const CHECK_TIMEOUT_MS = 30_000;
 // Lot P4 : dump et restauration d'une base (30 min côté agent), script du projet (120 s côté agent).
 const DUMP_TIMEOUT_MS = 31 * 60_000;
+// Envois en flux : version (archive lourde, puis contrôle et extraction sur le CT), mise à jour du CT (install.sh,
+// 20 min au plus côté agent).
+const VERSION_TIMEOUT_MS = 30 * 60_000;
+const CT_UPDATE_TIMEOUT_MS = 25 * 60_000;
 const SCRIPT_TIMEOUT_MS = 150_000;
 
 const sha256Hex = (body: string) => createHash("sha256").update(body).digest("hex");
@@ -90,7 +95,7 @@ export type PhpAgentOptions = {
 export class PhpAgentClient {
   readonly #secret: string;
   private readonly base: string;
-  private readonly fetchImpl: typeof fetch;
+  private readonly send: Send;
   private readonly timeoutMs: number;
   private readonly now: () => number;
 
@@ -98,7 +103,8 @@ export class PhpAgentClient {
     if (options.secret.length < 32) throw new Error("PHP_AGENT_SECRET trop court (32 caractères au moins).");
     this.base = options.baseUrl.replace(/\/+$/, "");
     this.#secret = options.secret;
-    this.fetchImpl = options.fetch ?? fetch;
+    // Par défaut node:http (sans délai caché) ; un fetch injecté sert aux tests de réponses forgées.
+    this.send = options.fetch ? fetchSend(options.fetch) : httpSend;
     this.timeoutMs = options.timeoutMs ?? 5000;
     this.now = options.now ?? Date.now;
   }
@@ -115,32 +121,27 @@ export class PhpAgentClient {
     const timestamp = String(Math.floor(this.now() / 1000));
     const nonce = randomBytes(16).toString("hex");
     let res: Response;
+    const signal = AbortSignal.timeout(timeoutMs);
     try {
-      res = await this.fetchImpl(this.base + path, {
+      res = await this.send(this.base + path, {
         method,
         headers: {
           accept: "application/json",
           ...(body ? { "content-type": "application/json" } : {}),
-          ...(stream ? { "content-type": "application/gzip", "x-kouzia-hub-content-sha256": stream.sha256 } : {}),
+          // Taille annoncée : l'agent refuse (413) une archive trop lourde avant de la recevoir.
+          ...(stream ? { "content-type": "application/gzip", "content-length": String((await stat(stream.file)).size), "x-kouzia-hub-content-sha256": stream.sha256 } : {}),
           "x-kouzia-hub-timestamp": timestamp,
           "x-kouzia-hub-nonce": nonce,
           "x-kouzia-hub-signature": stream
             ? signAgentRequestHash(this.#secret, timestamp, nonce, method, path, stream.sha256)
             : signAgentRequest(this.#secret, timestamp, nonce, method, path, body),
         },
-        ...(stream
-          ? { body: Readable.toWeb(createReadStream(stream.file)) as unknown as RequestInit["body"], duplex: "half" }
-          : body
-            ? { body }
-            : {}),
-        signal: AbortSignal.timeout(stream ? 15 * 60_000 : timeoutMs),
-      } as RequestInit);
+        body: stream ? createReadStream(stream.file) : body || undefined,
+        signal,
+      });
     } catch (err) {
-      // Délai dépassé : l'agent a reçu la demande mais n'a pas fini à temps ; ce n'est pas « injoignable ».
-      if (err instanceof Error && err.name === "TimeoutError") {
-        throw new PhpAgentUnavailableError(`Serveur des sites PHP : pas de réponse en ${Math.round((stream ? 15 * 60_000 : timeoutMs) / 1000)} s (${method} ${path}).`);
-      }
-      throw new PhpAgentUnavailableError();
+      // Délai dépassé, refus, réseau ou coupure : chaque cause dite telle quelle (pas tout en « injoignable »).
+      throw new PhpAgentUnavailableError(failureText(err, signal.aborted, timeoutMs, `${method} ${path}`));
     }
     const text = await res.text().catch(() => "");
     if (res.status === 401) throw new PhpAgentUnavailableError("Serveur des sites PHP : signature refusée (secret différent des deux côtés, ou horloges décalées).");
@@ -182,7 +183,7 @@ export class PhpAgentClient {
 
   /** Envoie l'archive d'une version (flux, empreinte signée). */
   async sendVersion(slug: string, number: number, archive: { file: string; sha256: string }): Promise<void> {
-    await this.request("PUT", `/v1/sites/${slug}/versions/${number}`, undefined, archive);
+    await this.request("PUT", `/v1/sites/${slug}/versions/${number}`, undefined, archive, VERSION_TIMEOUT_MS);
   }
 
   async publish(slug: string, number: number): Promise<void> {
@@ -210,7 +211,7 @@ export class PhpAgentClient {
   async updateScripts(digest: string, archive: { file: string; sha256: string }): Promise<{ ok: boolean; log: string }> {
     const parsed = z
       .object({ ok: z.boolean(), digest: z.string(), log: z.string().max(300_000) })
-      .safeParse(await this.request("PUT", `/v1/ct/scripts/${digest}`, undefined, archive));
+      .safeParse(await this.request("PUT", `/v1/ct/scripts/${digest}`, undefined, archive, CT_UPDATE_TIMEOUT_MS));
     if (!parsed.success || parsed.data.digest !== digest) throw new PhpAgentUnavailableError("Serveur des sites PHP : réponse de la mise à jour illisible.");
     return { ok: parsed.data.ok, log: parsed.data.log };
   }
@@ -236,7 +237,7 @@ export class PhpAgentClient {
 
   /** Import d'un fichier SQL (.sql, ou .sql.gz si gz), envoyé en flux. */
   async importDb(slug: string, file: { file: string; sha256: string }, gz: boolean): Promise<PhpDbState> {
-    return parseDbState(await this.request("PUT", `/v1/sites/${slug}/base/import/${gz ? "sqlgz" : "sql"}`, undefined, file));
+    return parseDbState(await this.request("PUT", `/v1/sites/${slug}/base/import/${gz ? "sqlgz" : "sql"}`, undefined, file, DUMP_TIMEOUT_MS));
   }
 
   /** Dump avant publication de la version n (rien sans base). */
@@ -266,19 +267,20 @@ export class PhpAgentClient {
     const timestamp = String(Math.floor(this.now() / 1000));
     const nonce = randomBytes(16).toString("hex");
     let res: Response;
+    const signal = AbortSignal.timeout(DUMP_TIMEOUT_MS);
     try {
-      res = await this.fetchImpl(this.base + path, {
+      res = await this.send(this.base + path, {
         method: "GET",
         headers: {
           "x-kouzia-hub-timestamp": timestamp,
           "x-kouzia-hub-nonce": nonce,
           "x-kouzia-hub-signature": signAgentRequest(this.#secret, timestamp, nonce, "GET", path, ""),
         },
-        signal: AbortSignal.timeout(DUMP_TIMEOUT_MS),
+        body: undefined,
+        signal,
       });
     } catch (err) {
-      if (err instanceof Error && err.name === "TimeoutError") throw new PhpAgentUnavailableError(`Serveur des sites PHP : pas de réponse en ${DUMP_TIMEOUT_MS / 1000} s (GET ${path}).`);
-      throw new PhpAgentUnavailableError();
+      throw new PhpAgentUnavailableError(failureText(err, signal.aborted, DUMP_TIMEOUT_MS, `GET ${path}`));
     }
     if (res.status !== 200 || !res.body) {
       // Refus : réponse JSON signée ordinaire.

@@ -283,6 +283,13 @@ export function createAgent({ secret, allowedIps, probes = systemProbes, sites =
         req.resume();
         return;
       }
+      // Taille annoncée au-delà du plafond : refus clair AVANT de recevoir (sinon la connexion serait coupée).
+      const announced = Number(req.headers["content-length"] ?? 0);
+      if (announced > MAX_UPLOAD_BYTES) {
+        reply(413, { error: `Envoi trop lourd : ${Math.round(announced / 1024 / 1024)} Mio, ${MAX_UPLOAD_BYTES / 1024 / 1024} Mio au plus.` });
+        req.resume();
+        return;
+      }
       if ((route.site && !sites) || (route.ct && !ct)) {
         execute({ probes, sites, ct, json: () => ({}) });
         req.resume();
