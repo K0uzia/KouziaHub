@@ -93,6 +93,13 @@ describe("README : commandes pct exec", () => {
       .map(({ l, n }) => `README.md:${n} ${l.trim()}`);
     expect(bare).toEqual([]);
   });
+
+  it("routes des tunnels vers 127.0.0.1, jamais localhost (résolu en ::1, où nginx n'écoute pas : 502)", () => {
+    const readme = readFileSync(join(ROOT, "../README.md"), "utf8");
+    const routes = readme.split("\n").filter((l) => /(URL|route|vers) `localhost:\d+`/.test(l));
+    expect(routes).toEqual([]);
+    expect(readme).toContain("URL `127.0.0.1:8080`");
+  });
 });
 
 // Pare-feu du CT PHP : chargé par son service OpenRC (état connu d'OpenRC, relancé au démarrage), jamais par le

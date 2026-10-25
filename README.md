@@ -588,7 +588,7 @@ Un tunnel à lui, distinct de ceux du hub et de l'ERP.
 
 1. Cloudflare > **Zero Trust > Réseaux > Tunnels > Créer un tunnel** > **Cloudflared**, nom `kouziaphp`.
 2. À l'étape « Installer et lancer un connecteur », copier la commande affichée (elle contient le jeton). Ne pas la lancer ailleurs : elle se colle à l'étape 11.5.
-3. Étape « Routage » (nom d'hôte public / route publiée) : sous-domaine `*`, domaine `kouzia.com`, service **HTTP**, URL `localhost:8080`. Enregistrer.
+3. Étape « Routage » (nom d'hôte public / route publiée) : sous-domaine `*`, domaine `kouzia.com`, service **HTTP**, URL `127.0.0.1:8080` (pas `localhost`, qui peut se résoudre en `::1`, où nginx n'écoute pas : erreur 502). Enregistrer.
 4. **Cloudflare > kouzia.com > DNS > Enregistrements** : si un enregistrement `*` (CNAME vers `...cfargotunnel.com`) a été créé à l'étape 3, **le supprimer**. Sinon toutes les adresses inconnues en `.kouzia.com` arriveraient sur ce CT ; le hub créera lui-même un enregistrement par site PHP (lot P3).
 
 Si le tableau de bord refuse `*` à l'étape 3, ne rien inventer : me le dire, le lot P3 posera chaque nom autrement.
@@ -688,7 +688,7 @@ But : vérifier en réel ce qui n'a tourné qu'en simulation (scripts Alpine, ag
 | 1 | Shell du nœud : variables de 11.1 | rien à l'écran |
 | 2 | Créer le CT (11.2) | `pct start` sans message ; `passwd` demande deux fois le mot de passe |
 | 3 | Pare-feu (11.3), puis ses trois vérifications | « Règles acceptées » ; puis `OK : réseau local fermé`, `OK : SMTP fermé`, `HTTP/1.1 401 Unauthorized` |
-| 4 | Tunnel (11.4) | tunnel « kouziaphp » créé ; route `*.kouzia.com` vers `localhost:8080` ; enregistrement DNS `*` supprimé s'il est apparu |
+| 4 | Tunnel (11.4) | tunnel « kouziaphp » créé ; route `*.kouzia.com` vers `127.0.0.1:8080` ; enregistrement DNS `*` supprimé s'il est apparu |
 | 5 | Installer (11.5) | se termine par l'état du CT : nginx et MariaDB « en marche », PHP « 83 », pare-feu du CT « posé » (ou « absent » : me le dire) |
 | 6 | Dans le CT : `kouziaphpctl tunnel`, puis `kouziaphpctl upgrade` | « Tunnel démarré » ; dans Cloudflare, le tunnel passe « Sain » ; puis « Système déjà à jour » ou la liste des paquets mis à jour |
 | 7 | Dans le CT : `kouziaphpctl cgroups` | une suite de lignes OK, ou ÉCHEC avec la raison : **me renvoyer toute la sortie**, quel que soit le résultat |
