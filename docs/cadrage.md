@@ -573,11 +573,11 @@ CT « kouziahub » (hub) ── réseau du Proxmox, port de l'agent ──┘
   - un dossier `/srv/sites/<slug>/` (versions, `shared/`, `tmp/`, sessions, journaux), illisible des autres sites ;
   - un pool PHP-FPM à lui, sous ce compte, avec `open_basedir` limité à son dossier, `sys_temp_dir` et `session.save_path` à lui, `allow_url_include` coupé et `expose_php` coupé ;
   - `disable_functions` : `exec`, `passthru`, `shell_exec`, `system`, `proc_open`, `popen`, `pcntl_exec`, `dl`. `putenv` reste permis, car des bibliothèques de `.env` s'en servent.
-- **Limites par site** :
-  - **mémoire PHP** : `memory_limit` 256 Mo par requête ;
+- **Limites par site** (réglables par site au lot P4, en `php_admin_value` : ni `ini_set` ni le `.user.ini` du projet ne peuvent les changer) :
+  - **mémoire PHP** : `memory_limit` de 64 à 1024 Mo par requête, 256 par défaut (MyTakumi : 1024, mesuré sur la conversion de ses images) ;
   - **nombre de processus** : 4 au plus (`pm = ondemand`), arrêtés à l'inactivité ;
-  - **durée d'une requête** : 30 s au plus (`request_terminate_timeout`) ;
-  - **envois de fichiers** : taille plafonnée.
+  - **durée d'une requête** : de 5 à 120 s, 30 par défaut (`max_execution_time`, `request_terminate_timeout` et le délai de nginx suivent) ;
+  - **envois de fichiers** : de 1 à 128 Mo, 32 par défaut ; requête entière le double, 256 Mo au plus (nginx et PHP).
   - **CPU et mémoire au niveau du système** : un service OpenRC par site (un PHP-FPM par site plutôt qu'un seul maître à plusieurs pools) permet un groupe de contrôle par site (`rc_cgroup_settings`). Cela suppose que le CT non privilégié laisse écrire ses cgroups : **à vérifier sur le Proxmox au lot 1**. À défaut, on reste aux limites PHP ci-dessus et aux limites globales du CT.
   - **Disque** : pas de quota système fiable dans un CT. Le hub plafonne la taille à l'envoi et mesure chaque nuit les fichiers et la base de chaque site, avec une alerte au-delà d'un seuil. Le disque du CT reste la limite dure.
 
@@ -597,9 +597,9 @@ CT « kouziahub » (hub) ── réseau du Proxmox, port de l'agent ──┘
   - Les extensions sont installées à la demande, sur une liste connue : `pdo_mysql`, `mbstring`, `intl`, `gd`, `zip`, `opcache`...
 - **MariaDB** (paquets `mariadb`, `mariadb-client`), dans le même CT, écoute sur le socket local seulement.
   - Une base et un compte par site, droits limités à sa base, nombre de connexions plafonné.
-  - Le mot de passe est généré par l'agent, transmis au hub et chiffré au repos comme les autres secrets, puis écrit dans le `.env` du site.
+  - Le mot de passe est généré par l'agent et reste sur le CT (`/etc/kouziaphp/sites/<slug>.db.cnf`, root, 600), passé aux commandes par ce fichier, jamais en argument ; l'agent l'écrit dans le `.env` du site. Le hub ne le connaît pas (décision du 25/10/2026) : après la perte du CT, un nouveau compte est créé et la sauvegarde importée.
 - **Sauvegardes** :
-  - un `mariadb-dump` par site chaque nuit, chiffré avec la phrase de passe des sauvegardes du hub, 14 jours gardés ;
+  - un `mariadb-dump` par site chaque nuit, **tiré par le hub** et rangé dans ses données (14 jours gardés), donc chiffré par la sauvegarde du hub : la phrase de passe des sauvegardes ne va jamais sur le CT PHP (décision du 25/10/2026) ;
   - les fichiers des versions sont déjà gardés par le hub ;
   - en plus, la sauvegarde Proxmox du CT entier (Datacenter > Backup).
 
@@ -619,15 +619,17 @@ CT « kouziahub » (hub) ── réseau du Proxmox, port de l'agent ──┘
   - La détection de l'envoi dira alors « Site dynamique : à publier comme site PHP » et proposera de changer le type du site.
   - Composer n'est jamais lancé sur le serveur : Alexandre envoie le projet avec son `vendor/`, construit sur son PC.
   - **Dossiers persistants** déclarés par site (MyTakumi : `data/`, qui contient sa base SQLite de développement, les originaux envoyés, son journal et `app.key`) : gardés dans `shared/` et reliés dans chaque version, jamais écrasés par une publication ni servis par nginx. Le contenu envoyé de ces dossiers sert seulement à les initialiser la première fois.
+  - **Dossiers persistants publics** (lot P4) : dans le dossier public, pour les fichiers que le site écrit et sert (MyTakumi : `public/assets/img/oeuvres/`, images envoyées par son back-office). Gardés comme les autres, servis en statique par un bloc nginx prioritaire, **aucune exécution PHP** dedans ; le contrôle après publication y dépose un `.php` de sonde.
 - **Variables d'environnement** : écran « Variables » par site (clé et valeur, valeurs masquées), chiffrées dans la base du hub.
-  - L'agent écrit `/srv/sites/<slug>/shared/.env` (lisible du seul compte du site), hors du dossier public, jamais publié ni téléchargeable.
-  - `DB_*` est rempli d'office.
+  - L'agent écrit `/srv/sites/<slug>/.env` (root, groupe du site, 440 : le site le lit sans pouvoir le changer) et le relie à la racine de chaque version, là où le projet le cherche, hors du dossier public, jamais téléchargeable. Les variables sont reposées à chaque publication.
+  - `DB_*` est rempli d'office (`DB_DSN` par le socket local, plus `DB_HOST`, `DB_DATABASE`, `DB_USERNAME`... pour d'autres applications) ; `APP_ENV`, `APP_URL` et `MAIL_CATCHER` sont proposées.
   - Garde-fou : une valeur qui ressemble à une clé de paiement réelle (`sk_live_`, `pk_live_`, `rk_live_`...) est refusée (11.6).
 - **Base de données** :
   - « Importer un fichier SQL » (`.sql` ou `.sql.gz`), exécuté avec le compte du site ;
   - « Exporter » (téléchargement d'un dump) ;
   - « Réinitialiser » (vider la base, avec double confirmation).
   - Pas de console SQL libre dans le hub.
+- **Scripts du projet** (lot P4, demandé pour MyTakumi : migrations et premier administrateur) : un `.php` de la version servie, lancé par le PHP du site sous son compte (open_basedir du site, 120 s au plus), avec arguments et entrée standard. L'entrée (un mot de passe) n'est jamais journalisée ni affichée ; le hub journalise le script et son code de sortie.
 - **Journaux** : erreurs PHP, journal lent et erreurs nginx du site, les dernières centaines de lignes, consultables et téléchargeables. Rotation chaque nuit.
 - **Tâche planifiée** : une ligne par site, faite d'un script du projet (chemin relatif, ex. `bin/cron.php`) et d'une fréquence choisie dans une liste (5, 15, 30, 60 minutes, quotidienne).
   - Elle est lancée par crond sous le compte du site, avec durée maximale et verrou anti-chevauchement.
@@ -697,7 +699,7 @@ CT de départ : 2 cœurs, 2 Go de RAM (dont environ 256 Mo pour le tampon de Mar
 | **P1. CT PHP** | Scripts Alpine de `kouziaphpctl` (installation, nginx, PHP, MariaDB, nftables, tunnel, mises à jour, état), vérification des cgroups dans le CT | Créer le CT non privilégié, le pare-feu Proxmox sur son interface, le tunnel « sites PHP » et coller son jeton |
 | **P2. Agent et lien avec le hub** | Agent (opérations fermées, signature, journal), client dans le hub, secret partagé, contrôle de l'état | Poser le secret dans les deux `.env`, ouvrir le port de l'agent au seul hub dans le pare-feu Proxmox |
 | **P3. Site PHP dans le hub** | Type de site « PHP », création, DNS vers le tunnel, on/off, noindex, fichiers (règles d'envoi propres au PHP), dossier public, publication par versions et retour arrière, contrôle anti-fuite après publication | Rien |
-| **P4. Variables et base** | Écran des variables (chiffrées, clés `live` refusées, clés de test acceptées), création de la base, import, export, réinitialisation, dump avant publication, sauvegarde de nuit ; essai d'un paiement Stripe de test de bout en bout (paiement et webhook) | Rien |
+| **P4. Variables et base** | Écran des variables (chiffrées, clés `live` refusées, clés de test acceptées), création de la base, import, export, réinitialisation, dump avant publication, sauvegarde de nuit, scripts du projet, dossiers persistants publics, limites par site. L'essai Stripe de bout en bout est reporté : MyTakumi n'appelle pas encore Stripe (25/10/2026) | Passer le CT à 3 Go de RAM pour MyTakumi |
 | **P5. Exploitation et MyTakumi** | Journaux, tâche planifiée, capteur d'e-mails et écran « E-mails capturés » (rendu isolé, texte, en-têtes, pièces jointes, aperçu téléphone et ordinateur), redirection vers les adresses autorisées et « Envoyer à mon adresse » par le SMTP du hub, relève IMAP activable par site, mesure disque et alertes, mesure des ressources ; mise en ligne de MyTakumi en recette | Créer le compte SMTP d'envoi du hub et le poser dans ses réglages ; envoyer MyTakumi avec son dump SQL et ses variables de test |
 
 ### 11.10 Décisions (24/10/2026)
@@ -707,7 +709,7 @@ CT de départ : 2 cœurs, 2 Go de RAM (dont environ 256 Mo pour le tampon de Mar
 3. **PHP de MyTakumi** : 8.3 (vérifié, voir 11.3).
 4. **Appels sortants de MyTakumi** : Stripe en mode test ; API Suivi de La Poste (HTTPS, clé dans ses réglages) ; relève IMAP de la boîte de la boutique, désactivée en recette sauf demande ; SMTP de l'hébergeur en production, capturé ici ; tâche `scripts/cron.php` toutes les 15 minutes.
 5. **Retour arrière de la base** : dump automatique avant chaque publication.
-6. **Taille du CT** : 2 cœurs, 2 Go de RAM, 30 Go de disque (confirmé par Alexandre).
+6. **Taille du CT** : 2 cœurs, 2 Go de RAM, 30 Go de disque (confirmé par Alexandre). Portée à 3 Go le 25/10/2026 : MyTakumi demande 1024 Mo par requête (plafond du site 1280 Mo) ; la fiche avertit si la somme des plafonds des sites dépasse la mémoire du CT.
 7. **Précisions du 24/10/2026** : paiements Stripe de test complets ; écran des e-mails capturés soigné ; redirection des e-mails vers les adresses autorisées par le SMTP du hub ; relève IMAP activable par site (11.6).
 
 ---

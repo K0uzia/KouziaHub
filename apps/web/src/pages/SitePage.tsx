@@ -19,9 +19,10 @@ import { VersionsTab } from "@/components/sites/VersionsTab";
 import { ThumbnailTab } from "@/components/sites/ThumbnailTab";
 import { SiteSettingsTab } from "@/components/sites/SiteSettingsTab";
 import { ServerTab } from "@/components/sites/ServerTab";
+import { PhpAppTab } from "@/components/sites/PhpAppTab";
 import { SiteMonitorTab } from "@/components/monitor/SiteMonitorTab";
 
-const TAB_IDS = ["fichiers", "versions", "surveillance", "vignette", "serveur", "reglages"] as const;
+const TAB_IDS = ["fichiers", "versions", "application", "surveillance", "vignette", "serveur", "reglages"] as const;
 type TabId = (typeof TAB_IDS)[number];
 /** Relecture de la fiche pendant une opération ou un certificat en attente (2 à 3 s), arrêtée sinon. */
 const POLL_MS = 2500;
@@ -153,6 +154,8 @@ export function SitePage() {
             tabs={[
               { id: "fichiers", label: "Fichiers", count: data.fileCount },
               { id: "versions", label: "Versions", count: versions.data?.total ?? null },
+              // Site PHP : réglages de PHP, variables, base, scripts (lot P4).
+              ...(data.php ? [{ id: "application" as const, label: "Application" }] : []),
               { id: "surveillance", label: "Surveillance" },
               { id: "vignette", label: "Vignette" },
               { id: "serveur", label: "Serveur" },
@@ -180,6 +183,8 @@ export function SitePage() {
                 }}
                 onGoServer={() => setTab("serveur")}
               />
+            ) : tab === "application" && data.php ? (
+              <PhpAppTab site={data} onSite={onSite} />
             ) : tab === "surveillance" ? (
               <SiteMonitorTab site={data} />
             ) : tab === "serveur" ? (

@@ -685,10 +685,10 @@ En cas de « signature refusée » dans la tuile : secret différent des deux c�
    - **Dossiers persistants** : gardés d'une version à l'autre et jamais servis (MyTakumi : `data`, qui contient sa base de développement, les originaux envoyés et sa clé `app.key`). Au premier envoi, leur contenu les initialise ; ensuite, une publication ne les écrase jamais.
 2. La fiche montre les étapes : site posé sur le serveur PHP, page d'attente, adresse (vers le tunnel du CT), en ligne. **Pas d'attente de certificat** (celui de Cloudflare sur `kouzia.com` sert tout de suite).
 3. Envoyer le projet (zip ou explorateur) : pour un site PHP, `src/`, `composer.json` et les `.php` sont gardés ; `.env`, `.git`, `node_modules`, les README restent refusés. Composer ne tourne jamais sur le serveur : envoyer le projet avec son `vendor/` s'il en a un. Il faut une page d'entrée (`index.php` ou `index.html`) dans le dossier public.
-4. **Publier** : la version part en archive au CT, devient la version servie d'un coup, puis le hub vérifie que `/.env`, `/.git/config`, `/composer.json`, `/vendor/` et les dossiers persistants sont bien refusés. **Une fuite coupe le site** et fait échouer la publication, avec les chemins en cause.
+4. **Publier** : la base est sauvegardée (dump), la version part en archive au CT, devient la version servie d'un coup, puis le hub vérifie que `/.env`, `/.git/config`, `/composer.json`, `/composer.lock` et `/vendor/` sont refusés par nginx, et qu'un `.php` déposé dans un dossier persistant public ne s'exécute pas. **Une fuite coupe le site** et fait échouer la publication, avec les chemins en cause.
 5. Couper, rallumer, republier une ancienne version et supprimer marchent comme pour un site statique.
 
-Les variables d'environnement (`.env` du site), la base MariaDB, les journaux, la tâche planifiée et les e-mails capturés arrivent aux lots P4 et P5.
+Variables, base et scripts : 11.11. Les journaux, la tâche planifiée et l'écran des e-mails capturés arrivent au lot P5.
 
 ### 11.10 Recette sur le vrai CT (à faire une fois, dans l'ordre)
 
@@ -718,3 +718,29 @@ But : vérifier en réel ce qui n'a tourné qu'en simulation (scripts Alpine, ag
 | 18 | Fiche, Réglages : supprimer le site `recette-php` | site retiré du hub ; dans le CT, `ls /srv/sites` ne le montre plus ; plus d'enregistrement DNS `recette-php` dans Cloudflare |
 
 **À me renvoyer** : la sortie de `kouziaphpctl cgroups` et de `kouziaphpctl status`, une capture de la page de l'étape 12, et le texte exact de toute étape qui ne donne pas le résultat attendu (message d'erreur, ou les dernières lignes de `/var/log/kouziaphp/agent.err` et de `hubctl logs erreurs`).
+
+### 11.11 Variables, base et scripts d'un site PHP (lot P4)
+
+Fiche du site, onglet **Application** (sites PHP seulement) :
+
+- **Réglages de PHP** : version, dossier public, dossiers persistants, et :
+  - **dossiers persistants publics** : dans le dossier public, pour les fichiers que le site écrit et sert (MyTakumi : `public/assets/img/oeuvres`). Initialisés par le premier envoi, gardés ensuite comme `data/`, servis tels quels, jamais exécutés ;
+  - **mémoire par requête** (64 à 1024 Mo, 256 par défaut), **taille d'envoi** (1 à 128 Mo, 32 par défaut ; requête entière : le double, 256 Mo au plus), **durée d'une requête** (5 à 120 s, 30 par défaut). Le `.user.ini` du projet ne peut pas les changer. Le site entier est plafonné à la mémoire par requête plus 256 Mo ; la fiche avertit si la somme des sites dépasse la mémoire du CT.
+- **Variables d'environnement** : écrites dans le `.env` à la racine du projet (hors du dossier public, jamais téléchargeable), chiffrées dans le hub, valeurs masquées à l'écran. Les clés de paiement réelles (`sk_live_`, `pk_live_`, `rk_live_`) sont refusées ; les clés de test passent. `APP_ENV`, `APP_URL` et `MAIL_CATCHER` sont proposées. Les `DB_*` (dont `DB_DSN` par le socket local) sont remplies d'office.
+- **Base de données** : « Créer la base », puis importer un `.sql` ou `.sql.gz` (exécuté avec le compte du site : il ne touche que sa base), exporter, réinitialiser (sous-domaine retapé). Un dump est pris avant chaque publication (5 gardés, « Restaurer »), et le hub sauvegarde chaque base la nuit vers 1 h dans ses propres données (14 jours, incluses dans sa sauvegarde chiffrée). En cas de perte du CT : recréer le CT, republier le site, puis « Restaurer » la dernière sauvegarde de nuit (nouveau compte MariaDB, `DB_*` réécrites).
+- **Scripts du projet** : un `.php` de la version servie, lancé sous le compte du site (migrations, création d'un compte), avec arguments et entrée standard (un mot de passe, jamais journalisé ni affiché), 120 s au plus.
+
+**MyTakumi** (dans l'ordre, après la mise à jour du hub et du CT PHP par 11.5) :
+
+| # | Faire | Résultat attendu |
+|---|---|---|
+| 1 | Onglet Application, Réglages de PHP : mémoire 1024 Mo, envoi 100 Mo, durée 120 s, dossier persistant public `public/assets/img/oeuvres`, Enregistrer | « Réglages de PHP posés » ; pas d'alerte de mémoire (CT à 3 Go) |
+| 2 | Variables : ajouter `APP_ENV` = `production`, `APP_URL` et `MAIL_CATCHER` (boutons proposés), `APP_KEY` = le contenu de `data/app.key` du PC (ou une clé neuve de 64 caractères hexadécimaux), Enregistrer | « Variables enregistrées » |
+| 3 | Base : « Créer la base » | la base `s_mytakumi` apparaît ; les `DB_*` s'affichent sous les variables |
+| 4 | Envoyer le zip de MyTakumi (avec `scripts/migrate.php` et `scripts/create-admin.php`), Publier | publication réussie, sans « Fuite détectée » |
+| 5 | Scripts : `scripts/migrate.php`, Lancer | « terminé (code 0) » et la liste des migrations appliquées |
+| 6 | Scripts : `scripts/create-admin.php`, argument : l'e-mail de l'administrateur, entrée standard : son mot de passe, Lancer | « terminé (code 0) » ; le mot de passe n'apparaît nulle part |
+| 7 | Ouvrir `https://mytakumi.kouzia.com`, puis `/admin/` | la boutique s'affiche ; connexion à l'administration avec ce compte |
+| 8 | Back-office de MyTakumi : envoyer une image d'œuvre | l'image s'affiche ; après une nouvelle publication, elle est toujours là |
+| 9 | Base : Exporter | un fichier `mytakumi-base-AAAA-MM-JJ.sql.gz` téléchargé |
+
