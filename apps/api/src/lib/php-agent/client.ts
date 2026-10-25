@@ -70,6 +70,11 @@ const stateSchema = z.object({
   disk: z.object({ freeBytes: z.number().nonnegative(), totalBytes: z.number().nonnegative() }).nullable(),
   // Ajoutée avec le lot P4 : absente d'un agent plus ancien.
   memoryBytes: z.number().nonnegative().nullable().default(null),
+  // Ajoutés avec la mise à jour par le hub (agent 2) : absents d'un agent plus ancien.
+  scripts: z
+    .object({ digest: z.string().regex(/^[0-9a-f]{64}$/).nullable(), installedAt: z.string().max(40).nullable(), result: z.enum(["ok", "echec"]).nullable() })
+    .nullable()
+    .default(null),
   sites: z.number().int().nonnegative(),
   time: z.string().max(40),
 });
@@ -199,6 +204,15 @@ export class PhpAgentClient {
 
   async removeSite(slug: string): Promise<void> {
     await this.request("DELETE", `/v1/sites/${slug}`, undefined, undefined, OPERATION_TIMEOUT_MS);
+  }
+
+  /** Scripts du CT (archive du dépôt du hub, envoyée en flux) : installés par l'agent, qui se relance ensuite. */
+  async updateScripts(digest: string, archive: { file: string; sha256: string }): Promise<{ ok: boolean; log: string }> {
+    const parsed = z
+      .object({ ok: z.boolean(), digest: z.string(), log: z.string().max(300_000) })
+      .safeParse(await this.request("PUT", `/v1/ct/scripts/${digest}`, undefined, archive));
+    if (!parsed.success || parsed.data.digest !== digest) throw new PhpAgentUnavailableError("Serveur des sites PHP : réponse de la mise à jour illisible.");
+    return { ok: parsed.data.ok, log: parsed.data.log };
   }
 
   // --- Lot P4 : variables, base, script du projet ---

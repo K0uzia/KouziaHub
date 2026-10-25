@@ -18,8 +18,9 @@ import { pipeline } from "node:stream/promises";
 import { createServer, request as httpRequest } from "node:http";
 import { pathToFileURL } from "node:url";
 import { fileSha256, realSys, siteOperations } from "./sites.mjs";
+import { ctOperations } from "./update.mjs";
 
-export const AGENT_VERSION = "1";
+export const AGENT_VERSION = "2";
 export const WINDOW_SECONDS = 60;
 const MAX_BODY_BYTES = 1024 * 1024;
 const NONCE_RE = /^[0-9a-f]{32}$/;
@@ -121,7 +122,7 @@ export function tunnelIdOf(token) {
 
 // --- Opérations (liste fermée : méthode et chemin exacts, paramètres validés) ---
 
-async function etat(probes) {
+async function etat(probes, ct) {
   return {
     agentVersion: AGENT_VERSION,
     alpine: probes.alpine(),
@@ -134,6 +135,8 @@ async function etat(probes) {
       firewall: await probes.service("kouziaphp-firewall"),
     },
     cgroups: probes.cgroups(),
+    // Scripts du CT installés par le hub (mise à jour sans commande manuelle) : empreinte, date, résultat.
+    scripts: ct ? await ct.version() : null,
     lastUpgrade: probes.lastUpgrade(),
     disk: probes.disk(),
     // Mémoire du CT (lxcfs : la limite du CT dans Proxmox), pour comparer à la somme des limites des sites.
@@ -149,8 +152,10 @@ const SITE = "([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)";
 // retiré après l'envoi), empreinte dans x-kouzia-agent-content-sha256 et signée.
 const BASE = (rest) => new RegExp(`^/v1/sites/${SITE}/base${rest}$`);
 const routes = [
-  { method: "GET", re: /^\/v1\/etat$/, run: (c) => etat(c.probes) },
+  { method: "GET", re: /^\/v1\/etat$/, run: (c) => etat(c.probes, c.ct) },
   { method: "GET", re: /^\/v1\/tunnel$/, run: (c) => ({ tunnelId: c.probes.tunnelId() }) },
+  // Scripts du CT envoyés par le hub (archive de son dépôt) ; l'empreinte de leur contenu est dans le chemin signé.
+  { method: "PUT", re: /^\/v1\/ct\/scripts\/([0-9a-f]{64})$/, ct: true, stream: true, run: (c, [digest]) => c.ct.updateScripts(c.file, digest) },
   { method: "POST", re: /^\/v1\/sites$/, site: true, run: (c) => c.sites.upsert(c.json()) },
   { method: "PUT", re: new RegExp(`^/v1/sites/${SITE}/versions/(\\d{1,7})$`), site: true, stream: true, kind: () => "version", run: (c, [slug, n]) => c.sites.receive(slug, Number(n), c.file) },
   { method: "POST", re: new RegExp(`^/v1/sites/${SITE}/publier$`), site: true, run: (c, [slug]) => c.sites.publish(slug, Number(c.json().version)) },
@@ -178,7 +183,7 @@ const SHA_RE = /^[0-9a-f]{64}$/;
  * sites (opérations sur les sites, sites.mjs ; absentes : 503), log (une ligne par requête : date, IP, méthode,
  * chemin, statut ; jamais un en-tête ni un corps).
  */
-export function createAgent({ secret, allowedIps, probes = systemProbes, sites = null, log = () => {} }) {
+export function createAgent({ secret, allowedIps, probes = systemProbes, sites = null, ct = null, restart = () => {}, log = () => {} }) {
   if (typeof secret !== "string" || secret.length < 32) throw new Error("Secret de l'agent absent ou trop court (32 caractères au moins).");
   const allowed = new Set(allowedIps);
   const seen = new Map();
@@ -252,9 +257,12 @@ export function createAgent({ secret, allowedIps, probes = systemProbes, sites =
     const execute = async (ctx) => {
       if (!route) return reply(404, { error: "Opération inconnue." });
       if (route.site && !sites) return reply(503, { error: "Opérations sur les sites indisponibles sur cet agent." });
+      if (route.ct && !ct) return reply(503, { error: "Mise à jour du CT indisponible sur cet agent." });
       try {
         const result = await route.run(ctx, params);
         if (route.download) return await sendFile(result.file);
+        // Scripts mis à jour : réponse envoyée d'abord, puis l'agent s'arrête ; supervise-daemon le relance sur la nouvelle copie.
+        if (result?.restart) res.once("finish", () => setTimeout(restart, 300));
         return reply(200, result);
       } catch (err) {
         if (err && typeof err.status === "number") return reply(err.status, { error: err.message });
@@ -275,15 +283,15 @@ export function createAgent({ secret, allowedIps, probes = systemProbes, sites =
         req.resume();
         return;
       }
-      if (!sites) {
-        execute({ probes, sites, json: () => ({}) });
+      if ((route.site && !sites) || (route.ct && !ct)) {
+        execute({ probes, sites, ct, json: () => ({}) });
         req.resume();
         return;
       }
       (async () => {
         let file;
         try {
-          file = await sites.incomingFile(params[0], nonce, route.kind(params));
+          file = route.ct ? await ct.incomingFile(nonce) : await sites.incomingFile(params[0], nonce, route.kind(params));
         } catch (err) {
           req.resume();
           return reply(err?.status ?? 500, { error: err?.message ?? "Site inconnu." });
@@ -308,7 +316,7 @@ export function createAgent({ secret, allowedIps, probes = systemProbes, sites =
           await rm(file, { force: true });
           return reply(400, { error: "Archive altérée en route (empreinte différente)." });
         }
-        return execute({ probes, sites, file, json: () => ({}) });
+        return execute({ probes, sites, ct, file, json: () => ({}) });
       })();
       return;
     }
@@ -330,7 +338,7 @@ export function createAgent({ secret, allowedIps, probes = systemProbes, sites =
           return {};
         }
       };
-      void execute({ probes, sites, json });
+      void execute({ probes, sites, ct, json });
     });
   });
   server.requestTimeout = 15 * 60_000;
@@ -391,8 +399,12 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       }),
     sys: realSys(runImpl),
   });
+  const ct = ctOperations({ stateDir: "/var/lib/kouziaphp", libDir: "/usr/local/lib/kouziaphp", initDir: "/etc/init.d", sys: realSys(runImpl), now: Date.now });
   const server = createAgent({
     secret,
+    ct,
+    // Après une mise à jour des scripts : arrêt propre, supervise-daemon relance l'agent sur la nouvelle copie.
+    restart: () => process.exit(0),
     allowedIps: hubIps,
     sites,
     log: (line) => {

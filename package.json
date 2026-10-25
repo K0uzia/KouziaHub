@@ -20,6 +20,7 @@
     "db:deploy": "prisma migrate deploy",
     "admin:create": "tsx --env-file=.env --tsconfig apps/api/tsconfig.json scripts/admin-create.ts",
     "push:keys": "tsx --tsconfig apps/api/tsconfig.json scripts/push-keys.ts",
+    "php:ct-update": "tsx --env-file=.env --tsconfig apps/api/tsconfig.json scripts/php-ct-update.ts",
     "admin:2fa-reset": "tsx --env-file=.env --tsconfig apps/api/tsconfig.json scripts/admin-2fa-reset.ts",
     "test": "npm run test -w @kouzia-hub/api && npm run test -w @kouzia-hub/veille && npm run test -w @kouzia-hub/web",
     "veille:build": "tsx --tsconfig workers/veille/tsconfig.json workers/veille/tools/build.ts",

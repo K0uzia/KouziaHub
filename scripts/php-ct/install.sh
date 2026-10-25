@@ -137,7 +137,7 @@ if [ "$SCRIPT_DIR" != "$KP_LIB_DIR" ]; then
     install -o root -g root -m 755 "${SCRIPT_DIR}/${_f}" "${KP_LIB_DIR}/${_f}"
   done
   mkdir -p "${KP_LIB_DIR}/openrc" "${KP_LIB_DIR}/agent"
-  for _f in agent.mjs sites.mjs; do
+  for _f in agent.mjs sites.mjs update.mjs; do
     install -o root -g root -m 644 "${SCRIPT_DIR}/agent/${_f}" "${KP_LIB_DIR}/agent/${_f}"
   done
   install -o root -g root -m 755 "${SCRIPT_DIR}/mail-capture" "${KP_LIB_DIR}/mail-capture"
@@ -152,7 +152,8 @@ mkdir -p "${KP_ETC_DIR}/sites" "${KP_ETC_DIR}/fpm"
 chmod 700 "${KP_ETC_DIR}/sites"
 chmod 755 "${KP_ETC_DIR}/fpm"
 # Agent déjà réglé (réinstallation) : relancé sur la nouvelle copie. Sinon : kouziaphpctl agent (README, 11.8).
-if [ -s "${KP_ETC_DIR}/agent.secret" ]; then
+# Lancé par l'agent lui-même (mise à jour depuis le hub) : il se relance seul après avoir répondu.
+if [ -s "${KP_ETC_DIR}/agent.secret" ] && [ -z "${KP_NO_AGENT_RESTART:-}" ]; then
   rc_service kouziaphp-agent restart >/dev/null 2>&1 || warn "L'agent n'a pas redémarré : kouziaphpctl status"
 fi
 # Absent de l'Alpine minimale (recette du 25/10/2026).

@@ -897,12 +897,20 @@ export type PhpAgentState = {
   disk: { freeBytes: number; totalBytes: number } | null;
   /** Mémoire du CT (limite posée dans Proxmox), null si illisible ou agent plus ancien. */
   memoryBytes: number | null;
+  /** Scripts du CT installés par le hub : empreinte, date, résultat de la dernière mise à jour ; null : agent trop ancien. */
+  scripts: { digest: string | null; installedAt: string | null; result: "ok" | "echec" | null } | null;
   sites: number;
   /** Horloge du CT (ISO). */
   time: string;
 };
 
-export type PhpServerStatus =
+export type PhpServerStatus = PhpServerState & { update?: PhpCtUpdateJob | null };
+type PhpServerState =
   | { configured: false }
   | { configured: true; reachable: false; error: string }
-  | { configured: true; reachable: true; state: PhpAgentState; sitesMemoryMb: number };
+  | { configured: true; reachable: true; state: PhpAgentState; sitesMemoryMb: number; scriptsAvailable: string };
+
+// POST /api/php/serveur/mise-a-jour : scripts du CT envoyés depuis le dépôt du hub, installés, agent relancé.
+// Lancée en arrière-plan (une installation peut dépasser le délai de Cloudflare) : suivie par GET /api/php/serveur.
+export type PhpCtUpdateView = { ok: boolean; digest: string; log: string; state: PhpAgentState | null };
+export type PhpCtUpdateJob = { running: boolean; startedAt: string; finishedAt: string | null; ok: boolean | null; log: string | null };

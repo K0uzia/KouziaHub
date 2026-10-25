@@ -12,6 +12,7 @@ usage() {
 kouziaphpctl : CT des sites PHP du hub Kouzia
 
   install      installer ou réparer nginx, PHP, MariaDB, pare-feu du CT, outil (rejouable)
+  update       réinstaller les derniers scripts reçus du hub (secours : d'habitude, « hubctl update » le fait seul)
   tunnel       coller le jeton du tunnel Cloudflare « kouziaphp »
   agent        régler l'agent piloté par le hub (IP du hub, secret partagé, lus sur l'entrée)
   firewall     reposer le pare-feu du CT (comptes des sites)
@@ -73,8 +74,29 @@ upgrade() {
   date '+%Y-%m-%d' > "${KP_STATE_DIR}/last-upgrade"
 }
 
+# Secours : les scripts arrivent d'habitude du hub (hubctl update, ou le bouton des Réglages). Ici, la dernière
+# archive reçue par l'agent est réinstallée telle quelle ; sans archive, la marche à suivre est rappelée.
+update() {
+  require_root
+  _last="${KP_STATE_DIR}/update/last.tar.gz"
+  if [ ! -s "$_last" ]; then
+    echo "Aucune archive reçue du hub sur ce CT."
+    echo "  Mise à jour normale : « hubctl update » dans le CT du hub (ou « Mettre à jour » dans ses Réglages)."
+    echo "  Agent trop ancien pour la recevoir : une dernière fois les commandes de la section 11.5 du README."
+    exit 1
+  fi
+  _stage="$(mktemp -d)"
+  tar -xzof "$_last" -C "$_stage" || { rm -rf "$_stage"; die "Archive illisible : $_last"; }
+  [ -f "${_stage}/php-ct/install.sh" ] || { rm -rf "$_stage"; die "Archive sans install.sh : $_last"; }
+  sh "${_stage}/php-ct/install.sh"
+  _rc=$?
+  rm -rf "$_stage"
+  return "$_rc"
+}
+
 case "${1:-}" in
   install) require_root; exec sh "${SCRIPT_DIR}/install.sh" ;;
+  update) update ;;
   tunnel) exec sh "${SCRIPT_DIR}/tunnel.sh" ;;
   agent) exec sh "${SCRIPT_DIR}/agent.sh" ;;
   firewall) require_root; exec sh "${SCRIPT_DIR}/firewall.sh" ;;

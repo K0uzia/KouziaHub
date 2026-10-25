@@ -646,13 +646,18 @@ La première ligne affiche `cpu memory pids` (d'autres contrôleurs peuvent s'y 
 |---|---|
 | `kouziaphpctl upgrade` | Mises à jour de sécurité (une fois par semaine) : paquets de la version d'Alpine installée, vérification de nginx, redémarrage des services touchés. `status` alerte après 14 jours sans mise à jour |
 | `kouziaphpctl status` | État du CT |
+| `kouziaphpctl update` | Secours : réinstaller les derniers scripts reçus du hub |
 | `kouziaphpctl install` | Réparer ou rejouer l'installation (rien n'est remplacé qui marche) |
 | `kouziaphpctl firewall` | Reposer le pare-feu du CT |
 | `kouziaphpctl cgroups` | Contrôler les limites par site |
 | `kouziaphpctl tunnel` | Changer le jeton du tunnel |
 | `kouziaphpctl agent` | Régler l'agent : IP du hub et secret, lus sur l'entrée (11.8) |
 
-**Mettre à jour les scripts** du CT PHP après une mise à jour du hub : refaire les cinq commandes de 11.5 (l'installation est rejouable).
+**Mettre à jour le CT PHP** : rien à faire. `hubctl update` met à jour le hub, puis envoie à l'agent les scripts du CT tirés de son propre dépôt (jamais d'Internet), par une opération signée ; l'agent contrôle l'archive, lance l'installation (rejouable), puis se relance sur la nouvelle copie. `hubctl update` affiche le résultat (scripts, services, limites par site). En cas d'échec, le CT garde son installation d'avant, une notification part sur le téléphone, et le hub de toute façon reste à jour. Même opération depuis le hub : Réglages, tuile « Serveur des sites PHP », bouton **Mettre à jour le serveur des sites PHP** (versions installée et disponible affichées).
+
+Une seule exception : un agent installé avant cette fonction (tuile : « agent trop ancien ») ne sait pas encore se mettre à jour. Refaire **une dernière fois** les cinq commandes de 11.5 ; ensuite, plus jamais.
+
+En secours, dans le CT : `kouziaphpctl update` réinstalle la dernière archive reçue du hub.
 
 ### 11.8 Relier le hub à l'agent (lot P2)
 
@@ -730,7 +735,7 @@ Fiche du site, onglet **Application** (sites PHP seulement) :
 - **Base de données** : « Créer la base », puis importer un `.sql` ou `.sql.gz` (exécuté avec le compte du site : il ne touche que sa base), exporter, réinitialiser (sous-domaine retapé). Un dump est pris avant chaque publication (5 gardés, « Restaurer »), et le hub sauvegarde chaque base la nuit vers 1 h dans ses propres données (14 jours, incluses dans sa sauvegarde chiffrée). En cas de perte du CT : recréer le CT, republier le site, puis « Restaurer » la dernière sauvegarde de nuit (nouveau compte MariaDB, `DB_*` réécrites).
 - **Scripts du projet** : un `.php` de la version servie, lancé sous le compte du site (migrations, création d'un compte), avec arguments et entrée standard (un mot de passe, jamais journalisé ni affiché), 120 s au plus.
 
-**MyTakumi** (dans l'ordre, après la mise à jour du hub et du CT PHP par 11.5) :
+**MyTakumi** (dans l'ordre, après `hubctl update`, qui met aussi le CT PHP à jour, 11.7) :
 
 | # | Faire | Résultat attendu |
 |---|---|---|

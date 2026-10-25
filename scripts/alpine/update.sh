@@ -209,4 +209,10 @@ if env_has MONITOR_WORKER_URL && [ "$(veille_src_hash)" != "$(state_get veille-s
   warn "La veille Cloudflare a changé dans cette version : la redéployer avec « hubctl veille deploy » (nouveau jeton de déploiement)."
 fi
 ok "Mise à jour terminée : version $(current_commit)."
+# Serveur des sites PHP : scripts du dépôt envoyés à son agent (sans commande dans le CT). Un échec n'annule
+# pas la mise à jour du hub : le CT PHP garde son installation d'avant, et le bouton des Réglages permet de réessayer.
+if env_has PHP_AGENT_URL; then
+  title "Serveur des sites PHP"
+  run_as_app "npm run --silent php:ct-update" || warn "Serveur des sites PHP non mis à jour (détail ci-dessus). Réessayer : bouton « Mettre à jour » dans les Réglages du hub."
+fi
 echo "  En cas de souci plus tard : « hubctl rollback » remet la version d'avant."

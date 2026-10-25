@@ -24,7 +24,7 @@ describe("variables d'un site PHP (écran)", () => {
 
 describe("alerte mémoire du CT", () => {
   const state = (memoryBytes: number | null) => ({ memoryBytes }) as unknown as PhpAgentState;
-  const status = (sitesMemoryMb: number, memoryBytes: number | null): PhpServerStatus => ({ configured: true, reachable: true, sitesMemoryMb, state: state(memoryBytes) });
+  const status = (sitesMemoryMb: number, memoryBytes: number | null): PhpServerStatus => ({ configured: true, reachable: true, sitesMemoryMb, scriptsAvailable: "a".repeat(64), state: state(memoryBytes) });
 
   it("rien si les plafonds tiennent ou si la mémoire du CT est inconnue ; alerte au-delà", () => {
     expect(memoryWarning(status(1792, 3 * 1024 ** 3))).toBeNull();

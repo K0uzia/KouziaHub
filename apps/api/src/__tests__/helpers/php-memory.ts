@@ -13,6 +13,10 @@ export function memorySys(answer: (file: string, args: string[]) => RunResult = 
   const sys: Sys = {
     run: async (file, args) => {
       runs.push([file, ...args].join(" "));
+      // Copie de côté d'une installation (« cp -a ») : simulée sur l'arbre en mémoire.
+      if (file === "/bin/cp" && args[0] === "-a") {
+        for (const k of under(args[1]!)) nodes.set(args[2]! + k.slice(args[1]!.length), nodes.get(k)!);
+      }
       // Comme le vrai adduser : le compte du site apparaît dans /etc/passwd (UID, groupe de même numéro).
       if (file === "/usr/sbin/adduser") {
         const uid = args[args.indexOf("-u") + 1]!;

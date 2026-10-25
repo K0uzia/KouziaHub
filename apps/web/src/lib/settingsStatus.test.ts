@@ -127,6 +127,7 @@ describe("serveur des sites PHP", () => {
     lastUpgrade: "2026-10-20",
     disk: null,
     memoryBytes: null,
+    scripts: null,
     sites: 1,
     time: "2026-10-24T12:00:00.000Z",
   };
@@ -135,9 +136,9 @@ describe("serveur des sites PHP", () => {
   it("non installé, injoignable, service arrêté, mises à jour en retard, puis tout va bien", () => {
     expect(status({ configured: false })?.level).toBe("todo");
     expect(status({ configured: true, reachable: false, error: "Serveur des sites PHP injoignable." })).toMatchObject({ level: "error", reason: "Serveur des sites PHP injoignable." });
-    expect(status({ configured: true, reachable: true, sitesMemoryMb: 512, state: { ...state, services: { ...state.services, tunnel: "stopped" } } })).toMatchObject({ level: "error", reason: "Arrêté ou absent : tunnel." });
-    expect(status({ configured: true, reachable: true, sitesMemoryMb: 512, state: { ...state, lastUpgrade: "2026-10-01" } })?.level).toBe("todo");
-    expect(status({ configured: true, reachable: true, sitesMemoryMb: 512, state: { ...state, lastUpgrade: null } })?.level).toBe("todo");
-    expect(status({ configured: true, reachable: true, state, sitesMemoryMb: 512 })).toMatchObject({ level: "ok", reason: "Joignable : PHP 8.3, 1 site." });
+    expect(status({ configured: true, reachable: true, sitesMemoryMb: 512, scriptsAvailable: "a".repeat(64), state: { ...state, services: { ...state.services, tunnel: "stopped" } } })).toMatchObject({ level: "error", reason: "Arrêté ou absent : tunnel." });
+    expect(status({ configured: true, reachable: true, sitesMemoryMb: 512, scriptsAvailable: "a".repeat(64), state: { ...state, lastUpgrade: "2026-10-01" } })?.level).toBe("todo");
+    expect(status({ configured: true, reachable: true, sitesMemoryMb: 512, scriptsAvailable: "a".repeat(64), state: { ...state, lastUpgrade: null } })?.level).toBe("todo");
+    expect(status({ configured: true, reachable: true, state, sitesMemoryMb: 512, scriptsAvailable: "a".repeat(64) })).toMatchObject({ level: "ok", reason: "Joignable : PHP 8.3, 1 site." });
   });
 });

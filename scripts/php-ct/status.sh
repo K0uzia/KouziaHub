@@ -54,6 +54,12 @@ if [ ! -s "$KP_TUNNEL_TOKEN_FILE" ]; then
   echo "                           jeton absent : kouziaphpctl tunnel"
 fi
 
+if [ -f "${KP_STATE_DIR}/scripts.json" ]; then
+  _sd="$(grep -o '"digest":"[0-9a-f]*"' "${KP_STATE_DIR}/scripts.json" | cut -c11-22)"
+  _sr="$(grep -o '"result":"[a-z]*"' "${KP_STATE_DIR}/scripts.json" | cut -d'"' -f4)"
+  echo "  Scripts (hub)          : ${_sd:-?} (dernière mise à jour : ${_sr:-?})"
+fi
+
 title "Sécurité"
 _table=0
 if command -v nft >/dev/null 2>&1 && nft list table inet kouziaphp 2>/dev/null | grep -q "jump sites"; then _table=1; fi

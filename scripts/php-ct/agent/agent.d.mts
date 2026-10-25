@@ -1,6 +1,7 @@
 // Types de l'agent (agent.mjs), pour les tests du hub qui le lancent tel quel.
 import type { Server } from "node:http";
 import type { SiteOperations } from "./sites.mjs";
+import type { CtOperations } from "./update.mjs";
 
 export type ServiceState = "running" | "stopped" | "absent";
 
@@ -32,5 +33,7 @@ export function createAgent(options: {
   allowedIps: string[];
   probes?: Probes;
   sites?: Partial<SiteOperations> | null;
+  ct?: CtOperations | null;
+  restart?: () => void;
   log?: (line: string) => void;
 }): Server;

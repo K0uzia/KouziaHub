@@ -21,6 +21,7 @@ export const ACTION_LABEL: Record<string, string> = {
   "site.php.db.restore": "Base restaurée",
   "site.php.backup": "Sauvegarde de nuit de la base",
   "site.php.script": "Script du projet",
+  "php.ct.update": "Mise à jour du serveur des sites PHP",
   "version.publish": "Publication",
   "version.republish": "Republication d'une version",
   "version.force": "Publication malgré le contrôle de la version",
