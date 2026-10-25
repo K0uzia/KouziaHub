@@ -155,6 +155,7 @@ chmod 755 "$_init"
 cat > "$_conf" <<'EOF'
 rc_cgroup_settings="
 memory.max 64M
+memory.swap.max 0
 cpu.max 50000 100000
 pids.max 16
 "
@@ -181,6 +182,8 @@ expect_value() {
   fi
 }
 expect_value memory.max 67108864
+# Sans elle, la mémoire au-delà de memory.max part en swap (512 Mo dans le CT) au lieu d'arrêter le processus.
+expect_value memory.swap.max 0
 expect_value cpu.max "50000 100000"
 expect_value pids.max 16
 

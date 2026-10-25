@@ -115,7 +115,7 @@ describe("cycle de vie d'un site sur le CT (système simulé)", () => {
     expect(m.runs).toContain("/usr/sbin/addgroup nginx php-mytakumi");
     expect(m.owners.get("/srv/sites/mytakumi/releases")).toBe("root:php-mytakumi");
     expect(m.owners.get("/srv/sites/mytakumi/shared")).toBe("php-mytakumi:php-mytakumi");
-    expect(m.nodes.get("/etc/conf.d/kouziaphp-site.mytakumi")).toMatchObject({ text: expect.stringContaining("memory.max 512M") });
+    expect(m.nodes.get("/etc/conf.d/kouziaphp-site.mytakumi")).toMatchObject({ text: expect.stringContaining("memory.max 512M\nmemory.swap.max 0\n") });
     expect(m.nodes.get("/etc/init.d/kouziaphp-site.mytakumi")).toEqual({ type: "link", target: "/etc/init.d/kouziaphp-site" });
     expect(m.runs.slice(-2)).toEqual(["/usr/sbin/nginx -t", "/sbin/rc-service nginx reload"]);
 

@@ -163,7 +163,7 @@ php_admin_value[sendmail_path] = /usr/local/lib/kouziaphp/mail-capture ${spec.sl
 /** Service OpenRC du site (lien vers le script commun) et ses limites (si les cgroups sont effectifs). */
 export function serviceConf(spec, limits) {
   const lines = [`KP_PHP="${spec.php.replace(".", "")}"`, `KP_SITE="${spec.slug}"`];
-  if (limits) lines.push('rc_cgroup_settings="', "memory.max 512M", "cpu.max 100000 100000", "pids.max 64", '"');
+  if (limits) lines.push('rc_cgroup_settings="', "memory.max 512M", "memory.swap.max 0", "cpu.max 100000 100000", "pids.max 64", '"');
   return `# Généré par l'agent des sites PHP pour ${spec.hostname}.\n${lines.join("\n")}\n`;
 }
 
