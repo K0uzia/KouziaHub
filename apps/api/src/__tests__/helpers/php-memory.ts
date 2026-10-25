@@ -1,4 +1,4 @@
-import type { RunResult, Sys } from "../../../../../scripts/php-ct/agent/sites.mjs";
+import type { RunIo, RunResult, Sys } from "../../../../../scripts/php-ct/agent/sites.mjs";
 
 // Système simulé pour les opérations de l'agent PHP : fichiers en mémoire, commandes enregistrées.
 type Node = { type: "file"; text: string } | { type: "dir" } | { type: "link"; target: string };
@@ -7,6 +7,7 @@ type Node = { type: "file"; text: string } | { type: "dir" } | { type: "link"; t
 export function memorySys(answer: (file: string, args: string[]) => RunResult = () => ({ code: 0, stdout: "", stderr: "" })) {
   const nodes = new Map<string, Node>([["/etc/passwd", { type: "file", text: "root:x:0:0::/root:/bin/sh\nphp-autre:x:20000:20000::/srv/sites/autre:/sbin/nologin\n" }]]);
   const runs: string[] = [];
+  const inputs: Array<{ file: string; args: string[]; input: string | null; io: RunIo }> = [];
   const owners = new Map<string, string>();
   const under = (p: string) => [...nodes.keys()].filter((k) => k === p || k.startsWith(`${p}/`));
   const sys: Sys = {
@@ -41,7 +42,16 @@ export function memorySys(answer: (file: string, args: string[]) => RunResult = 
     cp: async (a, b) => {
       for (const k of under(a)) nodes.set(b + k.slice(a.length), nodes.get(k)!);
     },
+    // Entrée et sortie en flux, simulées : l'entrée (texte ou fichier) est gardée pour le test ; une sortie vers un
+    // fichier y écrit le stdout de la réponse choisie.
+    runIo: async (file, args, io = {}) => {
+      runs.push([file, ...args].join(" "));
+      inputs.push({ file, args, input: io.input ?? (io.inputFile ? (nodes.get(io.inputFile) as { text?: string } | undefined)?.text ?? null : null), io });
+      const r = answer(file, args);
+      if (io.outputFile && r.code === 0) nodes.set(io.outputFile, { type: "file", text: r.stdout });
+      return io.outputFile ? { ...r, stdout: "" } : r;
+    },
   };
-  return { sys, nodes, runs, owners };
+  return { sys, nodes, runs, owners, inputs };
 }
 

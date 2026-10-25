@@ -134,6 +134,14 @@ php_versions_installed() {
   done
 }
 
+# Versions de PHP sans PASSWORD_ARGON2ID (hachage argon2id des mots de passe, MyTakumi l'exige) ; vide si toutes
+# l'ont. Code 0 toujours (appelée dans « $(...) » sous set -e).
+php_without_argon2() {
+  for _v in $(php_versions_installed); do
+    if ! "/usr/bin/php${_v}" -r 'exit(defined("PASSWORD_ARGON2ID") ? 0 : 1);' >/dev/null 2>&1; then printf '%s ' "$_v"; fi
+  done
+}
+
 dns_servers() {
   awk '$1 == "nameserver" { print $2 }' /etc/resolv.conf 2>/dev/null
 }

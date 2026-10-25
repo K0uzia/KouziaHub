@@ -28,6 +28,10 @@ else
 fi
 _versions="$(php_versions_installed)"
 echo "  PHP installés          : ${_versions:-aucun} (défaut des sites : ${KP_PHP_DEFAULT})"
+_noargon="$(php_without_argon2)"
+if [ -n "$_noargon" ]; then
+  echo "                           ${C_YELLOW}sans argon2id : ${_noargon}${C_RESET}(password_hash(PASSWORD_ARGON2ID) échouera)"
+fi
 echo "  Sites                  : $(find "$KP_SITES_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ') (lot P3)"
 echo "  Disque /srv/sites      : $(df -Ph "$KP_SITES_DIR" 2>/dev/null | awk 'NR==2 { print $4 " libres sur " $2 }')"
 

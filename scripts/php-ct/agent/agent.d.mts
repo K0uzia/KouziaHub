@@ -11,6 +11,8 @@ export type Probes = {
   cgroups(): { result: "ok" | "echec" | null; checkedAt: string | null };
   lastUpgrade(): string | null;
   disk(): { freeBytes: number; totalBytes: number } | null;
+  /** Mémoire du CT en octets (/proc/meminfo, lxcfs), null si illisible. */
+  memory?(): number | null;
   sites(): number;
   tunnelId(): string | null;
   now(): number;
@@ -22,12 +24,13 @@ export const systemProbes: Probes;
 export function sha256Hex(body: string | Buffer | undefined): string;
 export function signRequest(secret: string, timestamp: string, nonce: string, method: string, path: string, body: string | Buffer | undefined): string;
 export function signResponse(secret: string, nonce: string, status: number, body: string): string;
+export function signResponseHash(secret: string, nonce: string, status: number, bodySha256: string): string;
 export const MAX_UPLOAD_BYTES: number;
 export function tunnelIdOf(token: string | null): string | null;
 export function createAgent(options: {
   secret: string;
   allowedIps: string[];
   probes?: Probes;
-  sites?: Pick<SiteOperations, "incomingFile" | "upsert" | "receive" | "publish" | "setEnabled" | "check" | "remove"> | null;
+  sites?: Partial<SiteOperations> | null;
   log?: (line: string) => void;
 }): Server;

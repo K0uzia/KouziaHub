@@ -70,6 +70,13 @@ EOF
   ok "PHP ${_v} : réglages durcis posés, pool d'exemple retiré."
 done
 
+_noargon="$(php_without_argon2)"
+if [ -n "$_noargon" ]; then
+  warn "PHP ${_noargon}: PASSWORD_ARGON2ID absent. Les applications qui hachent les mots de passe en argon2id (MyTakumi) échoueront."
+else
+  ok "PHP : argon2id disponible (PASSWORD_ARGON2ID)."
+fi
+
 title "nginx"
 _default="/etc/nginx/http.d/default.conf"
 if [ -f "$_default" ]; then

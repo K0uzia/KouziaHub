@@ -11,10 +11,13 @@
 // Compte php-<slug> (UID 20000 à 29999, groupe à lui ; nginx est ajouté à ce groupe pour lire les fichiers).
 // PHP-FPM : un maître par site (service OpenRC kouziaphp-site.<slug>), socket /run/kouziaphp/<slug>.sock.
 
-import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { spawn } from "node:child_process";
+import { createHash, randomBytes } from "node:crypto";
+import { createReadStream, createWriteStream } from "node:fs";
 import * as fsp from "node:fs/promises";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
+import { createGunzip, createGzip } from "node:zlib";
 
 export const SITE_UID_MIN = 20000;
 export const SITE_UID_MAX = 29999;
@@ -22,6 +25,62 @@ export const RELEASES_KEPT = 5;
 export const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const DIR_SEGMENT_RE = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$/;
 const PHP_RE = /^8\.[2-5]$/;
+export const MARIADB_SOCKET = "/run/mysqld/mysqld.sock";
+export const DUMPS_KEPT = 5;
+
+// --- Variables d'environnement (.env du site, lot P4) ---
+
+/** Variables écrites par l'agent depuis la base du site : jamais saisies (refusées si envoyées). */
+export const DB_VARS = ["DB_CONNECTION", "DB_HOST", "DB_SOCKET", "DB_DATABASE", "DB_USERNAME", "DB_USER", "DB_PASSWORD", "DB_DSN"];
+const ENV_NAME_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
+// Valeurs écrites entre guillemets doubles : ni guillemet, ni barre oblique inverse, ni « $ » (interpolé par
+// certaines bibliothèques), ni accent grave, ni retour à la ligne.
+const ENV_VALUE_RE = /^[^"\\$`\r\n\0]{0,4096}$/;
+/** Clé de paiement réelle (docs/cadrage.md, 11.6) : refusée sur une version de travail. */
+export const LIVE_KEY_RE = /\b(?:sk|pk|rk)_live_[A-Za-z0-9]/;
+
+/** Variables saisies, validées : { NOM: valeur }, 100 au plus. */
+export function checkEnvVars(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw bad("Variables attendues.");
+  const entries = Object.entries(input);
+  if (entries.length > 100) throw bad("100 variables au plus.");
+  for (const [name, value] of entries) {
+    if (!ENV_NAME_RE.test(name)) throw bad(`Nom de variable invalide : « ${name.slice(0, 64)} » (majuscules, chiffres et _).`);
+    if (DB_VARS.includes(name)) throw bad(`${name} est rempli d'office depuis la base du site.`);
+    if (typeof value !== "string" || !ENV_VALUE_RE.test(value)) throw bad(`Valeur de ${name} refusée : ni guillemet, ni \\, ni $, ni accent grave, ni retour à la ligne (4096 caractères au plus).`);
+    if (LIVE_KEY_RE.test(value)) throw bad(`Valeur de ${name} refusée : clé de paiement réelle (live). Une version de travail n'accepte que les clés de test.`);
+  }
+  return Object.fromEntries(entries.sort(([a], [b]) => a.localeCompare(b)));
+}
+
+/** Base et compte MariaDB du site (« s_ » et le slug, tirets en _ ; tronqué avec empreinte au-delà de 64). */
+export function dbNameOf(slug) {
+  const base = `s_${slug.replace(/-/g, "_")}`;
+  return base.length <= 64 ? base : `${base.slice(0, 55)}_${createHash("sha256").update(slug).digest("hex").slice(0, 8)}`;
+}
+
+/** Variables de la base, d'après le compte du site. */
+export function dbVars(slug, password) {
+  const name = dbNameOf(slug);
+  return {
+    DB_CONNECTION: "mysql",
+    DB_HOST: "localhost",
+    DB_SOCKET: MARIADB_SOCKET,
+    DB_DATABASE: name,
+    DB_USERNAME: name,
+    DB_USER: name,
+    DB_PASSWORD: password,
+    DB_DSN: `mysql:unix_socket=${MARIADB_SOCKET};dbname=${name};charset=utf8mb4`,
+  };
+}
+
+/** Texte du .env : variables saisies, puis celles de la base (si elle existe). */
+export function envFileText(vars, db) {
+  const line = ([k, v]) => `${k}="${v}"`;
+  const parts = ["# Écrit par l'agent des sites PHP depuis le hub. Ne pas modifier ici : réglé dans la fiche du site.", ...Object.entries(vars).map(line)];
+  if (db) parts.push("", "# Base du site (remplie d'office).", ...Object.entries(db).map(line));
+  return `${parts.join("\n")}\n`;
+}
 
 export class OpError extends Error {
   constructor(status, message) {
@@ -57,14 +116,55 @@ export function checkSiteSpec(input, ctx) {
     if (publicDir === "" && persistentDirs.length) throw bad("Avec des dossiers persistants, le dossier public ne peut pas être la racine du projet.");
     throw bad("Un dossier persistant ne peut pas être dans le dossier public (il serait servi).");
   }
+  // Dossiers persistants publics (images envoyées par le site) : DANS le dossier public, servis en statique seulement.
+  const pub = Array.isArray(input.publicPersistentDirs) ? input.publicPersistentDirs : [];
+  if (pub.length > 10) throw bad("10 dossiers persistants publics au plus.");
+  const publicPersistentDirs = [...new Set(pub.map((d) => checkRelDir(d, false)))];
+  for (const d of publicPersistentDirs) {
+    if (publicDir !== "" && !d.startsWith(`${publicDir}/`)) throw bad(`Dossier persistant public hors du dossier public : « ${d} ».`);
+    if ([...persistentDirs, ...publicPersistentDirs].some((o) => o !== d && (o.startsWith(`${d}/`) || d.startsWith(`${o}/`)))) throw bad(`Dossiers persistants imbriqués : « ${d} ».`);
+  }
+  const memoryLimitMb = input.memoryLimitMb ?? 256;
+  if (!Number.isInteger(memoryLimitMb) || memoryLimitMb < 64 || memoryLimitMb > 1024) throw bad("Mémoire par requête : de 64 à 1024 Mo.");
+  const uploadMaxMb = input.uploadMaxMb ?? 32;
+  if (!Number.isInteger(uploadMaxMb) || uploadMaxMb < 1 || uploadMaxMb > 128) throw bad("Taille d'envoi : de 1 à 128 Mo.");
+  const maxExecutionSec = input.maxExecutionSec ?? 30;
+  if (!Number.isInteger(maxExecutionSec) || maxExecutionSec < 5 || maxExecutionSec > 120) throw bad("Durée d'une requête : de 5 à 120 s.");
   return {
     slug,
     hostname: input.hostname,
     php: input.php,
     publicDir,
     persistentDirs,
+    publicPersistentDirs,
+    memoryLimitMb,
+    uploadMaxMb,
+    maxExecutionSec,
     indexing: input.indexing === true,
   };
+}
+
+/** Corps d'une requête accepté : deux fois la taille d'envoi (plusieurs fichiers, champs), 256 Mo au plus. */
+export const postMaxMb = (spec) => Math.min(256, 2 * (spec.uploadMaxMb ?? 32));
+/** Mémoire du site entier (groupe de contrôle) : une requête à pleine mémoire et 256 Mo pour les autres processus. */
+export const siteMemoryMb = (spec) => (spec.memoryLimitMb ?? 256) + 256;
+
+/** Chemin d'un dossier persistant public vu par nginx (relatif au dossier public), avec « / » au début. */
+const servedPath = (spec, d) => `/${spec.publicDir === "" ? d : d.slice(spec.publicDir.length + 1)}`;
+
+/** Script du projet à lancer : chemin relatif sûr, fichier .php. */
+export function checkScriptPath(value) {
+  if (typeof value !== "string" || !value.endsWith(".php")) throw bad("Script attendu : un fichier .php du projet (chemin relatif).");
+  return checkRelDir(value, false);
+}
+
+/** UID et GID du compte d'un site, lus dans /etc/passwd. */
+export function idsOf(passwdText, user) {
+  for (const line of passwdText.split("\n")) {
+    const [name, , uid, gid] = line.split(":");
+    if (name === user) return { uid: Number(uid), gid: Number(gid) };
+  }
+  throw new OpError(500, `Compte ${user} absent du CT.`);
 }
 
 export const userOf = (slug) => `php-${slug}`;
@@ -93,16 +193,24 @@ export function nginxConf(spec, paths) {
   const robots = spec.indexing
     ? ""
     : '    location = /robots.txt {\n        add_header X-Robots-Tag "noindex, nofollow" always;\n        default_type text/plain;\n        return 200 "User-agent: *\\nDisallow: /\\n";\n    }\n';
+  // « ^~ » : préfixe prioritaire sur toute location regex, donc jamais la règle PHP. Fichiers statiques seulement.
+  const uploads = (spec.publicPersistentDirs ?? [])
+    .map(
+      (d) =>
+        `    location ^~ ${servedPath(spec, d)}/ {\n        location ~ /\\. { return 403; }\n        location ~* \\.(php\\d?|phtml|phar|pht|phps|cgi|pl|py|sh)$ { return 403; }\n        try_files $uri =404;\n    }\n`,
+    )
+    .join("");
+  // Corps accepté : comme post_max_size du pool.
   return `# Généré par l'agent des sites PHP pour ${spec.hostname}. Ne pas modifier : réécrit à chaque réglage.
 server {
     listen 127.0.0.1:${paths.nginxPort};
     server_name ${spec.hostname};
     root ${root};
     index index.php index.html;
-    client_max_body_size 34m;
+    client_max_body_size ${postMaxMb(spec)}m;
     access_log ${paths.sitesDir}/${spec.slug}/logs/nginx-access.log;
     error_log ${paths.sitesDir}/${spec.slug}/logs/nginx-error.log warn;
-${noindex}${robots}
+${noindex}${robots}${uploads}
     # Fichiers cachés (.env, .git...) sauf /.well-known/, dépendances et fichiers de projet : jamais servis.
     location ~ /\\.(?!well-known/) { return 403; }
     location ~* (^|/)(vendor|node_modules)/ { return 403; }
@@ -116,6 +224,7 @@ ${noindex}${robots}
         fastcgi_param DOCUMENT_ROOT $realpath_root;
         fastcgi_param HTTPS on;
         fastcgi_pass unix:${paths.runDir}/${spec.slug}.sock;
+        fastcgi_read_timeout ${(spec.maxExecutionSec ?? 30) + 10}s;
     }
 
     location / {
@@ -145,12 +254,20 @@ listen.mode = 0660
 pm = ondemand
 pm.max_children = 4
 pm.process_idle_timeout = 30s
-request_terminate_timeout = 30s
+request_terminate_timeout = ${(spec.maxExecutionSec ?? 30) + 5}s
 slowlog = ${home}/logs/php-slow.log
 request_slowlog_timeout = 5s
 catch_workers_output = yes
 clear_env = yes
 php_admin_value[open_basedir] = ${home}/
+; Limites en php_admin_value : ni ini_set ni le .user.ini du projet ne peuvent les changer.
+php_admin_value[memory_limit] = ${spec.memoryLimitMb ?? 256}M
+php_admin_value[max_execution_time] = ${spec.maxExecutionSec ?? 30}
+php_admin_value[upload_max_filesize] = ${spec.uploadMaxMb ?? 32}M
+php_admin_value[post_max_size] = ${postMaxMb(spec)}M
+; Base du site : MariaDB par le socket local seulement (localhost = socket pour PDO et mysqli).
+php_admin_value[pdo_mysql.default_socket] = ${MARIADB_SOCKET}
+php_admin_value[mysqli.default_socket] = ${MARIADB_SOCKET}
 php_admin_value[sys_temp_dir] = ${home}/tmp
 php_admin_value[upload_tmp_dir] = ${home}/tmp
 php_admin_value[session.save_path] = ${home}/sessions
@@ -163,7 +280,7 @@ php_admin_value[sendmail_path] = /usr/local/lib/kouziaphp/mail-capture ${spec.sl
 /** Service OpenRC du site (lien vers le script commun) et ses limites (si les cgroups sont effectifs). */
 export function serviceConf(spec, limits) {
   const lines = [`KP_PHP="${spec.php.replace(".", "")}"`, `KP_SITE="${spec.slug}"`];
-  if (limits) lines.push('rc_cgroup_settings="', "memory.max 512M", "memory.swap.max 0", "cpu.max 100000 100000", "pids.max 64", '"');
+  if (limits) lines.push('rc_cgroup_settings="', `memory.max ${siteMemoryMb(spec)}M`, "memory.swap.max 0", "cpu.max 100000 100000", "pids.max 64", '"');
   return `# Généré par l'agent des sites PHP pour ${spec.hostname}.\n${lines.join("\n")}\n`;
 }
 
@@ -219,12 +336,90 @@ export function siteOperations(ctx) {
     await run("/sbin/rc-service", ["nginx", "reload"], "Rechargement de nginx");
   }
 
-  return {
-    /** Fichier où écrire l'archive reçue d'un site connu (incoming/, à root), nommé par le nonce de la requête. */
-    async incomingFile(slug, nonce) {
+  // --- Base et .env du site (lot P4). Le mot de passe MariaDB est généré ici et ne quitte jamais le CT : il est
+  // gardé dans /etc/kouziaphp/sites/<slug>.db.cnf (root, 600) et passé aux commandes par ce fichier, jamais en
+  // argument (visible des autres comptes dans la liste des processus).
+  const dbCnf = (slug) => path.posix.join(paths.confDir, "sites", `${slug}.db.cnf`);
+  const envJson = (slug) => path.posix.join(paths.confDir, "sites", `${slug}.env.json`);
+  const envFile = (slug) => path.posix.join(siteDir(slug), ".env");
+  const dumpsDir = (slug) => path.posix.join(siteDir(slug), "dumps");
+
+  async function dbPassword(slug) {
+    if (!(await sys.exists(dbCnf(slug)))) return null;
+    return /^password=(\S+)$/m.exec(await sys.readFile(dbCnf(slug)))?.[1] ?? null;
+  }
+
+  /** SQL en root (authentification par socket : l'agent est root), texte passé sur l'entrée standard. */
+  async function rootSql(sql, what) {
+    const r = await sys.runIo("/usr/bin/mariadb", ["--batch", "--skip-column-names"], { input: sql, timeoutMs: 60_000 });
+    if (r.code !== 0) throw new OpError(500, `${what} : échec (${(r.stderr || "").trim().slice(0, 200) || `code ${r.code}`}).`);
+    return r.stdout;
+  }
+
+  /** .env du site : root:php-<slug>, 440 (le site le lit, ne peut pas le changer), hors du dossier public. */
+  async function writeEnv(slug) {
+    const vars = (await sys.exists(envJson(slug))) ? JSON.parse(await sys.readFile(envJson(slug))) : {};
+    const password = await dbPassword(slug);
+    await sys.writeFile(envFile(slug), envFileText(vars, password ? dbVars(slug, password) : null), 0o440);
+    await sys.chown(envFile(slug), "root", userOf(slug));
+  }
+
+  /** Lien .env à la racine d'une version (le projet le lit à côté de son dossier public). */
+  async function linkEnv(slug, releaseDir) {
+    const link = path.posix.join(releaseDir, ".env");
+    await sys.rm(link);
+    await sys.symlink(envFile(slug), link);
+  }
+
+  /** Dump compressé de la base du site, avec le compte du site (jamais root : il ne voit que sa base). */
+  async function dumpTo(slug, file) {
+    const r = await sys.runIo(
+      "/usr/bin/mariadb-dump",
+      [`--defaults-extra-file=${dbCnf(slug)}`, "--single-transaction", "--no-tablespaces", "--routines", "--triggers", dbNameOf(slug)],
+      { outputFile: file, gzip: true, timeoutMs: 30 * 60_000 },
+    );
+    if (r.code !== 0) {
+      await sys.rm(file);
+      throw new OpError(500, `Export de la base : échec (${(r.stderr || "").trim().slice(0, 200) || `code ${r.code}`}).`);
+    }
+  }
+
+  /** Import d'un fichier SQL (.sql ou .sql.gz) avec le compte du site : il ne peut toucher que sa base. */
+  async function importFrom(slug, file, gz) {
+    const r = await sys.runIo("/usr/bin/mariadb", [`--defaults-extra-file=${dbCnf(slug)}`, dbNameOf(slug)], { inputFile: file, gunzip: gz, timeoutMs: 30 * 60_000 });
+    if (r.code !== 0) throw new OpError(422, `Import refusé par MariaDB : ${(r.stderr || "").trim().slice(0, 300) || `code ${r.code}`}.`);
+  }
+
+  async function createDatabase(slug, password) {
+    const name = dbNameOf(slug);
+    await rootSql(
+      [
+        `CREATE DATABASE IF NOT EXISTS \`${name}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;`,
+        `CREATE USER IF NOT EXISTS '${name}'@'localhost' IDENTIFIED BY '${password}' WITH MAX_USER_CONNECTIONS 10;`,
+        `ALTER USER '${name}'@'localhost' IDENTIFIED BY '${password}' WITH MAX_USER_CONNECTIONS 10;`,
+        `GRANT ALL PRIVILEGES ON \`${name}\`.* TO '${name}'@'localhost';`,
+        "FLUSH PRIVILEGES;",
+      ].join("\n"),
+      "Création de la base",
+    );
+  }
+
+  const versionOf = (n) => {
+    if (!Number.isInteger(n) || n < 1 || n > 1_000_000) throw bad("Numéro de version invalide.");
+    return n;
+  };
+
+  const ops = {
+    /**
+     * Fichier où écrire un envoi reçu d'un site connu (incoming/, à root), nommé par le nonce de la requête.
+     * kind : « version » (archive tar.gz), « sql » ou « sqlgz » (import de base).
+     */
+    async incomingFile(slug, nonce, kind = "version") {
       const spec = await known(slug);
       if (!/^[0-9a-f]{32}$/.test(nonce)) throw bad("Nonce invalide.");
-      return path.posix.join(siteDir(spec.slug), "incoming", `${nonce}.tar.gz`);
+      const ext = { version: "tar.gz", sql: "sql", sqlgz: "sql.gz" }[kind];
+      if (!ext) throw bad("Type d'envoi inconnu.");
+      return path.posix.join(siteDir(spec.slug), "incoming", `${nonce}.${ext}`);
     },
 
     /** Crée ou met à jour un site (rejouable). */
@@ -243,7 +438,9 @@ export function siteOperations(ctx) {
       for (const [dir, owner, group, mode] of [
         ["releases", "root", user, 0o750],
         ["incoming", "root", "root", 0o700],
-        ["shared", user, user, 0o700],
+        ["dumps", "root", "root", 0o700],
+        // 750 : nginx (groupe du site) y traverse vers les dossiers persistants publics ; les privés restent en 700.
+        ["shared", user, user, 0o750],
         ["tmp", user, user, 0o700],
         ["sessions", user, user, 0o700],
         ["logs", user, user, 0o750],
@@ -254,6 +451,7 @@ export function siteOperations(ctx) {
         await sys.chown(p, owner, group);
       }
       await writeConfigs(spec);
+      if (!(await sys.exists(envFile(spec.slug)))) await writeEnv(spec.slug);
       const init = path.posix.join(paths.initDir, serviceOf(spec.slug));
       if (!(await sys.exists(init))) await sys.symlink(path.posix.join(paths.initDir, "kouziaphp-site"), init);
       await reloadNginx();
@@ -286,20 +484,24 @@ export function siteOperations(ctx) {
       const home = siteDir(spec.slug);
       const dir = path.posix.join(home, "releases", String(n));
       if (!Number.isInteger(n) || !(await sys.exists(dir))) throw new OpError(404, "Version absente du CT : à renvoyer.");
-      for (const d of spec.persistentDirs) {
+      const persistent = [...spec.persistentDirs.map((d) => [d, false]), ...(spec.publicPersistentDirs ?? []).map((d) => [d, true])];
+      for (const [d, served] of persistent) {
         const shared = path.posix.join(home, "shared", d);
         const inRelease = path.posix.join(dir, d);
         // Première publication : le contenu envoyé initialise le dossier persistant ; ensuite il n'est plus touché.
         if (!(await sys.exists(shared))) {
-          await sys.mkdir(path.posix.dirname(shared), 0o700);
+          await sys.mkdir(path.posix.dirname(shared), served ? 0o750 : 0o700);
           if (await sys.exists(inRelease)) await sys.cp(inRelease, shared);
-          else await sys.mkdir(shared, 0o700);
+          else await sys.mkdir(shared, 0o750);
           await run("/bin/chown", ["-R", `${userOf(spec.slug)}:${userOf(spec.slug)}`, shared], "Droits du dossier persistant");
+          // Privé (données, clés) : au seul compte du site. Public : lisible de nginx (groupe), jamais exécuté.
+          await run("/bin/chmod", ["-R", served ? "u=rwX,g=rX,o=" : "u=rwX,go=", shared], "Droits du dossier persistant");
         }
         await sys.rm(inRelease);
         await sys.mkdir(path.posix.dirname(inRelease), 0o750);
         await sys.symlink(shared, inRelease);
       }
+      await linkEnv(spec.slug, dir);
       const tmp = path.posix.join(home, `current.${n}.tmp`);
       await sys.rm(tmp);
       await sys.symlink(path.posix.join("releases", String(n)), tmp);
@@ -348,8 +550,166 @@ export function siteOperations(ctx) {
       const probes = CHECK_PATHS;
       // En parallèle : chaque sonde est bornée par httpStatus (2 s), le contrôle entier aussi.
       const results = await Promise.all(probes.map(async (p) => ({ path: p, status: await ctx.httpStatus(spec.hostname, p) })));
+      // Dossiers persistants publics : un .php déposé par le site ne doit jamais s'exécuter (sonde posée, demandée, retirée).
+      for (const d of spec.publicPersistentDirs ?? []) {
+        const shared = path.posix.join(siteDir(spec.slug), "shared", d);
+        if (!(await sys.exists(shared))) continue;
+        const name = `kouzia-sonde-${randomBytes(8).toString("hex")}.php`;
+        const file = path.posix.join(shared, name);
+        await sys.writeFile(file, "<?php echo 'EXECUTE';\n", 0o644);
+        try {
+          results.push({ path: `${servedPath(spec, d)}/${name}`, status: await ctx.httpStatus(spec.hostname, `${servedPath(spec, d)}/${name}`) });
+        } finally {
+          await sys.rm(file);
+        }
+      }
       const leaks = results.filter((r) => r.status !== 403 && r.status !== 404);
       return { slug: spec.slug, ok: leaks.length === 0, results };
+    },
+
+    /** Variables saisies dans le hub : gardées (root, 600) et réécrites dans le .env avec celles de la base. */
+    async setEnv(slug, input) {
+      const spec = await known(slug);
+      const vars = checkEnvVars(input);
+      await sys.writeFile(envJson(spec.slug), `${JSON.stringify(vars)}\n`, 0o600);
+      await writeEnv(spec.slug);
+      return { slug: spec.slug, names: Object.keys(vars) };
+    },
+
+    /** État de la base : présente ou non, taille, tables, dumps gardés (numéros de version). */
+    async dbState(slug) {
+      const spec = await known(slug);
+      const exists = await sys.exists(dbCnf(spec.slug));
+      const dumps = (await sys.exists(dumpsDir(spec.slug)))
+        ? (await sys.readdir(dumpsDir(spec.slug))).map((f) => /^(\d+)\.sql\.gz$/.exec(f)?.[1]).filter(Boolean).map(Number).sort((a, b) => b - a)
+        : [];
+      if (!exists) return { slug: spec.slug, exists: false, name: null, bytes: 0, tables: 0, dumps };
+      const name = dbNameOf(spec.slug);
+      const [bytes, tables] = (
+        await rootSql(`SELECT COALESCE(SUM(data_length + index_length), 0), COUNT(*) FROM information_schema.tables WHERE table_schema = '${name}';`, "Lecture de la base")
+      )
+        .trim()
+        .split(/\s+/)
+        .map(Number);
+      return { slug: spec.slug, exists: true, name, bytes: bytes || 0, tables: tables || 0, dumps };
+    },
+
+    /**
+     * Crée la base et son compte (rejouable). Sans fichier de compte (base neuve, ou CT reconstruit après une
+     * perte) : nouveau mot de passe ; le .env reçoit les DB_* du compte actuel.
+     */
+    async createDb(slug) {
+      const spec = await known(slug);
+      let password = await dbPassword(spec.slug);
+      if (!password) {
+        password = randomBytes(24).toString("hex");
+        await sys.writeFile(dbCnf(spec.slug), `[client]\nuser=${dbNameOf(spec.slug)}\npassword=${password}\nsocket=${MARIADB_SOCKET}\n`, 0o600);
+      }
+      await createDatabase(spec.slug, password);
+      await writeEnv(spec.slug);
+      return ops.dbState(spec.slug);
+    },
+
+    /** Importe un fichier SQL reçu (incoming/), puis le retire. */
+    async importDb(slug, file, gz) {
+      const spec = await known(slug);
+      if (!(await dbPassword(spec.slug))) throw new OpError(409, "Pas de base pour ce site : la créer d'abord.");
+      try {
+        await importFrom(spec.slug, file, gz);
+      } finally {
+        await sys.rm(file);
+      }
+      return ops.dbState(spec.slug);
+    },
+
+    /** Export compressé dans incoming/ ; le serveur l'envoie puis le retire. */
+    async exportDb(slug) {
+      const spec = await known(slug);
+      if (!(await dbPassword(spec.slug))) throw new OpError(409, "Pas de base pour ce site.");
+      const file = path.posix.join(siteDir(spec.slug), "incoming", `export-${randomBytes(8).toString("hex")}.sql.gz`);
+      await dumpTo(spec.slug, file);
+      return { file };
+    },
+
+    /** Vide la base (supprimée puis recréée, droits du compte reposés). */
+    async resetDb(slug) {
+      const spec = await known(slug);
+      const password = await dbPassword(spec.slug);
+      if (!password) throw new OpError(409, "Pas de base pour ce site.");
+      await rootSql(`DROP DATABASE IF EXISTS \`${dbNameOf(spec.slug)}\`;`, "Réinitialisation de la base");
+      await createDatabase(spec.slug, password);
+      return ops.dbState(spec.slug);
+    },
+
+    /** Dump avant publication (dumps/<version>.sql.gz, DUMPS_KEPT gardés) ; rien sans base. */
+    async dumpBefore(slug, n) {
+      const spec = await known(slug);
+      versionOf(n);
+      if (!(await dbPassword(spec.slug))) return { slug: spec.slug, dumped: false };
+      await sys.mkdir(dumpsDir(spec.slug), 0o700);
+      await dumpTo(spec.slug, path.posix.join(dumpsDir(spec.slug), `${n}.sql.gz`));
+      const all = (await sys.readdir(dumpsDir(spec.slug))).map((f) => /^(\d+)\.sql\.gz$/.exec(f)?.[1]).filter(Boolean).map(Number).sort((a, b) => b - a);
+      for (const old of all.slice(DUMPS_KEPT)) await sys.rm(path.posix.join(dumpsDir(spec.slug), `${old}.sql.gz`));
+      return { slug: spec.slug, dumped: true, version: n };
+    },
+
+    /** Remet la base dans l'état du dump pris avant la publication de la version n. */
+    async restoreDump(slug, n) {
+      const spec = await known(slug);
+      versionOf(n);
+      const file = path.posix.join(dumpsDir(spec.slug), `${n}.sql.gz`);
+      if (!(await sys.exists(file))) throw new OpError(404, `Pas de dump gardé pour la version ${n}.`);
+      await ops.resetDb(spec.slug);
+      await importFrom(spec.slug, file, true);
+      return ops.dbState(spec.slug);
+    },
+
+    /**
+     * Lance un script PHP du projet (migrations, création d'un compte...) sous le compte du site, comme ses pages :
+     * open_basedir du site, 120 s au plus, sortie limitée et sans les valeurs du .env.
+     */
+    async runScript(slug, rel, args = [], stdin = "") {
+      const spec = await known(slug);
+      const script = checkScriptPath(rel);
+      if (!Array.isArray(args) || args.length > 20 || !args.every((a) => typeof a === "string" && a.length <= 200 && !a.includes("\0"))) throw bad("Arguments : 20 au plus, 200 caractères chacun.");
+      if (typeof stdin !== "string" || stdin.length > 4096) throw bad("Entrée standard : 4096 caractères au plus.");
+      const home = siteDir(spec.slug);
+      const current = path.posix.join(home, "current");
+      if (!(await sys.exists(current))) throw new OpError(409, "Aucune version publiée : publier le site d'abord.");
+      if (!(await sys.exists(path.posix.join(current, script)))) throw new OpError(404, `Script absent de la version servie : ${script}.`);
+      const ids = idsOf(await sys.readFile(paths.passwdFile), userOf(spec.slug));
+      const started = Date.now();
+      const r = await sys.runIo(
+        `/usr/bin/php${spec.php.replace(".", "")}`,
+        [
+          "-d",
+          `open_basedir=${home}/`,
+          "-d",
+          `memory_limit=${spec.memoryLimitMb ?? 256}M`,
+          "-d",
+          "max_execution_time=120",
+          "-d",
+          `sys_temp_dir=${home}/tmp`,
+          "-d",
+          `upload_tmp_dir=${home}/tmp`,
+          "-d",
+          `error_log=${home}/logs/php-errors.log`,
+          "-d",
+          `pdo_mysql.default_socket=${MARIADB_SOCKET}`,
+          "-d",
+          `mysqli.default_socket=${MARIADB_SOCKET}`,
+          "-d",
+          `sendmail_path=/usr/local/lib/kouziaphp/mail-capture ${spec.slug}`,
+          script,
+          ...args,
+        ],
+        { input: stdin, uid: ids.uid, gid: ids.gid, cwd: current, env: { PATH: "/usr/bin:/bin", HOME: home, TMPDIR: `${home}/tmp` }, timeoutMs: 120_000, maxOutput: 64 * 1024 },
+      );
+      // Valeurs du .env (variables saisies, mot de passe de la base) masquées dans la sortie affichée par le hub.
+      const vars = (await sys.exists(envJson(spec.slug))) ? Object.values(JSON.parse(await sys.readFile(envJson(spec.slug)))) : [];
+      const secrets = [...vars, (await dbPassword(spec.slug)) ?? "", ...stdin.split("\n")].filter((v) => v.length >= 6);
+      const scrub = (text) => secrets.reduce((t, v) => t.split(v).join("••••"), text);
+      return { slug: spec.slug, script, code: r.code, timedOut: r.timedOut === true, durationMs: Date.now() - started, output: scrub(`${r.stdout}${r.stderr}`).slice(-64 * 1024) };
     },
 
     /** Supprime le site : service, configurations, compte et dossier. La base (lot P4) est retirée à part. */
@@ -368,6 +728,12 @@ export function siteOperations(ctx) {
         await sys.rm(p);
       }
       await reloadNginx();
+      if (await sys.exists(dbCnf(spec.slug))) {
+        const name = dbNameOf(spec.slug);
+        await rootSql(`DROP DATABASE IF EXISTS \`${name}\`;\nDROP USER IF EXISTS '${name}'@'localhost';`, "Suppression de la base");
+      }
+      await sys.rm(dbCnf(spec.slug));
+      await sys.rm(envJson(spec.slug));
       await sys.run("/usr/sbin/deluser", [userOf(spec.slug)]);
       // Chemin construit depuis un slug validé, sous le dossier des sites : jamais autre chose.
       const home = siteDir(spec.slug);
@@ -377,6 +743,7 @@ export function siteOperations(ctx) {
       return { slug: spec.slug, removed: true };
     },
   };
+  return ops;
 }
 
 /** Empreinte SHA-256 d'un fichier (archive reçue). */
@@ -416,5 +783,52 @@ export function realSys(runImpl) {
     },
     exists: (p) => fsp.lstat(p).then(() => true, () => false),
     cp: (a, b) => fsp.cp(a, b, { recursive: true, dereference: false, verbatimSymlinks: true }),
+    runIo,
   };
+}
+
+/**
+ * Commande sans shell, avec entrée et sortie en flux : entrée depuis un texte (input) ou un fichier (inputFile,
+ * décompressé si gunzip), sortie vers un fichier (outputFile, compressée si gzip, 600) ou gardée (maxOutput
+ * octets au plus). uid/gid : sous un autre compte (libuv retire alors les groupes supplémentaires de root).
+ */
+export function runIo(file, args, io = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(file, args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      ...(io.uid !== undefined ? { uid: io.uid, gid: io.gid } : {}),
+      ...(io.cwd ? { cwd: io.cwd } : {}),
+      ...(io.env ? { env: io.env } : {}),
+    });
+    const max = io.maxOutput ?? 1024 * 1024;
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    const keep = (acc, chunk) => (acc.length < max ? acc + chunk.toString("utf8").slice(0, max - acc.length) : acc);
+    child.stderr.on("data", (c) => (stderr = keep(stderr, c)));
+    const writing = io.outputFile
+      ? pipeline(child.stdout, ...(io.gzip ? [createGzip()] : []), createWriteStream(io.outputFile, { mode: 0o600 })).catch((err) => {
+          stderr = keep(stderr, Buffer.from(` ${err.message}`));
+        })
+      : (child.stdout.on("data", (c) => (stdout = keep(stdout, c))), Promise.resolve());
+    const reading = io.inputFile
+      ? pipeline(createReadStream(io.inputFile), ...(io.gunzip ? [createGunzip()] : []), child.stdin).catch((err) => {
+          stderr = keep(stderr, Buffer.from(` ${err.message}`));
+          child.kill();
+        })
+      : (child.stdin.end(io.input ?? ""), Promise.resolve());
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, io.timeoutMs ?? 60_000);
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      resolve({ code: 127, stdout, stderr: `${stderr}${err.message}`, timedOut });
+    });
+    child.on("close", async (code) => {
+      clearTimeout(timer);
+      await Promise.all([writing, reading]);
+      resolve({ code: timedOut ? 124 : (code ?? 1), stdout, stderr: timedOut ? `${stderr} délai dépassé` : stderr, timedOut });
+    });
+  });
 }

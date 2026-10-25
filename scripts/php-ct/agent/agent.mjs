@@ -12,12 +12,12 @@
 
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { execFile } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, appendFileSync, statfsSync, createWriteStream } from "node:fs";
+import { existsSync, readFileSync, readdirSync, appendFileSync, statfsSync, createReadStream, createWriteStream } from "node:fs";
 import { rm } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { createServer, request as httpRequest } from "node:http";
 import { pathToFileURL } from "node:url";
-import { realSys, siteOperations } from "./sites.mjs";
+import { fileSha256, realSys, siteOperations } from "./sites.mjs";
 
 export const AGENT_VERSION = "1";
 export const WINDOW_SECONDS = 60;
@@ -32,7 +32,12 @@ export function signRequest(secret, timestamp, nonce, method, path, body) {
 }
 
 export function signResponse(secret, nonce, status, body) {
-  return `sha256=${createHmac("sha256", secret).update(`${nonce}.${status}.${sha256Hex(body)}`).digest("hex")}`;
+  return signResponseHash(secret, nonce, status, sha256Hex(body));
+}
+
+/** Même signature, sur l'empreinte d'un corps envoyé en flux (export de la base). */
+export function signResponseHash(secret, nonce, status, bodySha256) {
+  return `sha256=${createHmac("sha256", secret).update(`${nonce}.${status}.${bodySha256}`).digest("hex")}`;
 }
 
 function sameText(a, b) {
@@ -69,6 +74,10 @@ export const systemProbes = {
   alpine: () => readText("/etc/alpine-release"),
   php: () => ["82", "83", "84", "85"].filter((v) => existsSync(`/usr/sbin/php-fpm${v}`)).map((v) => `${v[0]}.${v.slice(1)}`),
   service: serviceState,
+  memory: () => {
+    const kb = Number(/^MemTotal:\s+(\d+) kB$/m.exec(readText("/proc/meminfo") ?? "")?.[1]);
+    return Number.isFinite(kb) && kb > 0 ? kb * 1024 : null;
+  },
   cgroups: () => {
     const text = readText("/var/lib/kouziaphp/cgroups");
     if (!text) return { result: null, checkedAt: null };
@@ -127,23 +136,38 @@ async function etat(probes) {
     cgroups: probes.cgroups(),
     lastUpgrade: probes.lastUpgrade(),
     disk: probes.disk(),
+    // Mémoire du CT (lxcfs : la limite du CT dans Proxmox), pour comparer à la somme des limites des sites.
+    memoryBytes: probes.memory?.() ?? null,
     sites: probes.sites(),
     time: new Date(probes.now()).toISOString(),
   };
 }
 
 const SITE = "([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)";
-// stream : corps envoyé en flux (archive d'une version), empreinte annoncée dans x-kouzia-hub-content-sha256.
+// stream : corps envoyé en flux (archive d'une version, import de base), empreinte annoncée dans
+// x-kouzia-hub-content-sha256 ; kind : type du fichier reçu. download : réponse en flux (fichier rendu par l'opération,
+// retiré après l'envoi), empreinte dans x-kouzia-agent-content-sha256 et signée.
+const BASE = (rest) => new RegExp(`^/v1/sites/${SITE}/base${rest}$`);
 const routes = [
   { method: "GET", re: /^\/v1\/etat$/, run: (c) => etat(c.probes) },
   { method: "GET", re: /^\/v1\/tunnel$/, run: (c) => ({ tunnelId: c.probes.tunnelId() }) },
   { method: "POST", re: /^\/v1\/sites$/, site: true, run: (c) => c.sites.upsert(c.json()) },
-  { method: "PUT", re: new RegExp(`^/v1/sites/${SITE}/versions/(\\d{1,7})$`), site: true, stream: true, run: (c, [slug, n]) => c.sites.receive(slug, Number(n), c.file) },
+  { method: "PUT", re: new RegExp(`^/v1/sites/${SITE}/versions/(\\d{1,7})$`), site: true, stream: true, kind: () => "version", run: (c, [slug, n]) => c.sites.receive(slug, Number(n), c.file) },
   { method: "POST", re: new RegExp(`^/v1/sites/${SITE}/publier$`), site: true, run: (c, [slug]) => c.sites.publish(slug, Number(c.json().version)) },
   { method: "POST", re: new RegExp(`^/v1/sites/${SITE}/couper$`), site: true, run: (c, [slug]) => c.sites.setEnabled(slug, false) },
   { method: "POST", re: new RegExp(`^/v1/sites/${SITE}/rallumer$`), site: true, run: (c, [slug]) => c.sites.setEnabled(slug, true) },
   { method: "GET", re: new RegExp(`^/v1/sites/${SITE}/verifier$`), site: true, run: (c, [slug]) => c.sites.check(slug) },
   { method: "DELETE", re: new RegExp(`^/v1/sites/${SITE}$`), site: true, run: (c, [slug]) => c.sites.remove(slug) },
+  // Lot P4 : variables, base, script du projet.
+  { method: "PUT", re: new RegExp(`^/v1/sites/${SITE}/env$`), site: true, run: (c, [slug]) => c.sites.setEnv(slug, c.json().vars) },
+  { method: "GET", re: BASE(""), site: true, run: (c, [slug]) => c.sites.dbState(slug) },
+  { method: "POST", re: BASE(""), site: true, run: (c, [slug]) => c.sites.createDb(slug) },
+  { method: "PUT", re: BASE("/import/(sql|sqlgz)"), site: true, stream: true, kind: ([, k]) => k, run: (c, [slug, k]) => c.sites.importDb(slug, c.file, k === "sqlgz") },
+  { method: "GET", re: BASE("/export"), site: true, download: true, run: (c, [slug]) => c.sites.exportDb(slug) },
+  { method: "POST", re: BASE("/reinitialiser"), site: true, run: (c, [slug]) => c.sites.resetDb(slug) },
+  { method: "POST", re: BASE("/dump"), site: true, run: (c, [slug]) => c.sites.dumpBefore(slug, Number(c.json().version)) },
+  { method: "POST", re: BASE("/restaurer"), site: true, run: (c, [slug]) => c.sites.restoreDump(slug, Number(c.json().version)) },
+  { method: "POST", re: new RegExp(`^/v1/sites/${SITE}/script$`), site: true, run: (c, [slug]) => c.sites.runScript(slug, c.json().path, c.json().args ?? [], c.json().stdin ?? "") },
 ];
 
 export const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
@@ -207,11 +231,31 @@ export function createAgent({ secret, allowedIps, probes = systemProbes, sites =
       return true;
     };
 
+    // Fichier rendu en flux : empreinte calculée d'abord, signée avec le nonce, puis envoi ; fichier retiré ensuite.
+    const sendFile = async (file) => {
+      const sha = await fileSha256(file);
+      done = true;
+      res.writeHead(200, {
+        "content-type": "application/gzip",
+        "cache-control": "no-store",
+        "x-kouzia-agent-content-sha256": sha,
+        "x-kouzia-agent-signature": signResponseHash(secret, nonce, 200, sha),
+      });
+      try {
+        await pipeline(createReadStream(file), res);
+      } finally {
+        await rm(file, { force: true });
+        log(`${new Date(probes.now()).toISOString()} ${ip} ${req.method} ${path} 200`);
+      }
+    };
+
     const execute = async (ctx) => {
       if (!route) return reply(404, { error: "Opération inconnue." });
       if (route.site && !sites) return reply(503, { error: "Opérations sur les sites indisponibles sur cet agent." });
       try {
-        return reply(200, await route.run(ctx, params));
+        const result = await route.run(ctx, params);
+        if (route.download) return await sendFile(result.file);
+        return reply(200, result);
       } catch (err) {
         if (err && typeof err.status === "number") return reply(err.status, { error: err.message });
         return reply(500, { error: "L'opération a échoué sur le CT (journal de l'agent)." });
@@ -239,7 +283,7 @@ export function createAgent({ secret, allowedIps, probes = systemProbes, sites =
       (async () => {
         let file;
         try {
-          file = await sites.incomingFile(params[0], nonce);
+          file = await sites.incomingFile(params[0], nonce, route.kind(params));
         } catch (err) {
           req.resume();
           return reply(err?.status ?? 500, { error: err?.message ?? "Site inconnu." });
