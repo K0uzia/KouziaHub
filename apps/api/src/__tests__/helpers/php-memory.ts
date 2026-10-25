@@ -13,6 +13,15 @@ export function memorySys(answer: (file: string, args: string[]) => RunResult = 
   const sys: Sys = {
     run: async (file, args) => {
       runs.push([file, ...args].join(" "));
+      // Comme le vrai adduser : le compte du site apparaît dans /etc/passwd (UID, groupe de même numéro).
+      if (file === "/usr/sbin/adduser") {
+        const uid = args[args.indexOf("-u") + 1]!;
+        const user = args.at(-1)!;
+        const passwd = nodes.get("/etc/passwd");
+        if (passwd?.type === "file" && !passwd.text.split("\n").some((l) => l.startsWith(`${user}:`))) {
+          nodes.set("/etc/passwd", { type: "file", text: `${passwd.text}${user}:x:${uid}:${uid}::/srv/sites/${user.slice(4)}:/sbin/nologin\n` });
+        }
+      }
       return answer(file, args);
     },
     readFile: async (p) => {
@@ -47,6 +56,15 @@ export function memorySys(answer: (file: string, args: string[]) => RunResult = 
     runIo: async (file, args, io = {}) => {
       runs.push([file, ...args].join(" "));
       inputs.push({ file, args, input: io.input ?? (io.inputFile ? (nodes.get(io.inputFile) as { text?: string } | undefined)?.text ?? null : null), io });
+      // Dossiers persistants : création et copie sans écraser, faites sous le compte du site (simulées ici).
+      if (file === "/bin/mkdir" && args[0] === "-p") await sys.mkdir(args[1]!, 0o750);
+      if (args[0] === "-e" && args[1]?.includes("cpSync")) {
+        const [src, dst] = [args[2]!, args[3]!];
+        for (const k of under(src)) {
+          const target = dst + k.slice(src.length);
+          if (!nodes.has(target)) nodes.set(target, nodes.get(k)!);
+        }
+      }
       const r = answer(file, args);
       if (io.outputFile && r.code === 0) nodes.set(io.outputFile, { type: "file", text: r.stdout });
       return io.outputFile ? { ...r, stdout: "" } : r;

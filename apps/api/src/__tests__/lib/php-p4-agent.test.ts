@@ -200,6 +200,46 @@ describe("base, .env et dumps sur le CT (système simulé)", () => {
     expect(text(m, "/srv/sites/mytakumi/shared/public/assets/img/oeuvres/envoyee.webp")).toBe("envoyée par le back-office");
   });
 
+  it("page d'attente d'abord, puis le projet : les images envoyées remplissent le dossier persistant ; un fichier modifié par le site est gardé", async () => {
+    const { m, ops } = await site();
+    const shared = "/srv/sites/mytakumi/shared/public/assets/img/oeuvres";
+    // Version 1 : page d'attente seule (création du site), sans images ni data/.
+    m.nodes.set("/srv/sites/mytakumi/releases/1", { type: "dir" });
+    m.nodes.set("/srv/sites/mytakumi/releases/1/public/index.html", { type: "file", text: "attente" });
+    await ops.publish("mytakumi", 1);
+    expect([...m.nodes.keys()].filter((k) => k.startsWith(`${shared}/`))).toEqual([]);
+
+    // Version 2 : le projet, avec ses images et data/app.key.
+    m.nodes.set("/srv/sites/mytakumi/releases/2", { type: "dir" });
+    m.nodes.set("/srv/sites/mytakumi/releases/2/public/assets/img/oeuvres", { type: "dir" });
+    m.nodes.set("/srv/sites/mytakumi/releases/2/public/assets/img/oeuvres/vase-960.webp", { type: "file", text: "vase livré" });
+    m.nodes.set("/srv/sites/mytakumi/releases/2/public/assets/img/oeuvres/bol-960.webp", { type: "file", text: "bol livré" });
+    m.nodes.set("/srv/sites/mytakumi/releases/2/data", { type: "dir" });
+    m.nodes.set("/srv/sites/mytakumi/releases/2/data/app.key", { type: "file", text: "clé du zip" });
+    m.inputs.length = 0;
+    await ops.publish("mytakumi", 2);
+    expect(text(m, `${shared}/vase-960.webp`)).toBe("vase livré");
+    expect(text(m, `${shared}/bol-960.webp`)).toBe("bol livré");
+    expect(text(m, "/srv/sites/mytakumi/shared/data/app.key")).toBe("clé du zip");
+    // Création, copie et droits sous le compte du site (UID 20001, groupe 20005), jamais en root.
+    for (const call of m.inputs.filter((i) => i.file === "/bin/mkdir" || i.file === "/bin/chmod" || i.args[0] === "-e")) {
+      expect(call.io, `${call.file} ${call.args.join(" ")}`).toMatchObject({ uid: 20001, gid: 20005 });
+    }
+    expect(m.runs.some((r) => r.startsWith("/bin/chown -R") && r.includes("/shared"))).toBe(false);
+
+    // Le site remplace une image et la clé ; republier la version 2 (ou en publier une 3) ne les touche pas.
+    m.nodes.set(`${shared}/vase-960.webp`, { type: "file", text: "vase retouché par le site" });
+    m.nodes.set("/srv/sites/mytakumi/shared/data/app.key", { type: "file", text: "clé de production" });
+    m.nodes.set("/srv/sites/mytakumi/releases/3", { type: "dir" });
+    m.nodes.set("/srv/sites/mytakumi/releases/3/public/assets/img/oeuvres", { type: "dir" });
+    m.nodes.set("/srv/sites/mytakumi/releases/3/public/assets/img/oeuvres/vase-960.webp", { type: "file", text: "vase livré" });
+    m.nodes.set("/srv/sites/mytakumi/releases/3/public/assets/img/oeuvres/tasse-960.webp", { type: "file", text: "tasse livrée" });
+    await ops.publish("mytakumi", 3);
+    expect(text(m, `${shared}/vase-960.webp`)).toBe("vase retouché par le site");
+    expect(text(m, `${shared}/tasse-960.webp`)).toBe("tasse livrée");
+    expect(text(m, "/srv/sites/mytakumi/shared/data/app.key")).toBe("clé de production");
+  });
+
   it("contrôle anti-fuite : un .php déposé dans un dossier public persistant ne doit pas s'exécuter (sonde retirée)", async () => {
     const { m, ops, serve } = await site();
     m.nodes.set("/srv/sites/mytakumi/releases/1", { type: "dir" });

@@ -26,6 +26,11 @@ export const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const DIR_SEGMENT_RE = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$/;
 const PHP_RE = /^8\.[2-5]$/;
 export const MARIADB_SOCKET = "/run/mysqld/mysqld.sock";
+/**
+ * Copie sans écraser (lancée par Node sous le compte du site) : fichiers et dossiers de la version absents du
+ * dossier persistant. Même résultat partout, quand « cp -n » change de code de sortie selon la version.
+ */
+export const COPY_MISSING = "require('fs').cpSync(process.argv[1], process.argv[2], { recursive: true, force: false, errorOnExist: false })";
 export const DUMPS_KEPT = 5;
 
 // --- Variables d'environnement (.env du site, lot P4) ---
@@ -415,6 +420,13 @@ export function siteOperations(ctx) {
     );
   }
 
+  /** Commande sous le compte du site (UID et GID du compte, groupes de root retirés), échec rendu lisible. */
+  async function asSite(slug, file, args, what) {
+    const ids = idsOf(await sys.readFile(paths.passwdFile), userOf(slug));
+    const r = await sys.runIo(file, args, { uid: ids.uid, gid: ids.gid, timeoutMs: 10 * 60_000 });
+    if (r.code !== 0) throw new OpError(500, `${what} : échec (${(r.stderr || "").trim().slice(0, 200) || `code ${r.code}`}).`);
+  }
+
   const versionOf = (n) => {
     if (!Number.isInteger(n) || n < 1 || n > 1_000_000) throw bad("Numéro de version invalide.");
     return n;
@@ -503,15 +515,14 @@ export function siteOperations(ctx) {
       for (const [d, served] of persistent) {
         const shared = path.posix.join(home, "shared", d);
         const inRelease = path.posix.join(dir, d);
-        // Première publication : le contenu envoyé initialise le dossier persistant ; ensuite il n'est plus touché.
-        if (!(await sys.exists(shared))) {
-          await sys.mkdir(path.posix.dirname(shared), served ? 0o750 : 0o700);
-          if (await sys.exists(inRelease)) await sys.cp(inRelease, shared);
-          else await sys.mkdir(shared, 0o750);
-          await run("/bin/chown", ["-R", `${userOf(spec.slug)}:${userOf(spec.slug)}`, shared], "Droits du dossier persistant");
-          // Privé (données, clés) : au seul compte du site. Public : lisible de nginx (groupe), jamais exécuté.
-          await run("/bin/chmod", ["-R", served ? "u=rwX,g=rX,o=" : "u=rwX,go=", shared], "Droits du dossier persistant");
-        }
+        // À chaque publication, les fichiers de la version absents du dossier persistant y sont ajoutés ; un fichier
+        // déjà présent (envoyé ou modifié par le site) n'est jamais remplacé. Une première publication sans ces
+        // fichiers (page d'attente) ne fige donc rien. Tout se fait SOUS LE COMPTE DU SITE : root ne touche jamais
+        // un chemin que le site contrôle (un lien qu'il y aurait posé ne mène pas root ailleurs).
+        await asSite(spec.slug, "/bin/mkdir", ["-p", shared], "Dossier persistant");
+        if (await sys.exists(inRelease)) await asSite(spec.slug, process.execPath, ["-e", COPY_MISSING, inRelease, shared], "Fichiers du dossier persistant");
+        // Privé (données, clés) : au seul compte du site. Public : lisible de nginx (groupe), jamais exécuté.
+        await asSite(spec.slug, "/bin/chmod", ["-R", served ? "u=rwX,g=rX,o=" : "u=rwX,go=", shared], "Droits du dossier persistant");
         await sys.rm(inRelease);
         await sys.mkdir(path.posix.dirname(inRelease), 0o750);
         await sys.symlink(shared, inRelease);
