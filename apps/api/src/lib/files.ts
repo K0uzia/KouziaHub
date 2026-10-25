@@ -5,7 +5,7 @@ import { checkVersion } from "@/lib/version-check.js";
 import { classifySitePath } from "@/lib/site-paths.js";
 import { rulesOf, siteExtras } from "@/lib/site-extras.js";
 import { HttpError } from "@/lib/http.js";
-import { FILE_LIMITS, MAX_FILES, MAX_SITE_BYTES } from "@/lib/limits.js";
+import { FILE_LIMITS, MAX_FILES, MAX_SITE_BYTES, maxFileBytesFor } from "@/lib/limits.js";
 import { prisma } from "@/lib/prisma.js";
 
 export type FileRef = { path: string; sha256: string; size: number };
@@ -75,7 +75,7 @@ export async function listFiles(siteId: string, blobs: BlobStore): Promise<Files
     versionCheck: phpCheck !== undefined ? phpCheck : await workingVersionCheck(files, blobs),
     devFiles: await leftoverDevFiles(siteId, files.map((f) => f.path)),
     workingDirty: site.workingDirty,
-    limits: FILE_LIMITS,
+    limits: { ...FILE_LIMITS, maxFileBytes: maxFileBytesFor(hostingOf(site)) },
   };
 }
 

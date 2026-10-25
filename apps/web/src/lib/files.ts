@@ -110,7 +110,7 @@ export function prepareSelection(picked: PickedFile[], maxFileBytes: number | nu
   for (const p of picked) {
     const { verdict } = checkSitePath(p.path, rules);
     if (verdict.action !== "accept") excluded.push({ path: p.path, size: p.file.size, reason: verdict.reason });
-    else if (maxFileBytes != null && p.file.size > maxFileBytes) excluded.push({ path: p.path, size: p.file.size, reason: fileTooBigReason(p.file.size) });
+    else if (maxFileBytes != null && p.file.size > maxFileBytes) excluded.push({ path: p.path, size: p.file.size, reason: fileTooBigReason(p.file.size, rules.hosting) });
     else send.push(p);
   }
   const byReason = new Map<string, ExcludedGroup>();

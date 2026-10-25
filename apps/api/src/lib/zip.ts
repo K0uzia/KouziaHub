@@ -4,8 +4,8 @@ import type { RejectedFile } from "@/contract.js";
 import { BlobTooLargeError, type BlobStore } from "@/lib/blobs.js";
 import type { FileRef } from "@/lib/files.js";
 import { HttpError } from "@/lib/http.js";
-import { MAX_FILE_BYTES, MAX_FILES, MAX_SITE_BYTES } from "@/lib/limits.js";
-import { classifySitePath, normalizeSitePath, type ClassifyOptions } from "@/lib/site-paths.js";
+import { MAX_FILE_BYTES, MAX_FILES, MAX_SITE_BYTES, maxFileBytesFor } from "@/lib/limits.js";
+import { classifySitePath, fileTooBigReason, normalizeSitePath, type ClassifyOptions } from "@/lib/site-paths.js";
 
 export type ZipLimits = { maxFiles: number; maxFileBytes: number; maxTotalBytes: number };
 export const DEFAULT_ZIP_LIMITS: ZipLimits = { maxFiles: MAX_FILES, maxFileBytes: MAX_FILE_BYTES, maxTotalBytes: MAX_SITE_BYTES };
@@ -74,7 +74,8 @@ type Candidate = { entry: Entry; path: string };
  * de travail : l'appelant n'écrit qu'après succès complet (tout ou rien). Les tailles comptées sont celles
  * réellement décompressées, jamais celles annoncées par l'en-tête.
  */
-export async function extractZip(file: string, blobs: BlobStore, limits: ZipLimits = DEFAULT_ZIP_LIMITS, rules: ClassifyOptions = {}): Promise<ZipExtraction> {
+export async function extractZip(file: string, blobs: BlobStore, limits?: ZipLimits, rules: ClassifyOptions = {}): Promise<ZipExtraction> {
+  limits ??= { ...DEFAULT_ZIP_LIMITS, maxFileBytes: maxFileBytesFor(rules.hosting) };
   let zip: ZipFile;
   try {
     zip = await openZip(file);
@@ -131,7 +132,7 @@ export async function extractZip(file: string, blobs: BlobStore, limits: ZipLimi
       if (previous !== undefined) throw refuse(`deux fichiers portent le même nom (à la casse près) : « ${previous} » et « ${c.path} ».`);
       seen.set(key, c.path);
       if (c.entry.uncompressedSize > limits.maxFileBytes) {
-        rejected.push({ path: c.path, reason: `Fichier de plus de ${Math.round(limits.maxFileBytes / 1024 / 1024)} Mio.` });
+        rejected.push({ path: c.path, reason: fileTooBigReason(c.entry.uncompressedSize, rules.hosting) });
         continue;
       }
       toRead.push(c);

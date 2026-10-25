@@ -1,6 +1,13 @@
 /** Plafonds des fichiers d'un site (limites Cloudflare Pages et du tunnel Cloudflare gratuit). */
 export const MAX_FILES = 20_000;
 export const MAX_FILE_BYTES = 25 * 1024 * 1024;
+/**
+ * Site PHP : pas de Cloudflare Pages, donc pas sa limite de 25 Mio par fichier. Les originaux d'images d'un
+ * projet (photos de 48 Mpx) passent ; le total d'une version et d'un zip reste plafonné comme pour un site statique.
+ */
+export const MAX_PHP_FILE_BYTES = 256 * 1024 * 1024;
+/** Taille maximale d'un fichier selon l'hébergement du site. */
+export const maxFileBytesFor = (hosting: "pages" | "php" | undefined) => (hosting === "php" ? MAX_PHP_FILE_BYTES : MAX_FILE_BYTES);
 /** Total d'une version de travail, et total décompressé d'un zip. */
 export const MAX_SITE_BYTES = 500 * 1024 * 1024;
 /** Fichiers par requête d'envoi (l'interface découpe un gros dossier en plusieurs envois). */

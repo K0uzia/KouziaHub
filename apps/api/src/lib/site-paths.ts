@@ -1,15 +1,18 @@
 // Import relatif : ce module est aussi utilisé par l'interface (alias @hub/site-paths), qui écarte les mêmes fichiers
 // avant l'envoi. Il ne dépend que de limits.ts, sans code serveur.
-import { MAX_DEPTH, MAX_FILE_BYTES, MAX_PATH_LENGTH, MAX_SEGMENT_BYTES } from "./limits.js";
+import { MAX_DEPTH, MAX_PATH_LENGTH, MAX_SEGMENT_BYTES, maxFileBytesFor } from "./limits.js";
 
 const MIB = 1024 * 1024;
 // TextEncoder plutôt que Buffer : le module tourne aussi dans le navigateur.
 const utf8 = new TextEncoder();
 
-/** Raison d'un fichier trop lourd pour Cloudflare Pages : taille, limite et conduite à tenir. */
-export function fileTooBigReason(size: number): string {
+/** Raison d'un fichier trop lourd : taille, limite de l'hébergement du site et conduite à tenir. */
+export function fileTooBigReason(size: number, hosting: "pages" | "php" = "pages"): string {
   const mib = (size / MIB).toFixed(1).replace(".", ",");
-  return `Fichier de ${mib} Mio : au-delà de ${MAX_FILE_BYTES / MIB} Mio, la limite de Cloudflare Pages par fichier. Réduisez-le ou retirez-le.`;
+  const max = maxFileBytesFor(hosting) / MIB;
+  return hosting === "php"
+    ? `Fichier de ${mib} Mio : au-delà de ${max} Mio par fichier. Réduisez-le, ou retirez-le de l'envoi s'il ne sert pas au site.`
+    : `Fichier de ${mib} Mio : au-delà de ${max} Mio, la limite de Cloudflare Pages par fichier. Réduisez-le ou retirez-le.`;
 }
 
 export type PathResult = { ok: true; path: string } | { ok: false; reason: string };

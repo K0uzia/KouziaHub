@@ -6,7 +6,7 @@ import type { CreateUploadInput, RejectedFile, UploadFileDecl, UploadSession } f
 import type { FileRef } from "@/lib/files.js";
 import { HttpError } from "@/lib/http.js";
 import {
-  MAX_FILE_BYTES,
+  maxFileBytesFor,
   MAX_FILES,
   MAX_SITE_BYTES,
   MAX_UPLOAD_PENDING_BYTES,
@@ -179,8 +179,8 @@ export class UploadStore {
           rejected.push({ path: target || "(sans nom)", reason: verdict.reason });
           return;
         }
-        if (f.size > MAX_FILE_BYTES) {
-          rejected.push({ path: target, reason: fileTooBigReason(f.size) });
+        if (f.size > maxFileBytesFor(rules.hosting)) {
+          rejected.push({ path: target, reason: fileTooBigReason(f.size, rules.hosting) });
           return;
         }
         const key = target.toLowerCase();

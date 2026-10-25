@@ -127,6 +127,22 @@ describe("réglages d'un site PHP (création et après)", () => {
   });
 });
 
+describe("envoi d'un site PHP : limite par fichier propre (pas celle de Cloudflare Pages)", () => {
+  it("fichier de 30 Mio gardé sur un site PHP ; refusé sur un site statique, avec la raison", async () => {
+    const id = await site();
+    const big = Buffer.alloc(30 * 1024 * 1024, 7);
+    const sent = await uploadFiles(hub, id, [{ filename: "src/produit/original-48mpx.jpg", content: big }]);
+    expect(sent.json()).toMatchObject({ accepted: ["src/produit/original-48mpx.jpg"], rejected: [] });
+    const limits = ((await call("GET", `/api/sites/${id}/files`)).json() as { limits: { maxFileBytes: number } }).limits;
+    expect(limits.maxFileBytes).toBe(256 * 1024 * 1024);
+
+    const statique = await hub.app.inject({ method: "POST", url: "/api/sites", headers: hub.headers, payload: { kind: "PERSO", slug: "vitrine", label: "Vitrine" } });
+    await settle(hub);
+    const refused = await uploadFiles(hub, (statique.json() as SiteDetail).id, [{ filename: "images/original.jpg", content: big }]);
+    expect(refused.json()).toMatchObject({ accepted: [], rejected: [{ path: "images/original.jpg", reason: expect.stringMatching(/^Fichier de 30,0 Mio : au-delà de 25 Mio, la limite de Cloudflare Pages/) }] });
+  });
+});
+
 describe("variables d'environnement", () => {
   it("propositions ; enregistrement chiffré dans le hub, .env posé sur le CT ; clé live et DB_* refusées sans rien changer", async () => {
     const id = await site();
