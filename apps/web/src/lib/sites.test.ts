@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Operation, SiteMonitorBadge, SiteSummary } from "@hub/contract";
-import { displayState, divergence, isDown, matchesState, stateBucket } from "@/lib/sites";
+import type { Operation, PhpAgentState, SiteMonitorBadge, SiteSummary } from "@hub/contract";
+import { displayState, divergence, isDown, matchesState, phpHostingChoice, stateBucket } from "@/lib/sites";
 
 type Input = Pick<SiteSummary, "state" | "operation" | "domainStatus" | "monitor">;
 
@@ -121,5 +121,24 @@ describe("divergence : état détaillé de la fiche", () => {
     expect(divergence(site())).toBeNull();
     expect(divergence(site({ monitor: monitor("up") }))).toBeNull();
     expect(divergence(site({ monitor: monitor("down", { watched: 0 }) }))).toBeNull();
+  });
+});
+
+describe("phpHostingChoice : choix PHP à la création", () => {
+  const state = { php: ["8.3"] } as unknown as PhpAgentState;
+
+  it("propose les versions quand l'agent répond", () => {
+    expect(phpHostingChoice({ configured: true, reachable: true, state }, false)).toEqual({ versions: ["8.3"], unavailable: null });
+  });
+
+  it("dit pourquoi PHP manque, au lieu de le masquer sans un mot", () => {
+    expect(phpHostingChoice({ configured: false }, false)?.unavailable).toMatch(/pas encore relié au hub/);
+    expect(phpHostingChoice({ configured: true, reachable: false, error: "Serveur des sites PHP injoignable." }, false)?.unavailable).toMatch(/injoignable/);
+    expect(phpHostingChoice({ configured: true, reachable: true, state: { php: [] } as unknown as PhpAgentState }, false)?.unavailable).toMatch(/aucune version/);
+    expect(phpHostingChoice(null, true)?.unavailable).toMatch(/illisible/);
+  });
+
+  it("rien pendant le chargement", () => {
+    expect(phpHostingChoice(null, false)).toBeNull();
   });
 });

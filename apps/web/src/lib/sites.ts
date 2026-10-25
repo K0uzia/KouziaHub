@@ -7,7 +7,7 @@ import {
   faHourglassHalf,
   faTrashCan,
 } from "@fortawesome/free-solid-svg-icons";
-import type { OperationKind, SiteSummary, VersionEntry } from "@hub/contract";
+import type { OperationKind, PhpServerStatus, SiteSummary, VersionEntry } from "@hub/contract";
 import type { BadgeTone } from "@/components/ui/Card";
 import { formatSince, VERDICT } from "@/lib/monitor";
 
@@ -142,3 +142,15 @@ export const OPERATION_TITLE: Record<OperationKind, string> = {
   DELETE: "Suppression",
   PUBLISH: "Publication",
 };
+
+/**
+ * Versions de PHP proposées à la création, ou la raison de leur absence (affichée : un choix « PHP » qui
+ * disparaît sans mot fait créer un site Pages par erreur, recette du 25/10/2026). null pendant le chargement.
+ */
+export function phpHostingChoice(status: PhpServerStatus | null, readError: boolean): { versions: string[]; unavailable: string | null } | null {
+  if (!status) return readError ? { versions: [], unavailable: "état du serveur des sites PHP illisible." } : null;
+  if (!status.configured) return { versions: [], unavailable: "serveur des sites PHP pas encore relié au hub (README, 11.8)." };
+  if (!status.reachable) return { versions: [], unavailable: `serveur des sites PHP injoignable : ${status.error}` };
+  if (!status.state.php.length) return { versions: [], unavailable: "aucune version de PHP installée sur le serveur des sites PHP." };
+  return { versions: status.state.php, unavailable: null };
+}

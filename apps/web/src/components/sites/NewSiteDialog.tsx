@@ -6,6 +6,7 @@ import { faCircleCheck, faCircleExclamation } from "@fortawesome/free-solid-svg-
 import type { CreateSiteInput, ErpClient, PhpServerStatus, SiteDetail, SiteKind, SlugCheck } from "@hub/contract";
 import { api, errorMessage, isAbort, type ApiError } from "@/lib/api";
 import { cleanSlugInput, slugify } from "@/lib/slug";
+import { phpHostingChoice } from "@/lib/sites";
 import { useDebounced, useResource } from "@/lib/useResource";
 import { useSitesDomain } from "@/lib/system";
 import { Modal, ModalActions } from "@/components/ui/Modal";
@@ -36,9 +37,10 @@ export function NewSiteDialog({ open, onClose }: { open: boolean; onClose: () =>
   const [kind, setKind] = useState<SiteKind>("CLIENT");
   const [client, setClient] = useState<ErpClient | null>(null);
   const [label, setLabel] = useState("");
-  // Site PHP (docs/cadrage.md, section 11) : proposé seulement quand le serveur des sites PHP répond.
+  // Site PHP (docs/cadrage.md, section 11) : proposé quand le serveur des sites PHP répond ; sinon la raison est dite.
   const phpServer = useResource<PhpServerStatus>("/api/php/serveur");
-  const phpVersions = phpServer.data?.configured && phpServer.data.reachable ? phpServer.data.state.php : [];
+  const phpChoice = phpHostingChoice(phpServer.data, phpServer.error !== null);
+  const phpVersions = phpChoice?.versions ?? [];
   const [hosting, setHosting] = useState<"pages" | "php">("pages");
   const [phpVersion, setPhpVersion] = useState("8.3");
   const [publicDir, setPublicDir] = useState("public");
@@ -299,6 +301,11 @@ export function NewSiteDialog({ open, onClose }: { open: boolean; onClose: () =>
               </div>
             ) : null}
           </div>
+        ) : phpChoice?.unavailable ? (
+          <p className="rounded-[var(--radius)] border border-[var(--border)] p-3 text-xs text-[var(--muted)]">
+            <span className="block text-sm font-medium text-[var(--text)]">Hébergement : Cloudflare Pages (site statique)</span>
+            Site PHP indisponible : {phpChoice.unavailable}
+          </p>
         ) : null}
 
         {serverError ? (

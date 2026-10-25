@@ -7,6 +7,7 @@ import type { OperationStep } from "@/contract.js";
 import { audit } from "@/lib/audit.js";
 import { CloudflareError, HUB_DNS_COMMENT_PREFIX, type CfDomain } from "@/lib/cloudflare/types.js";
 import { HttpError } from "@/lib/http.js";
+import { PhpAgentOpError, PhpAgentUnavailableError } from "@/lib/php-agent/client.js";
 import { PLACEHOLDER_HTML } from "@/lib/placeholder.js";
 import { prisma } from "@/lib/prisma.js";
 import { applyRetention, createVersion, deployVersion, hostnameOf } from "@/lib/publish.js";
@@ -239,7 +240,7 @@ const PHP_OPERATION_STEPS: Record<OperationKind, StepDef[]> = {
   // Ordre anti-orphelin, comme pour Pages : CNAME d'abord, puis le site sur le CT.
   DISABLE: [dnsRemoveStep, phpDisableStep, offlineStep],
   DELETE: [dnsRemoveStep, phpRemoveStep, localDeleteStep],
-  PUBLISH: [uploadStep, retentionStep],
+  PUBLISH: [{ ...uploadStep, label: "Fichiers envoyés au serveur des sites PHP" }, retentionStep],
 };
 
 export const OPERATION_STEPS: Record<OperationKind, StepDef[]> = {
@@ -275,6 +276,8 @@ export function parseSteps(raw: string): OperationStep[] {
 
 function displayableError(err: unknown): string {
   if (err instanceof StepError || err instanceof CloudflareError || err instanceof HttpError) return err.message;
+  // Refus ou silence de l'agent du CT PHP : son message dit la cause (réglage, site absent, injoignable).
+  if (err instanceof PhpAgentOpError || err instanceof PhpAgentUnavailableError) return err.message;
   console.error("[opération] erreur inattendue", err);
   return "erreur inattendue (voir le journal du serveur).";
 }

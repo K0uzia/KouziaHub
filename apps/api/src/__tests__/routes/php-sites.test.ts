@@ -156,6 +156,20 @@ describe("site PHP de bout en bout", () => {
     expect(mem.nodes.has("/etc/nginx/kouziaphp-sites/mytakumi.conf.off")).toBe(true);
   });
 
+  it("agent injoignable à la publication : étape PHP nommée comme telle, cause dite (pas « erreur inattendue »)", async () => {
+    const id = ((await create()).json() as SiteDetail).id;
+    await settle(hub);
+    await uploadFiles(hub, id, [{ filename: "public/index.php", content: "<?php echo 1;" }]);
+    await new Promise((resolve) => server.close(resolve));
+    await post(id, "publish");
+    await settle(hub);
+    const op = (await detail(id)).operation as Operation;
+    expect(op).toMatchObject({ kind: "PUBLISH", status: "FAILED" });
+    expect(op.steps.map((s) => s.label)).toEqual(["Fichiers envoyés au serveur des sites PHP", "Anciennes versions purgées"]);
+    expect(op.error).toMatch(/^Fichiers envoyés au serveur des sites PHP : .*injoignable/i);
+    expect(op.error).not.toMatch(/inattendue/);
+  });
+
   it("coupure, rallumage, suppression : CNAME retiré puis reposé, site retiré du CT", async () => {
     const id = ((await create()).json() as SiteDetail).id;
     await settle(hub);
