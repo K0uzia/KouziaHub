@@ -29,6 +29,7 @@ import { monitorRoutes } from "@/routes/monitor.js";
 import { pushRoutes } from "@/routes/push.js";
 import { settingsRoutes } from "@/routes/settings.js";
 import { phpRoutes } from "@/routes/php.js";
+import { phpSiteRoutes } from "@/routes/php-site.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -132,6 +133,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   await app.register(pushRoutes(services));
   await app.register(settingsRoutes);
   await app.register(phpRoutes(services));
+  await app.register(phpSiteRoutes(services));
 
   // Par le tunnel : état seulement, comme l'ERP. Le détail (migrations, veille, Intl) ne sert qu'à hubctl
   // status, appel local du CT.

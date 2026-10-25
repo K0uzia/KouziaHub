@@ -1,6 +1,6 @@
 import type { Operation as OperationRow, Site } from "@prisma/client";
 import { siteExtras } from "@/lib/site-extras.js";
-import { DEFAULT_PHP_VERSION, persistentDirsOf } from "@/lib/php-sites.js";
+import { DEFAULT_PHP_VERSION, linesOf, persistentDirsOf } from "@/lib/php-sites.js";
 import { THUMBNAIL_FOCUS, type CatalogResponse, type Notice, type Operation, type SiteDetail, type SiteMonitorBadge, type SiteSummary, type ThumbnailFocus } from "@/contract.js";
 import { siteBadges } from "@/lib/monitor/view.js";
 import { prisma } from "@/lib/prisma.js";
@@ -121,6 +121,10 @@ export async function siteDetail(siteId: string, services: Services): Promise<Si
             version: site.phpVersion ?? DEFAULT_PHP_VERSION,
             publicDir: site.phpPublicDir ?? "",
             persistentDirs: persistentDirsOf(site),
+            publicPersistentDirs: linesOf(site.phpPublicPersistentDirs),
+            memoryLimitMb: site.phpMemoryLimitMb,
+            uploadMaxMb: site.phpUploadMaxMb,
+            maxExecutionSec: site.phpMaxExecutionSec,
             httpsOpen: site.phpHttpsOpen,
             imapOpen: site.phpImapOpen,
           }

@@ -18,6 +18,7 @@ import { generateReport, reportContext } from "@/lib/monitor/report.js";
 import { prisma } from "@/lib/prisma.js";
 import { backfillSiteTargets } from "@/lib/monitor/targets.js";
 import { phpAgentFromEnv, type PhpAgentClient } from "@/lib/php-agent/client.js";
+import { startPhpBackups } from "@/lib/php-app.js";
 import { phpDnsTarget } from "@/lib/php-sites.js";
 
 export type Services = {
@@ -147,6 +148,8 @@ export async function startBackground(services: Services): Promise<void> {
   const gc = setInterval(() => void services.blobs.gc().catch(() => undefined), DAY_MS);
   for (const t of [first, daily, gc]) t.unref();
   services.timers.push(first, daily, gc);
+  // Bases des sites PHP : export de nuit, rangé dans les données du hub (incluses dans sa sauvegarde chiffrée).
+  services.timers.push(startPhpBackups(services));
   const backfilled = await backfillSiteTargets(services.sitesDomain).catch((err) => {
     console.error("[surveillance] rattrapage des cibles impossible", err instanceof Error ? err.message : err);
     return 0;

@@ -121,6 +121,14 @@ model Site {
   /// Site PHP : sortie HTTPS permise (API de paiement en test, suivi de colis), relève IMAP (993) permise.
   phpHttpsOpen     Boolean      @default(true)
   phpImapOpen      Boolean      @default(false)
+  /// Site PHP, lot P4 : variables saisies (JSON chiffré AES-GCM avec ENCRYPTION_KEY ; jamais les DB_*, remplies par
+  /// l'agent) ; dossiers persistants publics (un par ligne, dans le dossier public, servis sans exécution) ; limites :
+  /// envoi (1 à 128 Mo, corps 2 fois), mémoire par requête (64 à 1024 Mo), durée d'une requête (5 à 120 s).
+  phpEnv           String?
+  phpPublicPersistentDirs String?
+  phpUploadMaxMb   Int          @default(32)
+  phpMemoryLimitMb Int          @default(256)
+  phpMaxExecutionSec Int        @default(30)
   /// Adresse <projet>.pages.dev renvoyée par Cloudflare : cible du CNAME.
   pagesSubdomain   String?
   dnsRecordId      String?

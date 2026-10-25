@@ -320,15 +320,26 @@ export function siteOperations(ctx) {
     return JSON.parse(await sys.readFile(path.posix.join(paths.confDir, "sites", `${slug}.json`)));
   };
 
+  /** Écrit les configurations du site ; vrai si celles de PHP (pool, limites du service) ont changé. */
   async function writeConfigs(spec) {
     await sys.writeFile(path.posix.join(paths.confDir, "sites", `${spec.slug}.json`), `${JSON.stringify(spec, null, 2)}\n`, 0o600);
-    await sys.writeFile(path.posix.join(paths.confDir, "fpm", `${spec.slug}.conf`), fpmConf(spec, paths), 0o644);
-    await sys.writeFile(path.posix.join(paths.confdDir, serviceOf(spec.slug)), serviceConf(spec, ctx.limitsEffective()), 0o644);
+    let phpChanged = false;
+    for (const [file, text] of [
+      [path.posix.join(paths.confDir, "fpm", `${spec.slug}.conf`), fpmConf(spec, paths)],
+      [path.posix.join(paths.confdDir, serviceOf(spec.slug)), serviceConf(spec, ctx.limitsEffective())],
+    ]) {
+      const before = (await sys.exists(file)) ? await sys.readFile(file) : null;
+      if (before !== text) {
+        phpChanged = true;
+        await sys.writeFile(file, text, 0o644);
+      }
+    }
     const conf = path.posix.join(paths.nginxSitesDir, `${spec.slug}.conf`);
     const off = `${conf}.off`;
     // Site coupé : sa configuration reste désactivée (.off) jusqu'au rallumage.
     const target = (await sys.exists(off)) ? off : conf;
     await sys.writeFile(target, nginxConf(spec, paths), 0o644);
+    return phpChanged;
   }
 
   async function reloadNginx() {
@@ -450,8 +461,12 @@ export function siteOperations(ctx) {
         await sys.mkdir(p, mode);
         await sys.chown(p, owner, group);
       }
-      await writeConfigs(spec);
+      const phpChanged = await writeConfigs(spec);
       if (!(await sys.exists(envFile(spec.slug)))) await writeEnv(spec.slug);
+      // Réglages de PHP changés (limites, mémoire du groupe de contrôle) : appliqués par un redémarrage, seulement là.
+      if (phpChanged && (await sys.run("/sbin/rc-service", [serviceOf(spec.slug), "status"])).code === 0) {
+        await run("/sbin/rc-service", [serviceOf(spec.slug), "restart"], "Redémarrage de PHP (réglages changés)");
+      }
       const init = path.posix.join(paths.initDir, serviceOf(spec.slug));
       if (!(await sys.exists(init))) await sys.symlink(path.posix.join(paths.initDir, "kouziaphp-site"), init);
       await reloadNginx();

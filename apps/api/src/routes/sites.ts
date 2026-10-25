@@ -31,7 +31,15 @@ const slugField = z.string().trim().toLowerCase().max(64);
 const hostingFields = {
   hosting: z.enum(["pages", "php"]).optional(),
   php: z
-    .object({ version: z.string().max(10).optional(), publicDir: z.string().max(200).optional(), persistentDirs: z.array(z.string().max(200)).max(10).optional() })
+    .object({
+      version: z.string().max(10).optional(),
+      publicDir: z.string().max(200).optional(),
+      persistentDirs: z.array(z.string().max(200)).max(10).optional(),
+      publicPersistentDirs: z.array(z.string().max(200)).max(10).optional(),
+      memoryLimitMb: z.number().int().optional(),
+      uploadMaxMb: z.number().int().optional(),
+      maxExecutionSec: z.number().int().optional(),
+    })
     .strict()
     .optional(),
 };
@@ -120,7 +128,17 @@ export function sitesRoutes(services: Services): FastifyPluginAsync {
           erpClientId: input.kind === "CLIENT" ? input.erpClientId : null,
           label: input.label ?? null,
           ...(php
-            ? { hosting: "php", pagesProject: null, phpVersion: php.php, phpPublicDir: php.publicDir, phpPersistentDirs: php.persistentDirs.join("\n") || null }
+            ? {
+                hosting: "php",
+                pagesProject: null,
+                phpVersion: php.php,
+                phpPublicDir: php.publicDir,
+                phpPersistentDirs: php.persistentDirs.join("\n") || null,
+                phpPublicPersistentDirs: php.publicPersistentDirs.join("\n") || null,
+                phpMemoryLimitMb: php.memoryLimitMb,
+                phpUploadMaxMb: php.uploadMaxMb,
+                phpMaxExecutionSec: php.maxExecutionSec,
+              }
             : { pagesProject: projectNameFor(input.slug) }),
           state: "CREATING",
         },

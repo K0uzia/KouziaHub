@@ -1,6 +1,9 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { createReadStream } from "node:fs";
-import { Readable } from "node:stream";
+import { createReadStream, createWriteStream } from "node:fs";
+import { rm } from "node:fs/promises";
+import { Readable, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { z } from "zod";
 import type { PhpAgentState } from "@/contract.js";
 
@@ -30,6 +33,9 @@ export class PhpAgentOpError extends Error {
 // contrôle anti-fuite 30 s (l'agent borne chaque sonde de nginx à 2 s).
 const OPERATION_TIMEOUT_MS = 60_000;
 const CHECK_TIMEOUT_MS = 30_000;
+// Lot P4 : dump et restauration d'une base (30 min côté agent), script du projet (120 s côté agent).
+const DUMP_TIMEOUT_MS = 31 * 60_000;
+const SCRIPT_TIMEOUT_MS = 150_000;
 
 const sha256Hex = (body: string) => createHash("sha256").update(body).digest("hex");
 
@@ -62,6 +68,8 @@ const stateSchema = z.object({
   cgroups: z.object({ result: z.enum(["ok", "echec"]).nullable(), checkedAt: z.string().max(40).nullable() }),
   lastUpgrade: z.string().max(40).nullable(),
   disk: z.object({ freeBytes: z.number().nonnegative(), totalBytes: z.number().nonnegative() }).nullable(),
+  // Ajoutée avec le lot P4 : absente d'un agent plus ancien.
+  memoryBytes: z.number().nonnegative().nullable().default(null),
   sites: z.number().int().nonnegative(),
   time: z.string().max(40),
 });
@@ -192,10 +200,157 @@ export class PhpAgentClient {
   async removeSite(slug: string): Promise<void> {
     await this.request("DELETE", `/v1/sites/${slug}`, undefined, undefined, OPERATION_TIMEOUT_MS);
   }
+
+  // --- Lot P4 : variables, base, script du projet ---
+
+  /** Variables saisies (jamais les DB_*, remplies par l'agent) : réécrit le .env du site. */
+  async setEnv(slug: string, vars: Record<string, string>): Promise<void> {
+    await this.request("PUT", `/v1/sites/${slug}/env`, { vars }, undefined, OPERATION_TIMEOUT_MS);
+  }
+
+  async dbState(slug: string): Promise<PhpDbState> {
+    return parseDbState(await this.request("GET", `/v1/sites/${slug}/base`, undefined, undefined, OPERATION_TIMEOUT_MS));
+  }
+
+  async createDb(slug: string): Promise<PhpDbState> {
+    return parseDbState(await this.request("POST", `/v1/sites/${slug}/base`, undefined, undefined, OPERATION_TIMEOUT_MS));
+  }
+
+  async resetDb(slug: string): Promise<PhpDbState> {
+    return parseDbState(await this.request("POST", `/v1/sites/${slug}/base/reinitialiser`, undefined, undefined, OPERATION_TIMEOUT_MS));
+  }
+
+  /** Import d'un fichier SQL (.sql, ou .sql.gz si gz), envoyé en flux. */
+  async importDb(slug: string, file: { file: string; sha256: string }, gz: boolean): Promise<PhpDbState> {
+    return parseDbState(await this.request("PUT", `/v1/sites/${slug}/base/import/${gz ? "sqlgz" : "sql"}`, undefined, file));
+  }
+
+  /** Dump avant publication de la version n (rien sans base). */
+  async dumpBefore(slug: string, version: number): Promise<{ dumped: boolean }> {
+    const parsed = z.object({ dumped: z.boolean() }).safeParse(await this.request("POST", `/v1/sites/${slug}/base/dump`, { version }, undefined, DUMP_TIMEOUT_MS));
+    if (!parsed.success) throw new PhpAgentUnavailableError("Serveur des sites PHP : réponse du dump illisible.");
+    return parsed.data;
+  }
+
+  async restoreDump(slug: string, version: number): Promise<PhpDbState> {
+    return parseDbState(await this.request("POST", `/v1/sites/${slug}/base/restaurer`, { version }, undefined, DUMP_TIMEOUT_MS));
+  }
+
+  /** Lance un script du projet ; l'entrée standard (un mot de passe, par exemple) n'est jamais journalisée. */
+  async runScript(slug: string, path: string, args: string[], stdin: string): Promise<PhpScriptResult> {
+    const parsed = scriptSchema.safeParse(await this.request("POST", `/v1/sites/${slug}/script`, { path, args, stdin }, undefined, SCRIPT_TIMEOUT_MS));
+    if (!parsed.success) throw new PhpAgentUnavailableError("Serveur des sites PHP : résultat du script illisible.");
+    return parsed.data;
+  }
+
+  /**
+   * Export de la base (.sql.gz) écrit dans « file » : empreinte annoncée par l'agent, signée avec le nonce de la
+   * requête, recalculée ici. Fichier retiré si elle diffère.
+   */
+  async exportDb(slug: string, file: string): Promise<{ sha256: string; size: number }> {
+    const path = `/v1/sites/${slug}/base/export`;
+    const timestamp = String(Math.floor(this.now() / 1000));
+    const nonce = randomBytes(16).toString("hex");
+    let res: Response;
+    try {
+      res = await this.fetchImpl(this.base + path, {
+        method: "GET",
+        headers: {
+          "x-kouzia-hub-timestamp": timestamp,
+          "x-kouzia-hub-nonce": nonce,
+          "x-kouzia-hub-signature": signAgentRequest(this.#secret, timestamp, nonce, "GET", path, ""),
+        },
+        signal: AbortSignal.timeout(DUMP_TIMEOUT_MS),
+      });
+    } catch (err) {
+      if (err instanceof Error && err.name === "TimeoutError") throw new PhpAgentUnavailableError(`Serveur des sites PHP : pas de réponse en ${DUMP_TIMEOUT_MS / 1000} s (GET ${path}).`);
+      throw new PhpAgentUnavailableError();
+    }
+    if (res.status !== 200 || !res.body) {
+      // Refus : réponse JSON signée ordinaire.
+      const text = await res.text().catch(() => "");
+      if (!sameText(res.headers.get("x-kouzia-agent-signature") ?? "", signAgentResponse(this.#secret, nonce, res.status, text))) {
+        throw new PhpAgentUnavailableError("Serveur des sites PHP : réponse non signée, ignorée.");
+      }
+      let message = `opération refusée (${res.status})`;
+      try {
+        const e = (JSON.parse(text) as { error?: unknown }).error;
+        if (typeof e === "string") message = e;
+      } catch {
+        // Corps illisible : message générique.
+      }
+      throw new PhpAgentOpError(res.status, `Serveur des sites PHP : ${message}`);
+    }
+    const declared = res.headers.get("x-kouzia-agent-content-sha256") ?? "";
+    if (!/^[0-9a-f]{64}$/.test(declared) || !sameText(res.headers.get("x-kouzia-agent-signature") ?? "", signAgentResponseHash(this.#secret, nonce, 200, declared))) {
+      await res.body.cancel().catch(() => undefined);
+      throw new PhpAgentUnavailableError("Serveur des sites PHP : export non signé, ignoré.");
+    }
+    const hash = createHash("sha256");
+    let size = 0;
+    const counter = new Transform({
+      transform(chunk: Buffer, _enc, done) {
+        hash.update(chunk);
+        size += chunk.length;
+        done(null, chunk);
+      },
+    });
+    try {
+      await pipeline(Readable.fromWeb(res.body as unknown as WebReadableStream), counter, createWriteStream(file, { mode: 0o600 }));
+    } catch {
+      await rm(file, { force: true });
+      throw new PhpAgentUnavailableError("Serveur des sites PHP : export interrompu.");
+    }
+    const sha256 = hash.digest("hex");
+    if (sha256 !== declared) {
+      await rm(file, { force: true });
+      throw new PhpAgentUnavailableError("Serveur des sites PHP : export altéré en route (empreinte différente).");
+    }
+    return { sha256, size };
+  }
+}
+
+export type PhpDbState = { exists: boolean; name: string | null; bytes: number; tables: number; dumps: number[] };
+export type PhpScriptResult = { script: string; code: number; timedOut: boolean; durationMs: number; output: string };
+
+const dbStateSchema = z.object({
+  exists: z.boolean(),
+  name: z.string().max(64).nullable(),
+  bytes: z.number().nonnegative(),
+  tables: z.number().int().nonnegative(),
+  dumps: z.array(z.number().int().positive()).max(50),
+});
+const scriptSchema = z.object({
+  script: z.string().max(200),
+  code: z.number().int(),
+  timedOut: z.boolean(),
+  durationMs: z.number().nonnegative(),
+  output: z.string().max(70_000),
+});
+
+function parseDbState(raw: unknown): PhpDbState {
+  const parsed = dbStateSchema.safeParse(raw);
+  if (!parsed.success) throw new PhpAgentUnavailableError("Serveur des sites PHP : état de la base illisible.");
+  return parsed.data;
+}
+
+export function signAgentResponseHash(secret: string, nonce: string, status: number, bodySha256: string): string {
+  return `sha256=${createHmac("sha256", secret).update(`${nonce}.${status}.${bodySha256}`).digest("hex")}`;
 }
 
 /** Réglages d'un site PHP envoyés à l'agent (validés de nouveau par lui). */
-export type PhpSiteSpec = { slug: string; hostname: string; php: string; publicDir: string; persistentDirs: string[]; indexing: boolean };
+export type PhpSiteSpec = {
+  slug: string;
+  hostname: string;
+  php: string;
+  publicDir: string;
+  persistentDirs: string[];
+  publicPersistentDirs: string[];
+  memoryLimitMb: number;
+  uploadMaxMb: number;
+  maxExecutionSec: number;
+  indexing: boolean;
+};
 
 /** Client si PHP_AGENT_URL est posée (secret obligatoire), sinon null : la fonction PHP n'est pas encore installée. */
 export function phpAgentFromEnv(env: NodeJS.ProcessEnv = process.env): PhpAgentClient | null {

@@ -2,6 +2,7 @@ import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import type { Site } from "@prisma/client";
 import { refreshDirty } from "@/lib/files.js";
+import { decrypt } from "@/lib/crypto.js";
 import { HttpError } from "@/lib/http.js";
 import { PhpAgentOpError, PhpAgentUnavailableError, type PhpAgentClient, type PhpSiteSpec } from "@/lib/php-agent/client.js";
 import type { PhpSiteSettings } from "@/contract.js";
@@ -24,7 +25,15 @@ export function agentOf(services: Services): PhpAgentClient {
   return services.phpAgent;
 }
 
-export const persistentDirsOf = (site: Pick<Site, "phpPersistentDirs">) => (site.phpPersistentDirs ?? "").split("\n").map((d) => d.trim()).filter(Boolean);
+/** Variables saisies d'un site PHP (JSON chiffré), {} si aucune. */
+export function envOf(site: Pick<Site, "phpEnv">): Record<string, string> {
+  if (!site.phpEnv) return {};
+  const parsed = JSON.parse(decrypt(site.phpEnv)) as unknown;
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, string>) : {};
+}
+
+export const linesOf =(text: string | null) => (text ?? "").split("\n").map((d) => d.trim()).filter(Boolean);
+export const persistentDirsOf = (site: Pick<Site, "phpPersistentDirs">) => linesOf(site.phpPersistentDirs);
 
 export function specOf(site: Site, sitesDomain: string): PhpSiteSpec {
   return {
@@ -33,6 +42,10 @@ export function specOf(site: Site, sitesDomain: string): PhpSiteSpec {
     php: site.phpVersion ?? DEFAULT_PHP_VERSION,
     publicDir: site.phpPublicDir ?? "",
     persistentDirs: persistentDirsOf(site),
+    publicPersistentDirs: linesOf(site.phpPublicPersistentDirs),
+    memoryLimitMb: site.phpMemoryLimitMb,
+    uploadMaxMb: site.phpUploadMaxMb,
+    maxExecutionSec: site.phpMaxExecutionSec,
     indexing: site.allowIndexing,
   };
 }
@@ -54,7 +67,11 @@ export async function deployPhpVersion(services: Services, siteId: string, versi
   const version = await prisma.version.findFirstOrThrow({ where: { id: versionId, siteId }, include: { files: true } });
   if (version.status === "PURGED") throw new HttpError(409, "Version purgée : ses fichiers ne sont plus gardés.");
   await agent.upsertSite(specOf(site, services.sitesDomain));
+  // Variables reposées à chaque publication : un CT reconstruit retrouve son .env sans autre geste.
+  if (site.phpEnv) await agent.setEnv(site.slug, envOf(site));
   await prisma.version.update({ where: { id: versionId }, data: { status: "UPLOADING", error: null } });
+  // Dump de la base avant la bascule (le nouveau code peut migrer le schéma) : restaurable avec la version.
+  await agent.dumpBefore(site.slug, version.number);
 
   try {
     await agent.publish(site.slug, version.number);
@@ -114,6 +131,10 @@ export async function phpSettingsFor(services: Services, slug: string, input: Pa
         php: input.version ?? DEFAULT_PHP_VERSION,
         publicDir: input.publicDir ?? "public",
         persistentDirs: input.persistentDirs ?? [],
+        publicPersistentDirs: input.publicPersistentDirs ?? [],
+        memoryLimitMb: input.memoryLimitMb,
+        uploadMaxMb: input.uploadMaxMb,
+        maxExecutionSec: input.maxExecutionSec,
       },
       { domain: services.sitesDomain, phpInstalled: () => installed },
     );

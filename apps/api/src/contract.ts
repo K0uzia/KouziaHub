@@ -156,14 +156,56 @@ export type Notice = {
 
 export type SlugCheck = { slug: string; ok: boolean; reason: string | null };
 
-/** Site PHP (docs/cadrage.md, section 11) : version de PHP, dossier public, dossiers persistants (gardés, jamais servis). */
-export type PhpSiteSettings = { version: string; publicDir: string; persistentDirs: string[] };
+/**
+ * Site PHP (docs/cadrage.md, section 11) : version de PHP, dossier public, dossiers persistants (gardés, jamais servis),
+ * dossiers persistants publics (dans le dossier public, servis sans exécution : images envoyées par le site),
+ * limites par site (mémoire par requête, envoi, durée d'une requête).
+ */
+export type PhpSiteSettings = {
+  version: string;
+  publicDir: string;
+  persistentDirs: string[];
+  publicPersistentDirs: string[];
+  memoryLimitMb: number;
+  uploadMaxMb: number;
+  maxExecutionSec: number;
+};
+
+/** Bornes des limites d'un site PHP (mêmes que l'agent). */
+export const PHP_LIMITS = {
+  memoryLimitMb: { min: 64, max: 1024, default: 256 },
+  uploadMaxMb: { min: 1, max: 128, default: 32 },
+  maxExecutionSec: { min: 5, max: 120, default: 30 },
+} as const;
+
+// GET /api/sites/:id/php/variables et PUT (lot P4). Valeurs saisies rendues pour l'écran (masquées par défaut) ;
+// celles de la base, remplies par l'agent, en lecture seule, mot de passe jamais rendu.
+export type PhpEnvVar = { name: string; value: string };
+export type PhpEnvView = {
+  vars: PhpEnvVar[];
+  /** DB_* remplies d'office (null : pas de base). DB_PASSWORD rendue masquée. */
+  db: PhpEnvVar[] | null;
+  /** Variables proposées absentes (APP_URL, MAIL_CATCHER...), avec leur valeur conseillée. */
+  suggestions: Array<PhpEnvVar & { why: string }>;
+};
+
+// GET /api/sites/:id/php/base : état de la base du site, lu sur le CT.
+export type PhpDbView = { exists: boolean; name: string | null; bytes: number; tables: number; dumps: number[] };
+
+// GET /api/sites/:id/php/scripts : scripts .php de la version servie (hors dossier public d'abord).
+export type PhpScriptsView = { scripts: string[]; publishedVersion: number | null };
+// POST /api/sites/:id/php/script
+export type PhpScriptInput = { path: string; args?: string[]; stdin?: string };
+export type PhpScriptRun = { script: string; code: number; timedOut: boolean; durationMs: number; output: string };
 
 /** hosting absent : « pages » (Cloudflare Pages). « php » : CT des sites PHP, réglages php facultatifs (défauts sûrs). */
 export type CreateSiteInput = (
   | { kind: "CLIENT"; erpClientId: string; slug: string; label?: string | null }
   | { kind: "PERSO"; slug: string; label: string }
 ) & { hosting?: "pages" | "php"; php?: Partial<PhpSiteSettings> };
+
+// PATCH /api/sites/:id/php : réglages d'un site PHP après sa création (reposés sur le CT aussitôt).
+export type UpdatePhpSettingsInput = Partial<PhpSiteSettings>;
 
 /**
  * Un changement de finalDomain, canonicalHost ou notFoundPage régénère le .htaccess s'il est encore
@@ -853,6 +895,8 @@ export type PhpAgentState = {
   /** Dernière mise à jour de sécurité (AAAA-MM-JJ), null si jamais. */
   lastUpgrade: string | null;
   disk: { freeBytes: number; totalBytes: number } | null;
+  /** Mémoire du CT (limite posée dans Proxmox), null si illisible ou agent plus ancien. */
+  memoryBytes: number | null;
   sites: number;
   /** Horloge du CT (ISO). */
   time: string;
@@ -861,4 +905,4 @@ export type PhpAgentState = {
 export type PhpServerStatus =
   | { configured: false }
   | { configured: true; reachable: false; error: string }
-  | { configured: true; reachable: true; state: PhpAgentState };
+  | { configured: true; reachable: true; state: PhpAgentState; sitesMemoryMb: number };

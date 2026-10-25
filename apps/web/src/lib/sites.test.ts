@@ -128,13 +128,13 @@ describe("phpHostingChoice : choix PHP à la création", () => {
   const state = { php: ["8.3"] } as unknown as PhpAgentState;
 
   it("propose les versions quand l'agent répond", () => {
-    expect(phpHostingChoice({ configured: true, reachable: true, state }, false)).toEqual({ versions: ["8.3"], unavailable: null });
+    expect(phpHostingChoice({ configured: true, reachable: true, state, sitesMemoryMb: 512 }, false)).toEqual({ versions: ["8.3"], unavailable: null });
   });
 
   it("dit pourquoi PHP manque, au lieu de le masquer sans un mot", () => {
     expect(phpHostingChoice({ configured: false }, false)?.unavailable).toMatch(/pas encore relié au hub/);
     expect(phpHostingChoice({ configured: true, reachable: false, error: "Serveur des sites PHP injoignable." }, false)?.unavailable).toMatch(/injoignable/);
-    expect(phpHostingChoice({ configured: true, reachable: true, state: { php: [] } as unknown as PhpAgentState }, false)?.unavailable).toMatch(/aucune version/);
+    expect(phpHostingChoice({ configured: true, reachable: true, sitesMemoryMb: 512, state: { php: [] } as unknown as PhpAgentState }, false)?.unavailable).toMatch(/aucune version/);
     expect(phpHostingChoice(null, true)?.unavailable).toMatch(/illisible/);
   });
 
