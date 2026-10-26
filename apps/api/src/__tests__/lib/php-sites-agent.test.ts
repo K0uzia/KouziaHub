@@ -38,7 +38,7 @@ const spec = { slug: "mytakumi", hostname: "mytakumi.kouzia.com", php: "8.3", pu
 
 describe("réglages d'un site PHP (validation stricte, l'agent tourne en root)", () => {
   it("accepte le cas MyTakumi ; refuse slug, nom d'hôte, version de PHP et dossiers douteux", () => {
-    expect(checkSiteSpec(spec, ctx)).toEqual({ ...spec, publicPersistentDirs: [], memoryLimitMb: 256, uploadMaxMb: 32, maxExecutionSec: 30, cron: null, indexing: false });
+    expect(checkSiteSpec(spec, ctx)).toEqual({ ...spec, publicPersistentDirs: [], memoryLimitMb: 256, uploadMaxMb: 32, maxExecutionSec: 30, cron: null, indexing: false, imapOpen: false, httpsOpen: true });
     for (const [over, msg] of [
       [{ slug: "../etc" }, /Identifiant/],
       [{ hostname: "mytakumi.evil.com" }, /Nom d'hôte attendu/],

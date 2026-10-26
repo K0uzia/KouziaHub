@@ -436,6 +436,8 @@ export type PhpSiteSpec = {
   maxExecutionSec: number;
   cron: { script: string; every: string } | null;
   indexing: boolean;
+  imapOpen: boolean;
+  httpsOpen: boolean;
 };
 
 /** Client si PHP_AGENT_URL est posée (secret obligatoire), sinon null : la fonction PHP n'est pas encore installée. */

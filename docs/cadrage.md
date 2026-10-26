@@ -645,8 +645,9 @@ CT « kouziahub » (hub) ── réseau du Proxmox, port de l'agent ──┘
 But : tester en conditions réelles, sans jamais toucher un vrai client ni un vrai paiement.
 
 - **Jamais d'envoi direct d'e-mail** depuis le CT PHP :
-  - `sendmail_path` de chaque pool pointe vers un capteur de l'agent, qui range le message dans le dossier du site (100 derniers gardés) ;
-  - pour les applications qui parlent SMTP, le capteur écoute aussi sur `127.0.0.1:1025`, et le `.env` reçoit `MAIL_HOST`/`MAIL_PORT` vers lui ;
+  - le capteur de l'agent écoute en SMTP sur `127.0.0.1:1025` ; il reconnaît le site par le compte (UID) de la connexion et refuse tout autre compte ;
+  - `sendmail_path` de chaque pool (`mail()` de PHP) remet le message à ce même capteur ;
+  - les messages sont rangés par l'agent hors du dossier du site (`/var/lib/kouziaphp/mail/<site>/`, à root), 100 et 100 Mio au plus par site, 25 Mo par message ;
   - le pare-feu bloque de toute façon le SMTP sortant ;
   - Mailpit n'existe pas dans les paquets Alpine (vérifié le 24/10/2026) : le capteur fait partie de l'agent.
 - **Écran « E-mails capturés »** dans la fiche du site :

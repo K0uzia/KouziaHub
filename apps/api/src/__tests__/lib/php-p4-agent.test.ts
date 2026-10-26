@@ -465,3 +465,39 @@ describe("tâche planifiée et journaux (lot P5)", () => {
     expect((await ops.cronState("mytakumi")).last).toBeNull();
   });
 });
+
+describe("sortie réseau par site (lot P5) : relève IMAP et HTTPS", () => {
+  it("listes d'UID recalculées ; pare-feu reposé seulement si elles changent ; refermées quand le site est coupé ou retiré", async () => {
+    const { m, ops } = cluster();
+    const net = (f: string) => text(m, `/etc/kouziaphp/net/${f}`) ?? "";
+    const firewall = () => m.runs.filter((r) => r === "/bin/sh /usr/local/lib/kouziaphp/firewall.sh").length;
+    await ops.upsert({ ...spec, imapOpen: true });
+    await ops.upsert({ ...spec, slug: "boutique", hostname: "boutique.kouzia.com", publicPersistentDirs: [], httpsOpen: false });
+    const uid = (slug: string) => text(m, "/etc/passwd")!.split("\n").find((l) => l.startsWith(`php-${slug}:`))!.split(":")[2];
+    expect(net("imap-open")).toBe(`${uid("mytakumi")}\n`);
+    expect(net("https-closed")).toBe(`${uid("boutique")}\n`);
+    const before = firewall();
+    expect(before).toBe(2);
+
+    // Même réglage : rien ne change, pare-feu non relancé.
+    await ops.upsert({ ...spec, imapOpen: true });
+    expect(firewall()).toBe(before);
+
+    // Site coupé : 993 refermé, 443 fermé aussi ; rallumé : selon ses réglages.
+    await ops.setEnabled("mytakumi", false);
+    expect(net("imap-open")).toBe("");
+    expect(net("https-closed").split("\n").filter(Boolean).sort()).toEqual([uid("boutique"), uid("mytakumi")].sort());
+    await ops.setEnabled("mytakumi", true);
+    expect(net("imap-open")).toBe(`${uid("mytakumi")}\n`);
+    expect(net("https-closed")).toBe(`${uid("boutique")}\n`);
+
+    // Interrupteur coupé dans le hub : refermé.
+    await ops.upsert({ ...spec, imapOpen: false });
+    expect(net("imap-open")).toBe("");
+    expect(firewall()).toBe(before + 3);
+
+    // Pare-feu refusé par le CT : erreur dite, pas de silence.
+    const failing = cluster((file, args) => (file === "/bin/sh" ? { code: 1, stdout: "", stderr: "nftables refusé" } : file === "/sbin/rc-service" && args[1] === "status" ? { code: 3, stdout: "", stderr: "" } : { code: 0, stdout: "", stderr: "" }));
+    await expect(failing.ops.upsert({ ...spec, imapOpen: true })).rejects.toThrow(/Pare-feu du CT .*nftables refusé/);
+  });
+});

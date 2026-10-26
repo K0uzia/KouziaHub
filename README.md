@@ -358,6 +358,7 @@ Menu **Logiciels** : le catalogue des logiciels vendus sous licence, présenté 
 | Notifications | « Activer sur cet appareil », notification de test, appareils abonnés (« Retirer ») |
 | Contrôles | Cloudflare réel ou simulé, projets utilisés, ERP joignable, vignettes ; **orphelins** (enregistrement DNS, projet ou site sans correspondance) avec « Vérifier maintenant » |
 | Stockage | Place utilisée (par site et en tout) ; « Libérer de la place » : envois en cours, fichiers temporaires, vignettes capturées, fichiers orphelins. Les fichiers des sites et leurs versions n'y sont jamais touchés (voir 5.10) |
+| Envoi d'e-mails | Compte SMTP du hub (mot de passe jamais réaffiché), « Envoyer un e-mail d'essai ». Sert à remettre les e-mails capturés des sites PHP (11.12) |
 | Journal | Toutes les actions, avec date, site, résultat et détail |
 
 ---
@@ -755,4 +756,35 @@ Fiche du site, onglet **Application** (sites PHP seulement) :
 | 7 | Ouvrir `https://mytakumi.kouzia.com`, puis `/admin/` | la boutique s'affiche ; connexion à l'administration avec ce compte |
 | 8 | Back-office de MyTakumi : envoyer une image d'œuvre | l'image s'affiche ; après une nouvelle publication, elle est toujours là |
 | 9 | Base : Exporter | un fichier `mytakumi-base-AAAA-MM-JJ.sql.gz` téléchargé |
+
+### 11.12 Exploitation d'un site PHP (lot P5)
+
+Fiche du site, onglet **Application** :
+
+- **Tâche planifiée** : un script `.php` de la version servie et une fréquence (5, 15 ou 30 minutes, toutes les heures, chaque nuit vers 3 h). crond la lance sous le compte du site, sans chevauchement (un passage encore en cours fait sauter le suivant) et avec une durée maximale (4 min à 2 h selon la fréquence). Dernier passage, code de sortie et fin de la sortie dans la fiche. Coupée quand le site est coupé, remise au rallumage.
+- **Journaux** : erreurs PHP, PHP-FPM, erreurs nginx et sortie de la tâche planifiée, 200 dernières lignes, téléchargeables ; les valeurs du `.env` y sont masquées.
+- **Accès réseau** : relève IMAP (port 993) fermée par défaut, sortie HTTPS (443) ouverte par défaut, pour ce seul site. Ouvrir la relève demande une confirmation : la version de travail lira alors la vraie boîte. Les deux se referment quand le site est coupé. L'envoi d'e-mails reste toujours fermé.
+
+Onglet **E-mails** :
+
+- Tout ce que le site envoie (fonction `mail()` de PHP ou SMTP vers `127.0.0.1:1025`) est **capturé**, jamais remis au destinataire d'origine. 100 e-mails et 100 Mio gardés par site (les plus anciens retirés d'abord), 25 Mo par e-mail. Ils sont rangés par l'agent hors du dossier du site.
+- Lecture : rendu HTML dans un cadre isolé (ni script ni formulaire ; images distantes seulement sur « Les afficher »), largeur téléphone ou ordinateur, version texte, en-têtes complets, pièces jointes et `.eml` téléchargeables.
+- **Envoyer à mon adresse** : remet l'e-mail à l'adresse de réception du compte SMTP du hub (Réglages, **Envoi d'e-mails**).
+- **Rediriger les e-mails vers mon adresse** (coupé par défaut) : chaque nouvel e-mail capturé est aussi remis, chaque minute, aux adresses autorisées (10 au plus ; vide : l'adresse de réception). Le destinataire d'origine est dans l'objet (« [recette pour client@exemple.fr] ... ») et dans l'en-tête `X-Kouzia-Original-To`, jamais destinataire. 30 e-mails par heure et par site au plus ; pièces jointes remises jusqu'à 10 Mio au total.
+- Sans compte SMTP réglé, rien n'est envoyé (la fiche le dit).
+
+**Compte SMTP du hub** (Réglages, **Envoi d'e-mails**) : serveur, port, chiffrement (STARTTLS 587 ou SSL 465), identifiant, mot de passe (chiffré, jamais réaffiché ; laisser vide pour le garder), adresse d'expédition (une adresse de ce compte), et **mon adresse** (réception). « Envoyer un e-mail d'essai » vérifie le réglage. Les e-mails partent du hub, jamais du CT PHP.
+
+**À tester** (après `hubctl update`, qui met aussi le CT PHP à jour) :
+
+| # | Faire | Résultat attendu |
+|---|---|---|
+| 1 | Réglages, Envoi d'e-mails : remplir le compte SMTP, Enregistrer, puis « Envoyer un e-mail d'essai » | « E-mail d'essai envoyé à ... » ; il arrive dans la boîte |
+| 2 | MyTakumi, Application, Tâche planifiée : `scripts/cron.php`, toutes les 15 minutes, Planifier | « Tâche planifiée posée sur le serveur » ; au bout d'un quart d'heure, « Dernier passage ... terminé (code 0) » |
+| 3 | Journaux : Erreurs PHP, puis Erreurs nginx | les dernières lignes, sans valeur du `.env` en clair |
+| 4 | Sur `https://mytakumi.kouzia.com`, déclencher un e-mail (commande de test, mot de passe oublié...) | onglet E-mails : l'e-mail apparaît, avec son rendu HTML ; rien n'est arrivé chez le destinataire d'origine |
+| 5 | Ouvrir cet e-mail : HTML, Texte, En-têtes, largeur Téléphone ; « Les afficher » si des images distantes sont bloquées | rendu lisible dans les deux largeurs |
+| 6 | « Envoyer à mon adresse » | « Envoyé à ... » ; objet « [recette pour ...] ... » dans votre boîte |
+| 7 | Activer « Rediriger les e-mails vers mon adresse », puis déclencher un nouvel e-mail | il arrive dans votre boîte en une minute environ ; les anciens ne sont pas renvoyés |
+| 8 | Accès réseau : ouvrir la relève IMAP (confirmer), puis la refermer | « Relève IMAP ouverte pour ce site », puis « fermée » ; dans le CT, `cat /etc/kouziaphp/net/imap-open` montre l'UID du site puis rien |
 

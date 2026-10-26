@@ -40,6 +40,8 @@ export type SiteSpec = {
   maxExecutionSec: number;
   cron: CronSpec | null;
   indexing: boolean;
+  imapOpen: boolean;
+  httpsOpen: boolean;
 };
 
 export type Paths = {
@@ -53,6 +55,8 @@ export type Paths = {
   passwdFile: string;
   /** Crontabs de BusyBox (/etc/crontabs par défaut). */
   crontabsDir?: string;
+  /** Script qui repose le pare-feu du CT depuis net/ (défaut : /usr/local/lib/kouziaphp/firewall.sh). */
+  firewallScript?: string;
 };
 
 export type RunResult = { code: number; stdout: string; stderr: string; timedOut?: boolean };

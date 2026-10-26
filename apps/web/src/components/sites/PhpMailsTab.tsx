@@ -44,8 +44,8 @@ export function PhpMailsTab({ site }: { site: SiteDetail }) {
   return (
     <div className="space-y-4">
       {list.data ? <RedirectCard site={site} list={list.data} onSaved={() => void list.reload()} /> : null}
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
-        <Card className="p-4 sm:p-5">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+        <Card className="min-w-0 p-4 sm:p-5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-base font-semibold">E-mails capturés</h2>
             <div className="flex flex-wrap gap-2">

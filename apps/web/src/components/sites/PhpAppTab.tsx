@@ -26,6 +26,7 @@ import { Button, buttonClass } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Field, Input, Select, Textarea } from "@/components/ui/Field";
+import { Switch } from "@/components/ui/Switch";
 
 // Onglet « Application » d'un site PHP (docs/cadrage.md, 11.5, lot P4) : réglages de PHP, variables, base, scripts.
 
@@ -39,6 +40,7 @@ export function PhpAppTab({ site, onSite }: { site: SiteDetail; onSite: (s: Site
       <EnvCard site={site} />
       <DatabaseCard site={site} />
       <CronCard site={site} onSite={onSite} />
+      <NetworkCard site={site} onSite={onSite} />
       <ScriptsCard site={site} />
       <LogsCard site={site} />
     </div>
@@ -754,6 +756,78 @@ function LogsCard({ site }: { site: SiteDetail }) {
       <pre tabIndex={0} aria-label={`Journal : ${LOG_LABEL[kind]}`} className="code-block mt-3 max-h-96 whitespace-pre-wrap">
         {log.data ? log.data.text || "(vide)" : "Lecture…"}
       </pre>
+    </Card>
+  );
+}
+
+// --- Sortie réseau du site (lot P5) : relève IMAP, HTTPS ---
+
+function NetworkCard({ site, onSite }: { site: SiteDetail; onSite: (s: SiteDetail) => void }) {
+  const php = site.php!;
+  const [confirmImap, setConfirmImap] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const imapHint = useId();
+  const httpsHint = useId();
+
+  async function save(change: UpdatePhpSettingsInput, done: string) {
+    setSaving(true);
+    try {
+      onSite(await api<SiteDetail>(`/api/sites/${site.id}/php`, { method: "PATCH", json: change }));
+      toast.success(done);
+      setConfirmImap(false);
+    } catch (err) {
+      toast.error(errorMessage(err, "Pare-feu du serveur non modifié."));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card className="p-4 sm:p-5">
+      <h2 className="text-base font-semibold">Accès réseau</h2>
+      <p className="mt-1 text-sm text-[var(--muted)]">Sorties du site vers Internet, réglées sur le pare-feu du serveur pour ce seul site. Jamais vers le réseau local ; l'envoi d'e-mails reste toujours fermé (capturés).</p>
+      <div className="mt-4 grid max-w-xl gap-4">
+        <div>
+          <Switch
+            checked={php.imapOpen}
+            onChange={(next) => (next ? setConfirmImap(true) : void save({ imapOpen: false }, "Relève IMAP fermée"))}
+            label="Relève IMAP (port 993)"
+            stateLabels={{ on: "Ouverte", off: "Fermée" }}
+            disabled={saving}
+            describedBy={imapHint}
+          />
+          <p id={imapHint} className="mt-1 text-xs text-[var(--muted)]">
+            Pour une application qui lit une boîte de réception. Refermée d'office quand le site est coupé.
+          </p>
+        </div>
+        <div>
+          <Switch
+            checked={php.httpsOpen}
+            onChange={(next) => void save({ httpsOpen: next }, next ? "Sortie HTTPS ouverte" : "Sortie HTTPS fermée")}
+            label="Sortie HTTPS (port 443)"
+            stateLabels={{ on: "Ouverte", off: "Fermée" }}
+            disabled={saving}
+            describedBy={httpsHint}
+          />
+          <p id={httpsHint} className="mt-1 text-xs text-[var(--muted)]">
+            Appels du site vers des services en ligne (paiement de test, API). Fermée aussi quand le site est coupé.
+          </p>
+        </div>
+      </div>
+      <ConfirmDialog
+        open={confirmImap}
+        title="Ouvrir la relève IMAP"
+        message={
+          <>
+            La version de travail pourra se connecter à une vraie boîte e-mail (port 993) et y <strong>lira les vrais messages</strong> : selon l'application, ils
+            seront marqués lus, déplacés ou supprimés, comme par le site en ligne. À n'ouvrir que si la recette l'exige, et à refermer ensuite.
+          </>
+        }
+        confirmLabel="Ouvrir la relève"
+        busy={saving}
+        onConfirm={() => void save({ imapOpen: true }, "Relève IMAP ouverte pour ce site")}
+        onClose={() => setConfirmImap(false)}
+      />
     </Card>
   );
 }

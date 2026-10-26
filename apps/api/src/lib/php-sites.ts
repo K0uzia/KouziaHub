@@ -48,6 +48,8 @@ export function specOf(site: Site, sitesDomain: string): PhpSiteSpec {
     maxExecutionSec: site.phpMaxExecutionSec,
     cron: site.phpCronScript && site.phpCronEvery ? { script: site.phpCronScript, every: site.phpCronEvery } : null,
     indexing: site.allowIndexing,
+    imapOpen: site.phpImapOpen,
+    httpsOpen: site.phpHttpsOpen,
   };
 }
 

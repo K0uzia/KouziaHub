@@ -355,3 +355,22 @@ describe("scripts du projet", () => {
     expect((await call("POST", `/api/sites/${id}/php/script`, { path: "scripts/autre.php" })).statusCode).toBe(404);
   });
 });
+
+describe("sortie réseau d'un site PHP (lot P5)", () => {
+  it("relève IMAP ouverte puis refermée depuis le hub : posée sur le CT (pare-feu), gardée dans la fiche", async () => {
+    const id = await site();
+    const uid = text("/etc/passwd")!.split("\n").find((l) => l.startsWith("php-mytakumi:"))!.split(":")[2];
+    const open = await call("PATCH", `/api/sites/${id}/php`, { imapOpen: true });
+    expect(open.statusCode, open.body).toBe(200);
+    expect((open.json() as SiteDetail).php).toMatchObject({ imapOpen: true, httpsOpen: true });
+    expect(JSON.parse(text("/etc/kouziaphp/sites/mytakumi.json")!)).toMatchObject({ imapOpen: true, httpsOpen: true });
+    expect(text("/etc/kouziaphp/net/imap-open")).toBe(`${uid}\n`);
+    expect(mem.runs).toContain("/bin/sh /usr/local/lib/kouziaphp/firewall.sh");
+
+    const closed = await call("PATCH", `/api/sites/${id}/php`, { imapOpen: false, httpsOpen: false });
+    expect((closed.json() as SiteDetail).php).toMatchObject({ imapOpen: false, httpsOpen: false });
+    expect(text("/etc/kouziaphp/net/imap-open")).toBe("");
+    expect(text("/etc/kouziaphp/net/https-closed")).toBe(`${uid}\n`);
+    expect((await call("PATCH", `/api/sites/${id}/php`, { imapOpen: "oui" })).statusCode).toBe(400);
+  });
+});

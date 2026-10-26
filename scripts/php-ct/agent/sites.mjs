@@ -148,6 +148,9 @@ export function checkSiteSpec(input, ctx) {
     maxExecutionSec,
     cron,
     indexing: input.indexing === true,
+    // Sortie réseau (lot P5) : relève IMAP (993) fermée par défaut, HTTPS (443) ouvert par défaut.
+    imapOpen: input.imapOpen === true,
+    httpsOpen: input.httpsOpen !== false,
   };
 }
 
@@ -488,6 +491,43 @@ export function siteOperations(ctx) {
     await sys.writeFile(update, `${prev}${userOf(spec.slug)}\n`, 0o600);
   }
 
+  // --- Sortie réseau par site (lot P5) : ensembles imap_open et https_closed du pare-feu du CT (firewall.sh) ---
+  const netDir = path.posix.join(paths.confDir, "net");
+
+  /**
+   * Listes d'UID recalculées depuis tous les sites : 993 ouvert pour un site allumé dont la relève IMAP est activée ;
+   * 443 fermé pour un site qui l'a fermé ou qui est coupé. Pare-feu reposé seulement si une liste change.
+   */
+  async function writeNetwork() {
+    const passwd = await sys.readFile(paths.passwdFile);
+    const sitesConf = path.posix.join(paths.confDir, "sites");
+    const names = await sys.readdir(sitesConf).catch(() => []);
+    const imap = [];
+    const closed = [];
+    for (const name of names.filter((n) => /^[a-z0-9-]+\.json$/.test(n) && !/\.(db|env)\.json$/.test(n)).sort()) {
+      const spec = JSON.parse(await sys.readFile(path.posix.join(sitesConf, name)));
+      if (!SLUG_RE.test(spec.slug ?? "")) continue;
+      const line = passwd.split("\n").find((l) => l.startsWith(`${userOf(spec.slug)}:`));
+      if (!line) continue;
+      const uid = line.split(":")[2];
+      const enabled = !(await sys.exists(path.posix.join(paths.nginxSitesDir, `${spec.slug}.conf.off`)));
+      if (enabled && spec.imapOpen === true) imap.push(uid);
+      if (!enabled || spec.httpsOpen === false) closed.push(uid);
+    }
+    let changed = false;
+    for (const [file, uids] of [
+      ["imap-open", imap],
+      ["https-closed", closed],
+    ]) {
+      const p = path.posix.join(netDir, file);
+      const text = uids.map((u) => `${u}\n`).join("");
+      if (((await sys.exists(p)) ? await sys.readFile(p) : "") === text) continue;
+      await sys.writeFile(p, text, 0o600);
+      changed = true;
+    }
+    if (changed) await run("/bin/sh", [paths.firewallScript ?? "/usr/local/lib/kouziaphp/firewall.sh"], "Pare-feu du CT (sortie réseau des sites)");
+  }
+
   /** Valeurs à masquer dans ce que le hub affiche (variables du .env, mot de passe de la base). */
   async function secretsOf(slug) {
     const vars = (await sys.exists(envJson(slug))) ? Object.values(JSON.parse(await sys.readFile(envJson(slug)))) : [];
@@ -564,6 +604,7 @@ export function siteOperations(ctx) {
       const init = path.posix.join(paths.initDir, serviceOf(spec.slug));
       if (!(await sys.exists(init))) await sys.symlink(path.posix.join(paths.initDir, "kouziaphp-site"), init);
       await reloadNginx();
+      await writeNetwork();
       return { slug: spec.slug, uid, created: !exists };
     },
 
@@ -651,6 +692,8 @@ export function siteOperations(ctx) {
       await reloadNginx();
       // Tâche planifiée coupée avec le site, remise au rallumage.
       await writeCron(spec, enabled);
+      // Relève IMAP et HTTPS refermées quand le site est coupé, rouvertes selon ses réglages au rallumage.
+      await writeNetwork();
       return { slug: spec.slug, enabled };
     },
 
@@ -888,6 +931,7 @@ export function siteOperations(ctx) {
       if (path.posix.dirname(home) !== paths.sitesDir || !SLUG_RE.test(path.posix.basename(home))) throw new OpError(500, "Chemin du site inattendu : rien supprimé.");
       await sys.rm(home);
       await sys.rm(path.posix.join(paths.confDir, "sites", `${spec.slug}.json`));
+      await writeNetwork();
       return { slug: spec.slug, removed: true };
     },
   };

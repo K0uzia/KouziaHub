@@ -268,7 +268,7 @@ export type CreateSiteInput = (
 ) & { hosting?: "pages" | "php"; php?: Partial<PhpSiteSettings> };
 
 // PATCH /api/sites/:id/php : réglages d'un site PHP après sa création (reposés sur le CT aussitôt).
-export type UpdatePhpSettingsInput = Partial<PhpSiteSettings>;
+export type UpdatePhpSettingsInput = Partial<PhpSiteSettings> & { imapOpen?: boolean; httpsOpen?: boolean };
 
 /**
  * Un changement de finalDomain, canonicalHost ou notFoundPage régénère le .htaccess s'il est encore

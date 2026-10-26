@@ -35,6 +35,9 @@ const settingsSchema = z
     maxExecutionSec: z.number().int().min(PHP_LIMITS.maxExecutionSec.min).max(PHP_LIMITS.maxExecutionSec.max).optional(),
     excludedPaths: z.array(z.string().max(300)).max(60).optional(),
     cron: z.object({ script: z.string().max(200), every: z.string().max(4) }).strict().nullable().optional(),
+    // Sortie réseau du site (lot P5) : relève IMAP (993), HTTPS (443).
+    imapOpen: z.boolean().optional(),
+    httpsOpen: z.boolean().optional(),
   })
   .strict();
 const logKinds = z.enum(["php", "fpm", "nginx", "cron"]);
@@ -79,7 +82,7 @@ export function phpSiteRoutes(services: Services): FastifyPluginAsync {
         if (err instanceof OpError) throw new HttpError(400, err.message, "php_cron");
         throw err;
       }
-      const { cron: _cron, ...settings } = parsed.data;
+      const { cron: _cron, imapOpen, httpsOpen, ...settings } = parsed.data;
       const spec = await phpSettingsFor(services, site.slug, { ...current, ...settings, cron: undefined });
       const data = {
         phpVersion: spec.php,
@@ -90,6 +93,8 @@ export function phpSiteRoutes(services: Services): FastifyPluginAsync {
         phpUploadMaxMb: spec.uploadMaxMb,
         phpMaxExecutionSec: spec.maxExecutionSec,
         ...(cron !== undefined ? { phpCronScript: cron?.script ?? null, phpCronEvery: cron?.every ?? null } : {}),
+        ...(imapOpen !== undefined ? { phpImapOpen: imapOpen } : {}),
+        ...(httpsOpen !== undefined ? { phpHttpsOpen: httpsOpen } : {}),
       };
       // Posés sur le CT d'abord : en cas de refus, le hub garde les réglages qui y tournent.
       await viaAgent(() => agentOf(services).upsertSite(specOf({ ...site, ...data }, services.sitesDomain)));
@@ -101,7 +106,7 @@ export function phpSiteRoutes(services: Services): FastifyPluginAsync {
         result: "ok",
         siteId: id,
         siteSlug: site.slug,
-        detail: `PHP ${spec.php}, ${spec.memoryLimitMb} Mo par requête, envoi ${spec.uploadMaxMb} Mo, ${spec.maxExecutionSec} s`,
+        detail: `PHP ${spec.php}, ${spec.memoryLimitMb} Mo par requête, envoi ${spec.uploadMaxMb} Mo, ${spec.maxExecutionSec} s${imapOpen !== undefined ? `, relève IMAP ${imapOpen ? "ouverte" : "fermée"}` : ""}${httpsOpen !== undefined ? `, HTTPS sortant ${httpsOpen ? "ouvert" : "fermé"}` : ""}`,
       });
       return siteDetail(id, services);
     });
