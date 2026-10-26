@@ -545,7 +545,10 @@ export function siteOperations(ctx) {
         // un chemin que le site contrôle (un lien qu'il y aurait posé ne mène pas root ailleurs).
         await repairShared(spec.slug, d);
         await asSite(spec.slug, "/bin/mkdir", ["-p", shared], "Dossier persistant");
-        if (await sys.exists(inRelease)) await asSite(spec.slug, process.execPath, ["-e", COPY_MISSING, inRelease, shared], "Fichiers du dossier persistant");
+        // Publication reprise après une interruption : le dossier de la version est déjà le lien vers shared/
+        // (releases/ est à root, le site n'y pose rien). Le recopier serait copier shared/ sur lui-même.
+        const linked = (await sys.run("/bin/stat", ["-c", "%F", inRelease])).stdout.trim().endsWith("symbolic link");
+        if (!linked && (await sys.exists(inRelease))) await asSite(spec.slug, process.execPath, ["-e", COPY_MISSING, inRelease, shared], "Fichiers du dossier persistant");
         // Privé (données, clés) : au seul compte du site. Public : lisible de nginx (groupe), jamais exécuté.
         await asSite(spec.slug, "/bin/chmod", ["-R", served ? "u=rwX,g=rX,o=" : "u=rwX,go=", shared], "Droits du dossier persistant");
         await sys.rm(inRelease);
@@ -845,8 +848,11 @@ export function realSys(runImpl) {
  */
 export function runIo(file, args, io = {}) {
   return new Promise((resolve) => {
+    // Sans entrée : stdin vide (/dev/null), rien à écrire. Écrire dans le stdin d'une commande déjà finie (mkdir,
+    // chmod sortent aussitôt) donnait un EPIPE non rattrapé qui arrêtait tout l'agent (publication de my-takumi).
+    const withInput = io.input !== undefined || io.inputFile !== undefined;
     const child = spawn(file, args, {
-      stdio: ["pipe", "pipe", "pipe"],
+      stdio: [withInput ? "pipe" : "ignore", "pipe", "pipe"],
       ...(io.uid !== undefined ? { uid: io.uid, gid: io.gid } : {}),
       ...(io.cwd ? { cwd: io.cwd } : {}),
       ...(io.env ? { env: io.env } : {}),
@@ -856,6 +862,11 @@ export function runIo(file, args, io = {}) {
     let stderr = "";
     let timedOut = false;
     const keep = (acc, chunk) => (acc.length < max ? acc + chunk.toString("utf8").slice(0, max - acc.length) : acc);
+    // Erreur d'un flux (commande sortie sans tout lire, lancement refusé) : notée dans stderr, jamais levée.
+    const streamError = (err) => (stderr = keep(stderr, Buffer.from(` ${err.message}`)));
+    child.stdin?.on("error", streamError);
+    child.stdout.on("error", streamError);
+    child.stderr.on("error", streamError);
     child.stderr.on("data", (c) => (stderr = keep(stderr, c)));
     const writing = io.outputFile
       ? pipeline(child.stdout, ...(io.gzip ? [createGzip()] : []), createWriteStream(io.outputFile, { mode: 0o600 })).catch((err) => {
@@ -867,7 +878,7 @@ export function runIo(file, args, io = {}) {
           stderr = keep(stderr, Buffer.from(` ${err.message}`));
           child.kill();
         })
-      : (child.stdin.end(io.input ?? ""), Promise.resolve());
+      : (withInput && child.stdin.end(io.input), Promise.resolve());
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill("SIGKILL");

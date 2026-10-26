@@ -74,6 +74,11 @@ export function memorySys(answer: (file: string, args: string[]) => RunResult = 
       if (file === "/bin/mkdir" && args[0] === "-p") await sys.mkdir(args[1]!, 0o750);
       if (args[0] === "-e" && args[1]?.includes("cpSync")) {
         const [src, dst] = [args[2]!, args[3]!];
+        // Comme Node : copier un lien vers sa propre cible (shared/ sur lui-même) est refusé.
+        const srcNode = nodes.get(src);
+        if (srcNode?.type === "link" && srcNode.target === dst) {
+          return { code: 1, stdout: "", stderr: `Error [ERR_FS_CP_EINVAL]: Invalid src or dest: cp returned EINVAL (src and dest cannot be the same) ${dst}` };
+        }
         for (const k of under(src)) {
           const target = dst + k.slice(src.length);
           if (!nodes.has(target)) nodes.set(target, nodes.get(k)!);
