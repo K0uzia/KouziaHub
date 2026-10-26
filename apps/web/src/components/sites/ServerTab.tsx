@@ -12,7 +12,7 @@ import {
   faRotateRight,
   faShieldHalved,
 } from "@fortawesome/free-solid-svg-icons";
-import type { CanonicalHost, ServerConfigPreview, SiteDetail, UpdateSiteInput } from "@hub/contract";
+import type { CanonicalHost, PhpNotFoundCheck, ServerConfigPreview, SiteDetail, UpdateSiteInput } from "@hub/contract";
 import { api, errorMessage, type ApiError } from "@/lib/api";
 import { copyText } from "@/lib/clipboard";
 import { formatDateTime } from "@/lib/format";
@@ -226,7 +226,10 @@ export function ServerTab({ site, onSite }: { site: SiteDetail; onSite: (s: Site
             La configuration générée a changé : régénérer ? Votre .htaccess modifié à la main n'est jamais remplacé sans confirmation.
           </Banner>
         ) : null}
-        {!state.notFoundPagePresent ? (
+        {/* Site PHP : l'application rend sa page 404 elle-même ; vérifiée par HTTP, pas par un fichier. */}
+        {site.php ? (
+          <PhpNotFoundStatus siteId={site.id} />
+        ) : !state.notFoundPagePresent ? (
           <Banner level="warning">
             La page 404 <span className="font-mono">{site.notFoundPage}</span> n'existe pas dans les fichiers de travail : ajoutez-la, ou
             changez la page 404 du profil.
@@ -312,5 +315,20 @@ function CodeBlock({ title, code, open = false }: { title: string; code: string;
         </Button>
       </div>
     </details>
+  );
+}
+
+/** Page 404 d'un site PHP : une adresse au hasard, servie par le site sur le serveur PHP, doit répondre 404 avec sa page. */
+function PhpNotFoundStatus({ siteId }: { siteId: string }) {
+  const check = useResource<PhpNotFoundCheck>(`/api/sites/${siteId}/php/page-404`);
+  const c = check.data;
+  if (check.error) return <Banner level="warning">Page 404 non vérifiée : {check.error}</Banner>;
+  if (!c) return <p role="status" className="text-sm text-[var(--muted)]">Vérification de la page 404…</p>;
+  if (c.ok) return <p className="text-sm text-[var(--muted)]">Page 404 du site vérifiée : une adresse inconnue répond 404 avec la page de l'application.</p>;
+  const why = c.status !== 404 ? `répond ${c.status} au lieu de 404` : c.nginxDefault ? "affiche la page par défaut du serveur, pas celle du site" : "ne renvoie pas de page HTML";
+  return (
+    <Banner level="warning">
+      Page 404 : l'adresse inconnue <span className="font-mono">{c.path}</span> {why}. L'application doit rendre sa propre page avec le statut 404.
+    </Banner>
   );
 }

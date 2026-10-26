@@ -44,7 +44,7 @@ export function smtpSettingsRoutes(services: Services): FastifyPluginAsync {
           text: "Le compte SMTP du hub fonctionne. Les e-mails capturés des sites PHP pourront vous être remis.",
         });
       } catch (err) {
-        const message = sendFailure(err);
+        const message = sendFailure(err, config);
         await audit({ action: "settings.smtp.test", result: "error", detail: message });
         throw new HttpError(502, message, "smtp_failed");
       }

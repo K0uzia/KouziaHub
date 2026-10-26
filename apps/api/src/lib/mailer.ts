@@ -111,31 +111,66 @@ export type MailMessage = SendMailOptions;
 /** Envoi d'un message ; remplacé dans les tests (aucun réseau). */
 export type MailSender = (config: SmtpConfig, message: MailMessage) => Promise<void>;
 
-export const smtpSender: MailSender = async (config, message) => {
-  const options: SMTPTransport.Options = {
-    host: config.host,
-    port: config.port,
-    secure: config.security === "ssl",
-    requireTLS: config.security === "starttls",
-    auth: config.user ? { user: config.user, pass: config.password ?? "" } : undefined,
-    connectionTimeout: 15_000,
-    greetingTimeout: 15_000,
-    socketTimeout: 60_000,
-  };
-  const transport = nodemailer.createTransport(options);
-  try {
-    await transport.sendMail(message);
-  } finally {
-    transport.close();
-  }
-};
+/** Délais de l'envoi : courts, pour qu'une sortie bloquée réponde bien avant les 100 s du tunnel Cloudflare. */
+export type SmtpDelays = { connectionMs: number; greetingMs: number; socketMs: number; dnsMs: number; totalMs: number };
+export const SMTP_DELAYS: SmtpDelays = { connectionMs: 10_000, greetingMs: 10_000, socketMs: 20_000, dnsMs: 10_000, totalMs: 45_000 };
 
-/** Message d'échec d'envoi lisible, sans identifiant ni mot de passe. */
-export function sendFailure(err: unknown): string {
-  const e = err as { code?: string; responseCode?: number; message?: string } | null;
-  if (e?.code === "EAUTH") return "Le serveur SMTP refuse l'identifiant ou le mot de passe.";
-  if (e?.code === "ECONNECTION" || e?.code === "ETIMEDOUT" || e?.code === "ESOCKET") return "Serveur SMTP injoignable (adresse, port ou chiffrement).";
-  if (e?.code === "EENVELOPE") return "Adresse refusée par le serveur SMTP.";
-  if (e?.responseCode) return `Le serveur SMTP refuse l'envoi (code ${e.responseCode}).`;
-  return "Envoi impossible par le serveur SMTP.";
+export function makeSmtpSender(delays: SmtpDelays = SMTP_DELAYS): MailSender {
+  return async (config, message) => {
+    const options: SMTPTransport.Options = {
+      host: config.host,
+      port: config.port,
+      secure: config.security === "ssl",
+      requireTLS: config.security === "starttls",
+      auth: config.user ? { user: config.user, pass: config.password ?? "" } : undefined,
+      connectionTimeout: delays.connectionMs,
+      greetingTimeout: delays.greetingMs,
+      socketTimeout: delays.socketMs,
+      dnsTimeout: delays.dnsMs,
+    };
+    const transport = nodemailer.createTransport(options);
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      // Plafond d'ensemble : quelle que soit l'étape qui traîne, une réponse part.
+      await Promise.race([
+        transport.sendMail(message),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(Object.assign(new Error("délai total"), { code: "ETOTAL" })), delays.totalMs);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+      transport.close();
+    }
+  };
+}
+
+export const smtpSender: MailSender = makeSmtpSender();
+
+/**
+ * Cause d'un échec d'envoi, en clair : DNS, connexion refusée, délai, TLS, authentification (code SMTP), adresse.
+ * Jamais le mot de passe ni l'identifiant (retirés du texte du serveur s'il les répète).
+ */
+export function sendFailure(err: unknown, config?: Pick<SmtpConfig, "host" | "port" | "user" | "password"> | null): string {
+  const e = err as { code?: string; responseCode?: number; response?: string; message?: string } | null;
+  const where = config ? `${config.host}:${config.port}` : "le serveur SMTP";
+  const text = `${e?.message ?? ""} ${e?.response ?? ""}`;
+  const clean = (v: string) => {
+    let out = v.replace(/[\r\n]+/g, " ").trim();
+    for (const secret of [config?.password, config?.user]) if (secret && secret.length >= 3) out = out.split(secret).join("••••");
+    return out.slice(0, 160);
+  };
+  const tls = "465 = SSL, 587 = STARTTLS";
+  if (e?.code === "ETOTAL") return `Pas de réponse complète de ${where} en ${Math.round(SMTP_DELAYS.totalMs / 1000)} s : sortie lente ou bloquée.`;
+  if (e?.code === "EDNS" || /ENOTFOUND|EAI_AGAIN|getaddrinfo/.test(text)) return `Serveur SMTP introuvable (DNS) : « ${config?.host ?? "?"} » ne se résout pas depuis le hub.`;
+  if (/ECONNREFUSED/.test(text)) return `Connexion refusée par ${where} : port fermé ou mauvais port (${tls}).`;
+  if (/ENETUNREACH|EHOSTUNREACH/.test(text)) return `${where} injoignable depuis le hub (réseau) : sortie bloquée par un pare-feu ?`;
+  if (e?.code === "ETIMEDOUT" || /timeout|timed out|ETIMEDOUT/i.test(text))
+    return `Pas de réponse de ${where} dans le délai : sortie bloquée par un pare-feu, ou chiffrement inadapté au port (${tls}).`;
+  if (e?.code === "ETLS" || /ssl|tls|certificate|wrong version number|EPROTO/i.test(text))
+    return `Échec TLS avec ${where} : chiffrement inadapté au port (${tls}) ou certificat refusé (${clean(e?.message ?? "")}).`;
+  if (e?.code === "EAUTH") return `Authentification refusée par ${where}${e.responseCode ? ` (code ${e.responseCode})` : ""} : identifiant ou mot de passe.`;
+  if (e?.code === "EENVELOPE") return `Adresse refusée par ${where}${e.responseCode ? ` (code ${e.responseCode})` : ""} : l'adresse d'expédition doit appartenir au compte SMTP.`;
+  if (e?.responseCode) return `${where} refuse l'envoi (code ${e.responseCode}${e.response ? ` : ${clean(e.response)}` : ""}).`;
+  return `Envoi impossible par ${where}${e?.code ? ` (${e.code})` : ""}.`;
 }

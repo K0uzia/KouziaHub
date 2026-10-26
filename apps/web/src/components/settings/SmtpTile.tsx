@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useId, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faChevronRight } from "@fortawesome/free-solid-svg-icons";
@@ -34,6 +34,7 @@ export function SmtpTile() {
   const [errors, setErrors] = useState<Partial<Record<Key, string>>>({});
   const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState(false);
+  const missingId = useId();
   const saved = settings.data;
 
   useEffect(() => {
@@ -111,10 +112,15 @@ export function SmtpTile() {
             </dl>
           ) : null}
           <div className="flex flex-wrap gap-2">
-            <Button variant="secondary" onClick={() => void sendTest()} disabled={testing || !saved.configured}>
-              {testing ? "Envoi…" : "Envoyer un e-mail d'essai"}
+            <Button variant="secondary" onClick={() => void sendTest()} disabled={testing || !saved.configured} aria-describedby={saved.configured ? undefined : missingId}>
+              {testing ? "Envoi… (45 s au plus)" : "Envoyer un e-mail d'essai"}
             </Button>
           </div>
+          {saved.configured ? null : (
+            <p id={missingId} className="text-sm text-[var(--warning)]">
+              Essai indisponible : il manque {[!saved.host && "le serveur SMTP", !saved.from && "l'adresse d'expédition", !saved.to && "« Mon adresse (réception) »"].filter(Boolean).join(", ")}.
+            </p>
+          )}
           <details className="code-details" open={open || !saved.configured} onToggle={(e) => setOpen(e.currentTarget.open)}>
             <summary className="code-summary">
               <FontAwesomeIcon icon={faChevronRight} className="code-chevron h-3 w-3 shrink-0 text-[var(--muted)]" aria-hidden />

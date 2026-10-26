@@ -6,7 +6,7 @@ import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { PHP_LIMITS, type PhpCronView, type PhpLogView, type PhpDbView, type PhpEnvView, type PhpScriptRun, type PhpScriptsView, type SiteDetail } from "@/contract.js";
+import { PHP_LIMITS, type PhpCronView, type PhpNotFoundCheck, type PhpLogView, type PhpDbView, type PhpEnvView, type PhpScriptRun, type PhpScriptsView, type SiteDetail } from "@/contract.js";
 import { audit } from "@/lib/audit.js";
 import { requireAuth } from "@/lib/auth.js";
 import { HttpError } from "@/lib/http.js";
@@ -133,6 +133,18 @@ export function phpSiteRoutes(services: Services): FastifyPluginAsync {
     });
 
     // --- Tâche planifiée et journaux (lot P5) ---
+
+    // Page 404 d'un site PHP : vérifiée par HTTP (une adresse au hasard, servie par nginx et PHP sur le CT), pas par un
+    // fichier : l'application la rend elle-même. Attendu : statut 404, HTML, pas la page par défaut de nginx.
+    app.get("/api/sites/:id/php/page-404", async (request): Promise<PhpNotFoundCheck> => {
+      const site = await phpSite(idParams.parse(request.params).id);
+      const probe = `/kouzia-verif-404-${randomBytes(6).toString("hex")}`;
+      const r = await viaAgent(() => agentOf(services).page(site.slug, probe));
+      const html = /^text\/html\b/i.test(r.contentType ?? "");
+      const head = r.body.subarray(0, 4096).toString("utf8");
+      const nginxDefault = /<center>nginx(\/[\d.]+)?<\/center>/i.test(head);
+      return { ok: r.status === 404 && html && !nginxDefault, status: r.status, html, nginxDefault, path: probe };
+    });
 
     app.get("/api/sites/:id/php/cron", async (request): Promise<PhpCronView> => {
       const { id } = idParams.parse(request.params);

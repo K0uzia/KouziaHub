@@ -245,7 +245,7 @@ export async function forwardMail(deps: ForwardDeps, site: Site, id: string, to:
   try {
     await deps.sender(config, forwardMessage(loaded, config, recipients, `${site.slug}.${deps.services.sitesDomain}`));
   } catch (err) {
-    const message = sendFailure(err);
+    const message = sendFailure(err, config);
     await audit({ action: "site.php.mail.forward", result: "error", siteId: site.id, siteSlug: site.slug, detail: `${reason} : ${message}` });
     throw new HttpError(502, message, "smtp_failed");
   }

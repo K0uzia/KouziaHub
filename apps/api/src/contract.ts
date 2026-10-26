@@ -186,6 +186,8 @@ export type PhpCronView = {
   output: string;
 };
 export type PhpLogKind = "php" | "fpm" | "nginx" | "cron";
+/** GET /api/sites/:id/php/page-404 : adresse inexistante tirée au hasard, servie par le site sur le CT. */
+export type PhpNotFoundCheck = { ok: boolean; status: number; html: boolean; nginxDefault: boolean; path: string };
 /** GET /api/sites/:id/php/journaux/:kind : dernières lignes, valeurs du .env masquées. */
 export type PhpLogView = { kind: PhpLogKind; text: string };
 

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { PhpCronView, PhpDbView, PhpEnvView, PhpScriptRun, PhpScriptsView, PhpServerStatus, SiteDetail } from "@/contract.js";
+import type { PhpCronView, PhpNotFoundCheck, PhpDbView, PhpEnvView, PhpScriptRun, PhpScriptsView, PhpServerStatus, SiteDetail } from "@/contract.js";
 import { backupPhpDatabases, PHP_DUMPS_KEPT_DAYS, phpDumpsDir } from "@/lib/php-app.js";
 import { PhpAgentClient } from "@/lib/php-agent/client.js";
 import { createAgent, type Probes } from "../../../../../scripts/php-ct/agent/agent.mjs";
@@ -33,6 +33,9 @@ const DUMP = "-- dump de la base\nCREATE TABLE settings (k VARCHAR(190) PRIMARY 
 let hub: TestHub;
 let server: Server;
 let mem: ReturnType<typeof memorySys>;
+/** Réponse de nginx local aux pages lues par l'agent (page 404, vignette). */
+let pageAnswer: (host: string, path: string) => { status: number; contentType: string | null; location: string | null; body: Buffer } = () => ({ status: 404, contentType: "text/html; charset=UTF-8", location: null, body: Buffer.from("<!doctype html><title>Page introuvable</title><h1>Cette page n'existe pas</h1>") });
+const pagesAsked: string[] = [];
 const disk = mkdtempSync(join(tmpdir(), "kouzia-php-p4-"));
 
 beforeEach(async () => {
@@ -44,7 +47,9 @@ beforeEach(async () => {
     if (file === "/usr/bin/mariadb" && args[0] === "--batch") return { code: 0, stdout: "65536\t9\n", stderr: "" };
     return { code: 0, stdout: "", stderr: "" };
   });
-  const ops = siteOperations({ paths, domain: "kouzia.com", phpInstalled: () => ["8.3"], limitsEffective: () => true, httpStatus: async () => 404, sys: mem.sys });
+  pagesAsked.length = 0;
+  const httpGet = async (host: string, p: string) => (pagesAsked.push(`${host} ${p}`), pageAnswer(host, p));
+  const ops = siteOperations({ paths, domain: "kouzia.com", phpInstalled: () => ["8.3"], limitsEffective: () => true, httpStatus: async () => 404, httpGet, sys: mem.sys });
   const probes = {
     alpine: () => "3.22.2",
     php: () => ["8.3"],
@@ -372,5 +377,23 @@ describe("sortie réseau d'un site PHP (lot P5)", () => {
     expect(text("/etc/kouziaphp/net/imap-open")).toBe("");
     expect(text("/etc/kouziaphp/net/https-closed")).toBe(`${uid}\n`);
     expect((await call("PATCH", `/api/sites/${id}/php`, { imapOpen: "oui" })).statusCode).toBe(400);
+  });
+});
+
+describe("page 404 d'un site PHP (lot P5) : vérifiée par HTTP, pas par un fichier", () => {
+  it("adresse au hasard : 404 et page HTML du site = bon ; page par défaut de nginx, 200 ou texte = signalé", async () => {
+    const id = await site();
+    const check = async () => (await call("GET", `/api/sites/${id}/php/page-404`)).json() as PhpNotFoundCheck;
+    const ok = await check();
+    expect(ok).toMatchObject({ ok: true, status: 404, html: true, nginxDefault: false });
+    expect(ok.path).toMatch(/^\/kouzia-verif-404-[0-9a-f]{12}$/);
+    expect(pagesAsked).toEqual([`mytakumi.kouzia.com ${ok.path}`]);
+
+    pageAnswer = () => ({ status: 404, contentType: "text/html", location: null, body: Buffer.from("<html><head><title>404 Not Found</title></head><body><center><h1>404 Not Found</h1></center><hr><center>nginx/1.26.3</center></body></html>") });
+    expect(await check()).toMatchObject({ ok: false, nginxDefault: true });
+    pageAnswer = () => ({ status: 200, contentType: "text/html", location: null, body: Buffer.from("<h1>Accueil</h1>") });
+    expect(await check()).toMatchObject({ ok: false, status: 200 });
+    pageAnswer = () => ({ status: 404, contentType: "application/json", location: null, body: Buffer.from("{}") });
+    expect(await check()).toMatchObject({ ok: false, html: false });
   });
 });
