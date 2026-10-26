@@ -163,6 +163,9 @@ const routes = [
   { method: "POST", re: new RegExp(`^/v1/sites/${SITE}/rallumer$`), site: true, run: (c, [slug]) => c.sites.setEnabled(slug, true) },
   { method: "GET", re: new RegExp(`^/v1/sites/${SITE}/verifier$`), site: true, run: (c, [slug]) => c.sites.check(slug) },
   { method: "DELETE", re: new RegExp(`^/v1/sites/${SITE}$`), site: true, run: (c, [slug]) => c.sites.remove(slug) },
+  // Lot P5 : tâche planifiée (réglée par l'upsert du site), journaux du site.
+  { method: "GET", re: new RegExp(`^/v1/sites/${SITE}/cron$`), site: true, run: (c, [slug]) => c.sites.cronState(slug) },
+  { method: "GET", re: new RegExp(`^/v1/sites/${SITE}/journaux/(php|fpm|nginx|cron)/(\\d{1,4})$`), site: true, run: (c, [slug, kind, n]) => c.sites.logs(slug, kind, Number(n)) },
   // Lot P4 : variables, base, script du projet.
   { method: "PUT", re: new RegExp(`^/v1/sites/${SITE}/env$`), site: true, run: (c, [slug]) => c.sites.setEnv(slug, c.json().vars) },
   { method: "GET", re: BASE(""), site: true, run: (c, [slug]) => c.sites.dbState(slug) },

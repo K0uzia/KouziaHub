@@ -171,7 +171,23 @@ export type PhpSiteSettings = {
   maxExecutionSec: number;
   /** Chemins jamais envoyés (« dossier/ » ou fichier exact). */
   excludedPaths: string[];
+  /** Tâche planifiée (lot P5) : script du projet et fréquence ; null : aucune. */
+  cron: PhpCron | null;
 };
+
+export type PhpCronEvery = "5m" | "15m" | "30m" | "1h" | "1d";
+export type PhpCron = { script: string; every: PhpCronEvery };
+/** GET /api/sites/:id/php/cron : réglage, actif (site allumé), durée maximale, dernier passage et fin de sa sortie. */
+export type PhpCronView = {
+  cron: PhpCron | null;
+  active: boolean;
+  maxSec: number | null;
+  last: { start: string; durationSec: number; code: number | null; timedOut: boolean; skipped: boolean } | null;
+  output: string;
+};
+export type PhpLogKind = "php" | "fpm" | "nginx" | "cron";
+/** GET /api/sites/:id/php/journaux/:kind : dernières lignes, valeurs du .env masquées. */
+export type PhpLogView = { kind: PhpLogKind; text: string };
 
 /** Bornes des limites d'un site PHP (mêmes que l'agent). */
 export const PHP_LIMITS = {

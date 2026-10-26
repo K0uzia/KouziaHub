@@ -1,0 +1,55 @@
+#!/bin/sh
+# Tâche planifiée d'un site PHP (docs/cadrage.md, 11.5, lot P5) : lancée par crond SOUS LE COMPTE DU SITE, depuis
+# la crontab que l'agent écrit (/etc/crontabs/php-<slug>). Même PHP que les pages (open_basedir du site, socket
+# MariaDB, capteur d'e-mails), verrou contre le chevauchement, durée maximale. Dernier passage noté dans
+# logs/cron-last.json (et sa sortie dans logs/cron-last.out), lus par l'agent pour la fiche du site.
+#
+# Usage (crontab) : cron-run <slug> <script relatif .php> <durée maximale en secondes>
+set -u
+
+slug="${1:-}"
+script="${2:-}"
+max="${3:-}"
+case "$slug" in ""|-*|*[!a-z0-9-]*) exit 2 ;; esac
+case "$script" in ""|/*|*..*|*[!A-Za-z0-9._/-]*) exit 2 ;; *.php) ;; *) exit 2 ;; esac
+case "$max" in ""|*[!0-9]*) exit 2 ;; esac
+
+home="/srv/sites/${slug}"
+[ "$(id -un)" = "php-${slug}" ] || exit 2
+cd "${home}/current" 2>/dev/null || exit 2
+php="$(sed -n 's/^KP_PHP="\([0-9]*\)"$/\1/p' "/etc/conf.d/kouziaphp-site.${slug}" 2>/dev/null || true)"
+[ -n "$php" ] || exit 2
+
+umask 027
+export HOME="$home" TMPDIR="${home}/tmp" PATH="/usr/bin:/bin"
+last="${home}/logs/cron-last.json"
+out="${home}/logs/cron-last.out"
+start="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+t0="$(date '+%s')"
+
+# Passage précédent encore en cours : celui-ci est sauté, et noté comme tel.
+exec 9> "${home}/tmp/cron.lock"
+if ! flock -n 9; then
+  printf '{"start":"%s","durationSec":0,"code":null,"timedOut":false,"skipped":true}\n' "$start" > "$last"
+  exit 0
+fi
+
+timeout "$max" "/usr/bin/php${php}" \
+  -d "open_basedir=${home}/" \
+  -d "max_execution_time=0" \
+  -d "sys_temp_dir=${home}/tmp" \
+  -d "upload_tmp_dir=${home}/tmp" \
+  -d "error_log=${home}/logs/php-errors.log" \
+  -d "pdo_mysql.default_socket=/run/mysqld/mysqld.sock" \
+  -d "mysqli.default_socket=/run/mysqld/mysqld.sock" \
+  -d "sendmail_path=/usr/local/lib/kouziaphp/mail-capture ${slug}" \
+  "$script" > "${out}.tmp" 2>&1
+code=$?
+# Sortie gardée : les 64 derniers Kio.
+tail -c 65536 "${out}.tmp" > "$out"
+rm -f "${out}.tmp"
+timed=false
+# Durée maximale dépassée : 124 (coreutils, BusyBox récent) ou 143 (arrêt par SIGTERM, BusyBox plus ancien).
+if [ "$code" -eq 124 ] || [ "$code" -eq 143 ]; then timed=true; fi
+printf '{"start":"%s","durationSec":%s,"code":%s,"timedOut":%s,"skipped":false}\n' "$start" "$(( $(date '+%s') - t0 ))" "$code" "$timed" > "$last"
+exit 0

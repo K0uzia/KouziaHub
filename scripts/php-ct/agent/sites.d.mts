@@ -20,6 +20,14 @@ export class OpError extends Error {
   constructor(status: number, message: string);
 }
 
+export type CronEvery = "5m" | "15m" | "30m" | "1h" | "1d";
+export type CronSpec = { script: string; every: CronEvery };
+export type CronLast = { start: string; durationSec: number; code: number | null; timedOut: boolean; skipped: boolean };
+export const CRON_EVERY: Record<CronEvery, { at(minute: number): string; maxSec: number }>;
+export const LOG_FILES: Record<"php" | "fpm" | "nginx" | "cron", string>;
+export function checkCron(input: unknown): CronSpec;
+export function cronLine(slug: string, cron: CronSpec): string;
+
 export type SiteSpec = {
   slug: string;
   hostname: string;
@@ -30,6 +38,7 @@ export type SiteSpec = {
   memoryLimitMb: number;
   uploadMaxMb: number;
   maxExecutionSec: number;
+  cron: CronSpec | null;
   indexing: boolean;
 };
 
@@ -42,6 +51,8 @@ export type Paths = {
   initDir: string;
   confdDir: string;
   passwdFile: string;
+  /** Crontabs de BusyBox (/etc/crontabs par défaut). */
+  crontabsDir?: string;
 };
 
 export type RunResult = { code: number; stdout: string; stderr: string; timedOut?: boolean };
@@ -103,6 +114,8 @@ export type SiteOperations = {
   resetDb(slug: string): Promise<DbState>;
   dumpBefore(slug: string, n: number): Promise<{ slug: string; dumped: boolean; version?: number }>;
   restoreDump(slug: string, n: number): Promise<DbState>;
+  cronState(slug: string): Promise<{ slug: string; cron: CronSpec | null; line: string | null; maxSec: number | null; active: boolean; last: CronLast | null; output: string }>;
+  logs(slug: string, kind: string, lines: number): Promise<{ slug: string; kind: string; text: string }>;
   runScript(slug: string, rel: unknown, args?: unknown, stdin?: unknown): Promise<{ slug: string; script: string; code: number; timedOut: boolean; durationMs: number; output: string }>;
 };
 

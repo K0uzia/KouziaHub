@@ -133,6 +133,7 @@ export function checkSiteSpec(input, ctx) {
   if (!Number.isInteger(memoryLimitMb) || memoryLimitMb < 64 || memoryLimitMb > 1024) throw bad("Mémoire par requête : de 64 à 1024 Mo.");
   const uploadMaxMb = input.uploadMaxMb ?? 32;
   if (!Number.isInteger(uploadMaxMb) || uploadMaxMb < 1 || uploadMaxMb > 128) throw bad("Taille d'envoi : de 1 à 128 Mo.");
+  const cron = input.cron == null ? null : checkCron(input.cron);
   const maxExecutionSec = input.maxExecutionSec ?? 30;
   if (!Number.isInteger(maxExecutionSec) || maxExecutionSec < 5 || maxExecutionSec > 120) throw bad("Durée d'une requête : de 5 à 120 s.");
   return {
@@ -145,6 +146,7 @@ export function checkSiteSpec(input, ctx) {
     memoryLimitMb,
     uploadMaxMb,
     maxExecutionSec,
+    cron,
     indexing: input.indexing === true,
   };
 }
@@ -158,6 +160,32 @@ export const siteMemoryMb = (spec) => (spec.memoryLimitMb ?? 256) + 256;
 const servedPath = (spec, d) => `/${spec.publicDir === "" ? d : d.slice(spec.publicDir.length + 1)}`;
 
 /** Script du projet à lancer : chemin relatif sûr, fichier .php. */
+/** Journaux d'un site lisibles depuis le hub (fichiers fixes de logs/). */
+export const LOG_FILES = { php: "php-errors.log", fpm: "php-fpm.log", nginx: "nginx-error.log", cron: "cron-last.out" };
+
+/** Fréquences de la tâche planifiée : ligne de crontab (minute tirée du site, pour étaler) et durée maximale. */
+export const CRON_EVERY = {
+  "5m": { at: () => "*/5 * * * *", maxSec: 240 },
+  "15m": { at: () => "*/15 * * * *", maxSec: 720 },
+  "30m": { at: () => "*/30 * * * *", maxSec: 1500 },
+  "1h": { at: (m) => `${m} * * * *`, maxSec: 3000 },
+  "1d": { at: (m) => `${m} 3 * * *`, maxSec: 7200 },
+};
+
+/** Tâche planifiée validée : script relatif .php du projet, fréquence de la liste fermée. */
+export function checkCron(input) {
+  if (!input || typeof input !== "object") throw bad("Tâche planifiée attendue.");
+  if (!Object.hasOwn(CRON_EVERY, input.every)) throw bad("Fréquence de la tâche : 5m, 15m, 30m, 1h ou 1d.");
+  return { script: checkScriptPath(input.script), every: input.every };
+}
+
+/** Ligne de crontab d'un site (minute fixe tirée du slug pour les tâches horaires et quotidiennes). */
+export function cronLine(slug, cron) {
+  const minute = Number.parseInt(createHash("sha256").update(slug).digest("hex").slice(0, 4), 16) % 60;
+  const e = CRON_EVERY[cron.every];
+  return `${e.at(minute)} /usr/local/lib/kouziaphp/cron-run ${slug} ${cron.script} ${e.maxSec}`;
+}
+
 export function checkScriptPath(value) {
   if (typeof value !== "string" || !value.endsWith(".php")) throw bad("Script attendu : un fichier .php du projet (chemin relatif).");
   return checkRelDir(value, false);
@@ -444,6 +472,36 @@ export function siteOperations(ctx) {
     }
   }
 
+  // --- Tâche planifiée (lot P5) : crontab du compte du site, lue par crond (BusyBox) ---
+  const crontabsDir = paths.crontabsDir ?? "/etc/crontabs";
+
+  /** Pose la crontab du site (tâche réglée et site allumé) ou la retire ; crond est prévenu par cron.update. */
+  async function writeCron(spec, enabled) {
+    const file = path.posix.join(crontabsDir, userOf(spec.slug));
+    if (spec.cron && enabled) {
+      await sys.writeFile(file, `# Écrit par l'agent des sites PHP (tâche planifiée du site, réglée dans le hub).\n${cronLine(spec.slug, spec.cron)}\n`, 0o600);
+    } else {
+      await sys.rm(file);
+    }
+    const update = path.posix.join(crontabsDir, "cron.update");
+    const prev = (await sys.exists(update)) ? await sys.readFile(update) : "";
+    await sys.writeFile(update, `${prev}${userOf(spec.slug)}\n`, 0o600);
+  }
+
+  /** Valeurs à masquer dans ce que le hub affiche (variables du .env, mot de passe de la base). */
+  async function secretsOf(slug) {
+    const vars = (await sys.exists(envJson(slug))) ? Object.values(JSON.parse(await sys.readFile(envJson(slug)))) : [];
+    return [...vars, (await dbPassword(slug)) ?? ""].filter((v) => v.length >= 6);
+  }
+  const scrubWith = (secrets) => (text) => secrets.reduce((t, v) => t.split(v).join("••••"), text);
+
+  /** Fin d'un fichier de journal du site, lue SOUS SON COMPTE (un lien qu'il y aurait posé ne mène root nulle part). */
+  async function tailAsSite(slug, file, lines) {
+    const ids = idsOf(await sys.readFile(paths.passwdFile), userOf(slug));
+    const r = await sys.runIo("/usr/bin/tail", ["-n", String(lines), file], { uid: ids.uid, gid: ids.gid, timeoutMs: 10_000, maxOutput: 512 * 1024 });
+    return r.code === 0 ? r.stdout : "";
+  }
+
   /** Commande sous le compte du site (UID et GID du compte, groupes de root retirés), échec rendu lisible. */
   async function asSite(slug, file, args, what) {
     const ids = idsOf(await sys.readFile(paths.passwdFile), userOf(slug));
@@ -498,6 +556,7 @@ export function siteOperations(ctx) {
         await sys.chown(p, owner, group);
       }
       const phpChanged = await writeConfigs(spec);
+      await writeCron(spec, !(await sys.exists(path.posix.join(paths.nginxSitesDir, `${spec.slug}.conf.off`))));
       if (!(await sys.exists(envFile(spec.slug)))) await writeEnv(spec.slug);
       // Réglages de PHP changés (limites, mémoire du groupe de contrôle) : appliqués par un redémarrage, seulement là.
       if (phpChanged && (await sys.run("/sbin/rc-service", [serviceOf(spec.slug), "status"])).code === 0) {
@@ -588,6 +647,8 @@ export function siteOperations(ctx) {
         await sys.run("/sbin/rc-update", ["del", svc, "default"]);
       }
       await reloadNginx();
+      // Tâche planifiée coupée avec le site, remise au rallumage.
+      await writeCron(spec, enabled);
       return { slug: spec.slug, enabled };
     },
 
@@ -616,6 +677,39 @@ export function siteOperations(ctx) {
       }
       const leaks = results.filter((r) => r.status !== 403 && r.status !== 404);
       return { slug: spec.slug, ok: leaks.length === 0, results };
+    },
+
+    /** Tâche planifiée : réglage, ligne de crontab, dernier passage (début, durée, code) et fin de sa sortie (masquée). */
+    async cronState(slug) {
+      const spec = await known(slug);
+      const logs = path.posix.join(siteDir(spec.slug), "logs");
+      let last = null;
+      try {
+        last = JSON.parse(await tailAsSite(spec.slug, path.posix.join(logs, "cron-last.json"), 1));
+      } catch {
+        last = null;
+      }
+      const output = scrubWith(await secretsOf(spec.slug))(await tailAsSite(spec.slug, path.posix.join(logs, "cron-last.out"), 200));
+      const enabled = !(await sys.exists(path.posix.join(paths.nginxSitesDir, `${spec.slug}.conf.off`)));
+      return {
+        slug: spec.slug,
+        cron: spec.cron ?? null,
+        line: spec.cron ? cronLine(spec.slug, spec.cron) : null,
+        maxSec: spec.cron ? CRON_EVERY[spec.cron.every].maxSec : null,
+        active: Boolean(spec.cron) && enabled,
+        last,
+        output,
+      };
+    },
+
+    /** Journal du site, les dernières lignes : erreurs PHP, PHP-FPM, erreurs nginx, sortie de la tâche planifiée. */
+    async logs(slug, kind, lines) {
+      const spec = await known(slug);
+      const file = LOG_FILES[kind];
+      if (!file) throw bad("Journal inconnu : php, fpm, nginx ou cron.");
+      if (!Number.isInteger(lines) || lines < 1 || lines > 2000) throw bad("Nombre de lignes : de 1 à 2000.");
+      const text = await tailAsSite(spec.slug, path.posix.join(siteDir(spec.slug), "logs", file), lines);
+      return { slug: spec.slug, kind, text: scrubWith(await secretsOf(spec.slug))(text) };
     },
 
     /** Variables saisies dans le hub : gardées (root, 600) et réécrites dans le .env avec celles de la base. */
@@ -785,6 +879,7 @@ export function siteOperations(ctx) {
       }
       await sys.rm(dbCnf(spec.slug));
       await sys.rm(envJson(spec.slug));
+      await writeCron({ ...spec, cron: null }, false);
       await sys.run("/usr/sbin/deluser", [userOf(spec.slug)]);
       // Chemin construit depuis un slug validé, sous le dossier des sites : jamais autre chose.
       const home = siteDir(spec.slug);

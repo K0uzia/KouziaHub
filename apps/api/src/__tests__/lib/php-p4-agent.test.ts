@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  checkCron,
   checkEnvVars,
+  cronLine,
   checkSiteSpec,
   dbNameOf,
   envFileText,
@@ -399,5 +401,67 @@ describe("script du projet", () => {
     for (const bad of ["../etc/passwd.php", "/root/x.php", "scripts/migrate.sh", "scripts/.hidden.php", 3]) {
       await expect(c.ops.runScript("mytakumi", bad), String(bad)).rejects.toThrow(/Script attendu|Dossier invalide/);
     }
+  });
+});
+
+describe("tâche planifiée et journaux (lot P5)", () => {
+  async function cronSite(cron: unknown) {
+    const c = cluster();
+    c.m.nodes.set("/etc/passwd", { type: "file", text: PASSWD });
+    await c.ops.upsert({ ...spec, cron });
+    return c;
+  }
+
+  it("crontab du compte du site posée, crond prévenu ; fréquences et durées maximales ; réglages douteux refusés", async () => {
+    const { m } = await cronSite({ script: "scripts/cron.php", every: "15m" });
+    expect(text(m, "/etc/crontabs/php-mytakumi")).toMatch(/\n\*\/15 \* \* \* \* \/usr\/local\/lib\/kouziaphp\/cron-run mytakumi scripts\/cron\.php 720\n$/);
+    expect(text(m, "/etc/crontabs/cron.update")).toContain("php-mytakumi\n");
+    // Horaire et quotidienne : minute fixe tirée du site (étalement), même minute à chaque fois.
+    expect(cronLine("mytakumi", { script: "scripts/cron.php", every: "1h" })).toMatch(/^\d{1,2} \* \* \* \* .* 3000$/);
+    expect(cronLine("mytakumi", { script: "scripts/cron.php", every: "1d" })).toMatch(/^\d{1,2} 3 \* \* \* .* 7200$/);
+    for (const [cron, msg] of [
+      [{ script: "../x.php", every: "15m" }, /Dossier invalide/],
+      [{ script: "scripts/cron.sh", every: "15m" }, /Script attendu/],
+      [{ script: "scripts/cron.php", every: "2m" }, /Fréquence/],
+    ] as const) {
+      expect(() => checkCron(cron), JSON.stringify(cron)).toThrow(msg);
+    }
+  });
+
+  it("coupée avec le site, remise au rallumage ; retirée à la suppression ; aucune sans réglage", async () => {
+    const { m, ops } = await cronSite({ script: "scripts/cron.php", every: "5m" });
+    await ops.setEnabled("mytakumi", false);
+    expect(m.nodes.has("/etc/crontabs/php-mytakumi")).toBe(false);
+    // Réglage reposé pendant que le site est coupé : toujours pas de crontab.
+    await ops.upsert({ ...spec, cron: { script: "scripts/cron.php", every: "5m" } });
+    expect(m.nodes.has("/etc/crontabs/php-mytakumi")).toBe(false);
+    await ops.setEnabled("mytakumi", true);
+    expect(text(m, "/etc/crontabs/php-mytakumi")).toContain("*/5 * * * *");
+    await ops.upsert({ ...spec, cron: null });
+    expect(m.nodes.has("/etc/crontabs/php-mytakumi")).toBe(false);
+    await ops.upsert({ ...spec, cron: { script: "scripts/cron.php", every: "5m" } });
+    await ops.remove("mytakumi");
+    expect(m.nodes.has("/etc/crontabs/php-mytakumi")).toBe(false);
+  });
+
+  it("dernier passage et sortie lus sous le compte du site, valeurs du .env masquées ; journaux bornés", async () => {
+    const { m, ops } = await cronSite({ script: "scripts/cron.php", every: "15m" });
+    await ops.setEnv("mytakumi", { APP_KEY: "cle-secrete-123456" });
+    m.nodes.set("/srv/sites/mytakumi/logs/cron-last.json", { type: "file", text: '{"start":"2026-10-26T10:15:00Z","durationSec":3,"code":0,"timedOut":false,"skipped":false}\n' });
+    m.nodes.set("/srv/sites/mytakumi/logs/cron-last.out", { type: "file", text: "Outbox : 2 e-mails\nclé cle-secrete-123456\n" });
+    const state = await ops.cronState("mytakumi");
+    expect(state).toMatchObject({ cron: { script: "scripts/cron.php", every: "15m" }, active: true, maxSec: 720, last: { code: 0, durationSec: 3, skipped: false } });
+    expect(state.output).toBe("Outbox : 2 e-mails\nclé ••••\n");
+    const tail = m.inputs.find((i) => i.file === "/usr/bin/tail")!;
+    expect(tail.io).toMatchObject({ uid: 20001, gid: 20005 });
+
+    m.nodes.set("/srv/sites/mytakumi/logs/php-errors.log", { type: "file", text: Array.from({ length: 300 }, (_, i) => `ligne ${i + 1}`).join("\n") });
+    const log = await ops.logs("mytakumi", "php", 2);
+    expect(log.text).toBe("ligne 299\nligne 300\n");
+    await expect(ops.logs("mytakumi", "shadow", 10)).rejects.toThrow(/Journal inconnu/);
+    await expect(ops.logs("mytakumi", "php", 5000)).rejects.toThrow(/de 1 à 2000/);
+    // Pas encore de passage : null, sans erreur.
+    m.nodes.delete("/srv/sites/mytakumi/logs/cron-last.json");
+    expect((await ops.cronState("mytakumi")).last).toBeNull();
   });
 });

@@ -68,6 +68,13 @@ export function memorySys(answer: (file: string, args: string[]) => RunResult = 
     runIo: async (file, args, io = {}) => {
       runs.push([file, ...args].join(" "));
       inputs.push({ file, args, input: io.input ?? (io.inputFile ? (nodes.get(io.inputFile) as { text?: string } | undefined)?.text ?? null : null), io });
+      // « tail -n N fichier » : dernières lignes d'un fichier en mémoire (absent : code 1).
+      if (file === "/usr/bin/tail") {
+        const n = nodes.get(args[2]!);
+        if (n?.type !== "file") return { code: 1, stdout: "", stderr: "absent" };
+        const lines = n.text.endsWith("\n") ? n.text.slice(0, -1).split("\n") : n.text.split("\n");
+        return { code: 0, stdout: `${lines.slice(-Number(args[1])).join("\n")}\n`, stderr: "" };
+      }
       // Dossiers persistants : création et copie sans écraser, faites sous le compte du site (simulées ici) ; ce qui
       // est créé appartient au compte de l'UID, comme en vrai.
       const before = new Set(nodes.keys());

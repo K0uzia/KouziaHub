@@ -141,6 +141,7 @@ if [ "$SCRIPT_DIR" != "$KP_LIB_DIR" ]; then
     install -o root -g root -m 644 "${SCRIPT_DIR}/agent/${_f}" "${KP_LIB_DIR}/agent/${_f}"
   done
   install -o root -g root -m 755 "${SCRIPT_DIR}/mail-capture" "${KP_LIB_DIR}/mail-capture"
+  install -o root -g root -m 755 "${SCRIPT_DIR}/cron-run" "${KP_LIB_DIR}/cron-run"
   for _f in kouziaphp-firewall kouziaphp-cgroups cloudflared kouziaphp-agent kouziaphp-site; do
     install -o root -g root -m 755 "${SCRIPT_DIR}/openrc/${_f}" "${KP_LIB_DIR}/openrc/${_f}"
   done
@@ -160,6 +161,11 @@ fi
 mkdir -p /usr/local/sbin
 ln -sf "${KP_LIB_DIR}/kouziaphpctl" /usr/local/sbin/kouziaphpctl
 ok "kouziaphpctl installé (scripts copiés dans ${KP_LIB_DIR}, à root, lecture seule pour les autres)."
+
+# Tâches planifiées des sites (lot P5) : crond de BusyBox, une crontab par compte de site posée par l'agent.
+mkdir -p /etc/crontabs
+rc-update add crond default >/dev/null 2>&1 || true
+rc_service crond start >/dev/null 2>&1 || true
 
 title "Pare-feu du CT"
 sh "${KP_LIB_DIR}/firewall.sh" || warn "Pare-feu du CT non posé : la règle Proxmox (README, section 9) reste la protection principale."

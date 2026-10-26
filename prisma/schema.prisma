@@ -132,6 +132,12 @@ model Site {
   /// Site PHP : chemins jamais envoyés (un par ligne ; « dossier/ » ou fichier exact, 50 au plus), refusés à l'envoi
   /// avec leur raison et retirés des fichiers de travail (fichiers lourds jamais servis : originaux, sources).
   phpExcludedPaths String?
+  /// Site PHP, lot P5 : tâche planifiée (script relatif .php, fréquence 5m, 15m, 30m, 1h ou 1d ; null : aucune) ;
+  /// redirection des e-mails capturés vers les adresses autorisées (une par ligne, 10 au plus), par le SMTP du hub.
+  phpCronScript    String?
+  phpCronEvery     String?
+  phpMailRedirect  Boolean      @default(false)
+  phpMailRecipients String?
   /// Adresse <projet>.pages.dev renvoyée par Cloudflare : cible du CNAME.
   pagesSubdomain   String?
   dnsRecordId      String?

@@ -6,7 +6,7 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { z } from "zod";
-import type { PhpAgentState } from "@/contract.js";
+import type { PhpAgentState, PhpCronView, PhpLogKind, PhpLogView } from "@/contract.js";
 
 // Client de l'agent du CT des sites PHP (docs/cadrage.md, section 11.1 ; agent : scripts/php-ct/agent/agent.mjs).
 // Même protocole des deux côtés, comparé par un test : requête signée (horodatage, nonce, méthode, chemin,
@@ -216,6 +216,22 @@ export class PhpAgentClient {
     return { ok: parsed.data.ok, log: parsed.data.log };
   }
 
+  // --- Lot P5 : tâche planifiée, journaux ---
+
+  async cronState(slug: string): Promise<PhpCronView> {
+    const parsed = cronSchema.safeParse(await this.request("GET", `/v1/sites/${slug}/cron`, undefined, undefined, OPERATION_TIMEOUT_MS));
+    if (!parsed.success) throw new PhpAgentUnavailableError("Serveur des sites PHP : état de la tâche planifiée illisible.");
+    return parsed.data;
+  }
+
+  async logs(slug: string, kind: PhpLogKind, lines: number): Promise<PhpLogView> {
+    const parsed = z.object({ kind: z.enum(["php", "fpm", "nginx", "cron"]), text: z.string().max(600_000) }).safeParse(
+      await this.request("GET", `/v1/sites/${slug}/journaux/${kind}/${lines}`, undefined, undefined, OPERATION_TIMEOUT_MS),
+    );
+    if (!parsed.success) throw new PhpAgentUnavailableError("Serveur des sites PHP : journal illisible.");
+    return parsed.data;
+  }
+
   // --- Lot P4 : variables, base, script du projet ---
 
   /** Variables saisies (jamais les DB_*, remplies par l'agent) : réécrit le .env du site. */
@@ -326,6 +342,16 @@ export class PhpAgentClient {
   }
 }
 
+const cronSchema = z.object({
+  cron: z.object({ script: z.string().max(200), every: z.enum(["5m", "15m", "30m", "1h", "1d"]) }).nullable(),
+  active: z.boolean(),
+  maxSec: z.number().int().nullable(),
+  last: z
+    .object({ start: z.string().max(40), durationSec: z.number().nonnegative(), code: z.number().int().nullable(), timedOut: z.boolean(), skipped: z.boolean() })
+    .nullable(),
+  output: z.string().max(600_000),
+});
+
 export type PhpDbState = { exists: boolean; name: string | null; bytes: number; tables: number; dumps: number[] };
 export type PhpScriptResult = { script: string; code: number; timedOut: boolean; durationMs: number; output: string };
 
@@ -365,6 +391,7 @@ export type PhpSiteSpec = {
   memoryLimitMb: number;
   uploadMaxMb: number;
   maxExecutionSec: number;
+  cron: { script: string; every: string } | null;
   indexing: boolean;
 };
 

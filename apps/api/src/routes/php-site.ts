@@ -6,7 +6,7 @@ import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { PHP_LIMITS, type PhpDbView, type PhpEnvView, type PhpScriptRun, type PhpScriptsView, type SiteDetail } from "@/contract.js";
+import { PHP_LIMITS, type PhpCronView, type PhpLogView, type PhpDbView, type PhpEnvView, type PhpScriptRun, type PhpScriptsView, type SiteDetail } from "@/contract.js";
 import { audit } from "@/lib/audit.js";
 import { requireAuth } from "@/lib/auth.js";
 import { HttpError } from "@/lib/http.js";
@@ -16,6 +16,7 @@ import { agentOf, linesOf, phpSettingsFor, specOf } from "@/lib/php-sites.js";
 import { prisma } from "@/lib/prisma.js";
 import type { Services } from "@/lib/services.js";
 import { siteDetail } from "@/lib/site-view.js";
+import { checkCron, OpError } from "../../../../scripts/php-ct/agent/sites.mjs";
 
 // Routes d'un site PHP, lot P4 (docs/cadrage.md, 11.5) : réglages après création, variables, base, scripts.
 
@@ -33,8 +34,11 @@ const settingsSchema = z
     uploadMaxMb: z.number().int().min(PHP_LIMITS.uploadMaxMb.min).max(PHP_LIMITS.uploadMaxMb.max).optional(),
     maxExecutionSec: z.number().int().min(PHP_LIMITS.maxExecutionSec.min).max(PHP_LIMITS.maxExecutionSec.max).optional(),
     excludedPaths: z.array(z.string().max(300)).max(60).optional(),
+    cron: z.object({ script: z.string().max(200), every: z.string().max(4) }).strict().nullable().optional(),
   })
   .strict();
+const logKinds = z.enum(["php", "fpm", "nginx", "cron"]);
+const linesQuery = z.object({ lignes: z.coerce.number().int().min(1).max(2000).optional() });
 const exclusionSchema = z.object({ path: z.string().min(1).max(300) }).strict();
 const envSchema = z.object({ vars: z.array(z.object({ name: z.string().max(64), value: z.string().max(4096) }).strict()).max(100) }).strict();
 const confirmSchema = z.object({ confirm: z.string().max(64) }).strict();
@@ -67,7 +71,16 @@ export function phpSiteRoutes(services: Services): FastifyPluginAsync {
       const site = await phpSite(id);
       const current = (await siteDetail(id, services)).php!;
       const exclude = parsed.data.excludedPaths !== undefined ? parseExcludedPaths(parsed.data.excludedPaths) : null;
-      const spec = await phpSettingsFor(services, site.slug, { ...current, ...parsed.data });
+      // Tâche planifiée : règle de l'agent (script relatif .php, sans « .. », fréquence de la liste fermée).
+      let cron: { script: string; every: string } | null | undefined;
+      try {
+        cron = parsed.data.cron === undefined ? undefined : parsed.data.cron === null ? null : checkCron(parsed.data.cron);
+      } catch (err) {
+        if (err instanceof OpError) throw new HttpError(400, err.message, "php_cron");
+        throw err;
+      }
+      const { cron: _cron, ...settings } = parsed.data;
+      const spec = await phpSettingsFor(services, site.slug, { ...current, ...settings, cron: undefined });
       const data = {
         phpVersion: spec.php,
         phpPublicDir: spec.publicDir,
@@ -76,6 +89,7 @@ export function phpSiteRoutes(services: Services): FastifyPluginAsync {
         phpMemoryLimitMb: spec.memoryLimitMb,
         phpUploadMaxMb: spec.uploadMaxMb,
         phpMaxExecutionSec: spec.maxExecutionSec,
+        ...(cron !== undefined ? { phpCronScript: cron?.script ?? null, phpCronEvery: cron?.every ?? null } : {}),
       };
       // Posés sur le CT d'abord : en cas de refus, le hub garde les réglages qui y tournent.
       await viaAgent(() => agentOf(services).upsertSite(specOf({ ...site, ...data }, services.sitesDomain)));
@@ -111,6 +125,25 @@ export function phpSiteRoutes(services: Services): FastifyPluginAsync {
       const exclude = parseExcludedPaths([...linesOf(site.phpExcludedPaths), parsed.data.path]);
       const done = await saveExclusions(site, exclude);
       return { excludedPaths: exclude, ...done };
+    });
+
+    // --- Tâche planifiée et journaux (lot P5) ---
+
+    app.get("/api/sites/:id/php/cron", async (request): Promise<PhpCronView> => {
+      const { id } = idParams.parse(request.params);
+      const site = await phpSite(id);
+      const r = await viaAgent(() => agentOf(services).cronState(site.slug));
+      return { cron: r.cron, active: r.active, maxSec: r.maxSec, last: r.last, output: r.output };
+    });
+
+    app.get("/api/sites/:id/php/journaux/:kind", async (request): Promise<PhpLogView> => {
+      const { id } = idParams.parse(request.params);
+      const kind = logKinds.safeParse((request.params as { kind?: string }).kind);
+      if (!kind.success) throw new HttpError(404, "Journal inconnu : php, fpm, nginx ou cron.");
+      const q = linesQuery.safeParse(request.query);
+      if (!q.success) throw badRequest(q.error);
+      const site = await phpSite(id);
+      return viaAgent(() => agentOf(services).logs(site.slug, kind.data, q.data.lignes ?? 200));
     });
 
     // --- Variables ---

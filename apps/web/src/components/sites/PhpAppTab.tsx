@@ -4,9 +4,13 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faDownload, faEye, faEyeSlash, faPlay, faPlus, faTrashCan, faUpload } from "@fortawesome/free-solid-svg-icons";
 import {
   PHP_LIMITS,
+  type PhpCronEvery,
+  type PhpCronView,
   type PhpDbView,
   type PhpEnvVar,
   type PhpEnvView,
+  type PhpLogKind,
+  type PhpLogView,
   type PhpScriptRun,
   type PhpScriptsView,
   type PhpServerStatus,
@@ -14,7 +18,7 @@ import {
   type UpdatePhpSettingsInput,
 } from "@hub/contract";
 import { api, errorMessage } from "@/lib/api";
-import { formatBytes, formatDay } from "@/lib/format";
+import { formatBytes, formatDateTime, formatDay } from "@/lib/format";
 import { envDirty, envPayload, LIVE_KEY_RE, memoryWarning, siteMemoryMb, type EnvRow } from "@/lib/phpApp";
 import { useResource } from "@/lib/useResource";
 import { Banner } from "@/components/ui/Banner";
@@ -34,7 +38,9 @@ export function PhpAppTab({ site, onSite }: { site: SiteDetail; onSite: (s: Site
       <PhpSettingsCard site={site} onSite={onSite} />
       <EnvCard site={site} />
       <DatabaseCard site={site} />
+      <CronCard site={site} onSite={onSite} />
       <ScriptsCard site={site} />
+      <LogsCard site={site} />
     </div>
   );
 }
@@ -573,6 +579,181 @@ function ScriptsCard({ site }: { site: SiteDetail }) {
           </pre>
         </div>
       ) : null}
+    </Card>
+  );
+}
+
+// --- Tâche planifiée (lot P5) ---
+
+const EVERY_LABEL: Record<PhpCronEvery, string> = {
+  "5m": "Toutes les 5 minutes",
+  "15m": "Toutes les 15 minutes",
+  "30m": "Toutes les 30 minutes",
+  "1h": "Toutes les heures",
+  "1d": "Chaque nuit (vers 3 h)",
+};
+
+function CronCard({ site, onSite }: { site: SiteDetail; onSite: (s: SiteDetail) => void }) {
+  const state = useResource<PhpCronView>(`/api/sites/${site.id}/php/cron`);
+  const scripts = useResource<PhpScriptsView>(`/api/sites/${site.id}/php/scripts`);
+  const current = site.php!.cron;
+  const [script, setScript] = useState(current?.script ?? "");
+  const [every, setEvery] = useState<PhpCronEvery>(current?.every ?? "15m");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const options = [...new Set([...(scripts.data?.scripts ?? []), ...(current ? [current.script] : [])])];
+  const chosen = script || options[0] || "";
+
+  async function save(cron: { script: string; every: PhpCronEvery } | null) {
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await api<SiteDetail>(`/api/sites/${site.id}/php`, { method: "PATCH", json: { cron } });
+      onSite(updated);
+      void state.reload();
+      toast.success(cron ? "Tâche planifiée posée sur le serveur" : "Tâche planifiée retirée");
+    } catch (err) {
+      setError(errorMessage(err, "Enregistrement impossible."));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const last = state.data?.last ?? null;
+  return (
+    <Card className="p-4 sm:p-5">
+      <h2 className="text-base font-semibold">Tâche planifiée</h2>
+      <p className="mt-1 text-sm text-[var(--muted)]">
+        Script de la version servie, lancé sous le compte du site, sans chevauchement et avec une durée maximale. Coupée quand le site est coupé.
+      </p>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          void save({ script: chosen, every });
+        }}
+        noValidate
+        className="mt-4 space-y-4"
+      >
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Script" hint={options.length ? undefined : "Aucun script .php dans la version servie : publier le projet d'abord."}>
+            <Select value={chosen} onChange={(e) => setScript(e.target.value)} className="font-mono" disabled={!options.length}>
+              {options.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Fréquence" hint={state.data?.maxSec ? `Durée maximale : ${Math.round(state.data.maxSec / 60)} min.` : undefined}>
+            <Select value={every} onChange={(e) => setEvery(e.target.value as PhpCronEvery)}>
+              {(Object.keys(EVERY_LABEL) as PhpCronEvery[]).map((k) => (
+                <option key={k} value={k}>
+                  {EVERY_LABEL[k]}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </div>
+        {error ? (
+          <Banner level="error" role="alert">
+            {error}
+          </Banner>
+        ) : null}
+        <div className="flex flex-wrap justify-end gap-2">
+          {current ? (
+            <Button type="button" variant="secondary" onClick={() => void save(null)} disabled={saving}>
+              Retirer la tâche
+            </Button>
+          ) : null}
+          <Button type="submit" disabled={saving || !chosen}>
+            {saving ? "Enregistrement…" : current ? "Enregistrer" : "Planifier"}
+          </Button>
+        </div>
+      </form>
+      {state.error ? (
+        <Banner level="error" className="mt-3">
+          {state.error}
+        </Banner>
+      ) : null}
+      {current && state.data ? (
+        <div className="mt-4 space-y-2 border-t border-[var(--border)] pt-3 text-sm">
+          <p>
+            {!state.data.active ? (
+              <span className="text-[var(--warning)]">En pause : le site est coupé.</span>
+            ) : last ? (
+              <>
+                Dernier passage le {formatDateTime(last.start)} :{" "}
+                {last.skipped ? (
+                  <span className="text-[var(--warning)]">sauté (le précédent tournait encore)</span>
+                ) : last.timedOut ? (
+                  <span className="text-[var(--danger)]">arrêté, durée maximale dépassée</span>
+                ) : last.code === 0 ? (
+                  <span className="text-[var(--success)]">terminé (code 0)</span>
+                ) : (
+                  <span className="text-[var(--danger)]">échec (code {last.code})</span>
+                )}
+                {last.skipped ? null : `, ${last.durationSec} s`}
+              </>
+            ) : (
+              "Pas encore de passage."
+            )}
+          </p>
+          {state.data.output ? (
+            <pre tabIndex={0} aria-label="Sortie du dernier passage" className="code-block max-h-64 whitespace-pre-wrap">
+              {state.data.output}
+            </pre>
+          ) : null}
+        </div>
+      ) : null}
+    </Card>
+  );
+}
+
+// --- Journaux du site (lot P5) ---
+
+const LOG_LABEL: Record<PhpLogKind, string> = { php: "Erreurs PHP", fpm: "PHP-FPM", nginx: "Erreurs nginx", cron: "Tâche planifiée" };
+
+function LogsCard({ site }: { site: SiteDetail }) {
+  const [kind, setKind] = useState<PhpLogKind>("php");
+  const log = useResource<PhpLogView>(`/api/sites/${site.id}/php/journaux/${kind}?lignes=200`);
+  const download = () => {
+    const url = URL.createObjectURL(new Blob([log.data?.text ?? ""], { type: "text/plain;charset=utf-8" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${site.slug}-${kind}.log`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+  return (
+    <Card className="p-4 sm:p-5">
+      <h2 className="text-base font-semibold">Journaux</h2>
+      <p className="mt-1 text-sm text-[var(--muted)]">Les 200 dernières lignes ; les valeurs du .env y sont masquées.</p>
+      <div className="mt-4 flex flex-wrap items-end gap-2">
+        <Field label="Journal">
+          <Select value={kind} onChange={(e) => setKind(e.target.value as PhpLogKind)}>
+            {(Object.keys(LOG_LABEL) as PhpLogKind[]).map((k) => (
+              <option key={k} value={k}>
+                {LOG_LABEL[k]}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Button variant="secondary" onClick={() => void log.reload()} disabled={log.loading}>
+          Actualiser
+        </Button>
+        <Button variant="ghost" onClick={download} disabled={!log.data?.text}>
+          <FontAwesomeIcon icon={faDownload} className="h-3.5 w-3.5" aria-hidden />
+          Télécharger
+        </Button>
+      </div>
+      {log.error ? (
+        <Banner level="error" className="mt-3">
+          {log.error}
+        </Banner>
+      ) : null}
+      <pre tabIndex={0} aria-label={`Journal : ${LOG_LABEL[kind]}`} className="code-block mt-3 max-h-96 whitespace-pre-wrap">
+        {log.data ? log.data.text || "(vide)" : "Lecture…"}
+      </pre>
     </Card>
   );
 }

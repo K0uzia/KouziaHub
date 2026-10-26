@@ -1,7 +1,7 @@
 import type { Operation as OperationRow, Site } from "@prisma/client";
 import { siteExtras } from "@/lib/site-extras.js";
 import { DEFAULT_PHP_VERSION, linesOf, persistentDirsOf } from "@/lib/php-sites.js";
-import { THUMBNAIL_FOCUS, type CatalogResponse, type Notice, type Operation, type SiteDetail, type SiteMonitorBadge, type SiteSummary, type ThumbnailFocus } from "@/contract.js";
+import { THUMBNAIL_FOCUS, type CatalogResponse, type Notice, type Operation, type PhpCronEvery, type SiteDetail, type SiteMonitorBadge, type SiteSummary, type ThumbnailFocus } from "@/contract.js";
 import { siteBadges } from "@/lib/monitor/view.js";
 import { prisma } from "@/lib/prisma.js";
 import { findWaitingCertificateOp, parseSteps } from "@/lib/operations.js";
@@ -126,6 +126,7 @@ export async function siteDetail(siteId: string, services: Services): Promise<Si
             uploadMaxMb: site.phpUploadMaxMb,
             maxExecutionSec: site.phpMaxExecutionSec,
             excludedPaths: linesOf(site.phpExcludedPaths),
+            cron: site.phpCronScript && site.phpCronEvery ? { script: site.phpCronScript, every: site.phpCronEvery as PhpCronEvery } : null,
             httpsOpen: site.phpHttpsOpen,
             imapOpen: site.phpImapOpen,
           }

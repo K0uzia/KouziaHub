@@ -46,6 +46,7 @@ export function specOf(site: Site, sitesDomain: string): PhpSiteSpec {
     memoryLimitMb: site.phpMemoryLimitMb,
     uploadMaxMb: site.phpUploadMaxMb,
     maxExecutionSec: site.phpMaxExecutionSec,
+    cron: site.phpCronScript && site.phpCronEvery ? { script: site.phpCronScript, every: site.phpCronEvery } : null,
     indexing: site.allowIndexing,
   };
 }

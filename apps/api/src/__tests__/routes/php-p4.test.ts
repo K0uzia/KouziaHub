@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { PhpDbView, PhpEnvView, PhpScriptRun, PhpScriptsView, PhpServerStatus, SiteDetail } from "@/contract.js";
+import type { PhpCronView, PhpDbView, PhpEnvView, PhpScriptRun, PhpScriptsView, PhpServerStatus, SiteDetail } from "@/contract.js";
 import { backupPhpDatabases, PHP_DUMPS_KEPT_DAYS, phpDumpsDir } from "@/lib/php-app.js";
 import { PhpAgentClient } from "@/lib/php-agent/client.js";
 import { createAgent, type Probes } from "../../../../../scripts/php-ct/agent/agent.mjs";
@@ -180,6 +180,33 @@ describe("fichiers lourds jamais servis et « Ne pas envoyer »", () => {
     for (const bad of [["src/*.jpg"], ["../etc/"]]) {
       expect((await call("PATCH", `/api/sites/${id}/php`, { excludedPaths: bad })).json(), JSON.stringify(bad)).toMatchObject({ code: "php_excluded" });
     }
+  });
+});
+
+describe("tâche planifiée et journaux (lot P5)", () => {
+  it("réglée dans la fiche, posée sur le CT ; dernier passage et journaux lus ; réglage douteux refusé sans rien changer", async () => {
+    const id = await site();
+    const set = await call("PATCH", `/api/sites/${id}/php`, { cron: { script: "scripts/cron.php", every: "15m" } });
+    expect(set.statusCode, set.body).toBe(200);
+    expect((set.json() as SiteDetail).php?.cron).toEqual({ script: "scripts/cron.php", every: "15m" });
+    expect(text("/etc/crontabs/php-mytakumi")).toContain("/usr/local/lib/kouziaphp/cron-run mytakumi scripts/cron.php 720");
+
+    expect((await call("PATCH", `/api/sites/${id}/php`, { cron: { script: "../../etc/x.php", every: "15m" } })).json()).toMatchObject({ code: "php_cron" });
+    expect((await call("PATCH", `/api/sites/${id}/php`, { cron: { script: "scripts/cron.php", every: "1m" } })).json()).toMatchObject({ code: "php_cron" });
+    expect((await prisma.site.findUniqueOrThrow({ where: { id } })).phpCronEvery).toBe("15m");
+
+    mem.nodes.set("/srv/sites/mytakumi/logs/cron-last.json", { type: "file", text: '{"start":"2026-10-26T10:15:00Z","durationSec":2,"code":1,"timedOut":false,"skipped":false}\n' });
+    mem.nodes.set("/srv/sites/mytakumi/logs/cron-last.out", { type: "file", text: "Erreur : boîte IMAP injoignable\n" });
+    const cron = (await call("GET", `/api/sites/${id}/php/cron`)).json() as PhpCronView;
+    expect(cron).toMatchObject({ active: true, maxSec: 720, last: { code: 1 }, output: "Erreur : boîte IMAP injoignable\n" });
+
+    mem.nodes.set("/srv/sites/mytakumi/logs/nginx-error.log", { type: "file", text: "a\nb\nc\n" });
+    expect((await call("GET", `/api/sites/${id}/php/journaux/nginx?lignes=2`)).json()).toEqual({ kind: "nginx", text: "b\nc\n" });
+    expect((await call("GET", `/api/sites/${id}/php/journaux/shadow`)).statusCode).toBe(404);
+
+    // Tâche retirée : plus de crontab.
+    await call("PATCH", `/api/sites/${id}/php`, { cron: null });
+    expect(mem.nodes.has("/etc/crontabs/php-mytakumi")).toBe(false);
   });
 });
 
