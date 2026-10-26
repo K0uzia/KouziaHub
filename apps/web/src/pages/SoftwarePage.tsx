@@ -157,6 +157,10 @@ export function SoftwarePage() {
         onClose={() => setOpenId(null)}
         onOpen={setOpenId}
         onUpdated={upsert}
+        onDeleted={() => {
+          setOpenId(null);
+          void detail.reload();
+        }}
         onRenew={(l) =>
           openNew({ entreprise: l.entreprise, client: l.erpClientId ? { id: l.erpClientId, name: l.clientName } : null, contact: l.contact, renewOf: l.expire })
         }

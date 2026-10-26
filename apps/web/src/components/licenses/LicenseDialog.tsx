@@ -2,7 +2,7 @@ import { useEffect, useId, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faCopy, faRotate } from "@fortawesome/free-solid-svg-icons";
+import { faCopy, faRotate, faTrashCan } from "@fortawesome/free-solid-svg-icons";
 import type { LicenseDetail, LicenseSummary, UpdateLicenseInput } from "@hub/contract";
 import { api, errorMessage } from "@/lib/api";
 import { copyText } from "@/lib/clipboard";
@@ -13,6 +13,7 @@ import { Modal } from "@/components/ui/Modal";
 import { Badge } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Banner } from "@/components/ui/Banner";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Field, Input, Textarea } from "@/components/ui/Field";
 import { ErpClientField, type LinkedClient } from "@/components/licenses/ErpClientField";
 import { KeyBox } from "@/components/licenses/KeyBox";
@@ -31,6 +32,7 @@ export function LicenseDialog({
   onOpen,
   onUpdated,
   onRenew,
+  onDeleted,
 }: {
   licenseId: string | null;
   softwareSlug: string;
@@ -44,6 +46,8 @@ export function LicenseDialog({
   onOpen: (id: string) => void;
   onUpdated: (license: LicenseDetail) => void;
   onRenew: (license: LicenseDetail) => void;
+  /** Clé retirée du registre du hub. */
+  onDeleted: (id: string) => void;
 }) {
   const ids = useId();
   const detail = useResource<LicenseDetail>(licenseId ? `/api/logiciels/${softwareSlug}/cles/${licenseId}` : null);
@@ -53,6 +57,9 @@ export function LicenseDialog({
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [word, setWord] = useState("");
+  const [deleting, setDeleting] = useState(false);
 
   // Formulaire recalé sur la clé lue (ouverture, autre clé de l'historique, enregistrement).
   useEffect(() => {
@@ -86,6 +93,21 @@ export function LicenseDialog({
       toast.error(message);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function onDelete() {
+    if (!l) return;
+    setDeleting(true);
+    try {
+      await api(`/api/logiciels/${softwareSlug}/cles/${l.id}`, { method: "DELETE", json: l.erpClientId ? { confirm: word } : {} });
+      toast.success("Licence retirée du hub");
+      setConfirmDelete(false);
+      onDeleted(l.id);
+    } catch (err) {
+      toast.error(errorMessage(err, "Suppression impossible."));
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -179,6 +201,56 @@ export function LicenseDialog({
               Journal des clés de licence
             </Link>
           </section>
+
+          <section aria-labelledby={`${ids}-delete`} className="space-y-2 border-t border-[var(--border)] pt-5">
+            <h3 id={`${ids}-delete`} className="text-base font-semibold">
+              Supprimer du hub
+            </h3>
+            <p className="max-w-[65ch] text-sm text-[var(--muted)]">Pour les licences de test. La clé déjà installée continue de fonctionner : ce n'est pas une révocation.</p>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setWord("");
+                setConfirmDelete(true);
+              }}
+            >
+              <FontAwesomeIcon icon={faTrashCan} className="h-3.5 w-3.5" aria-hidden />
+              Supprimer la licence
+            </Button>
+          </section>
+          <ConfirmDialog
+            open={confirmDelete}
+            title="Supprimer la licence"
+            message={
+              <>
+                <p>
+                  La licence de <strong>{l.entreprise}</strong> (clé {l.id}, émise le {formatDay(l.emise)}) disparaît du hub, mais la clé déjà installée continue de
+                  fonctionner.
+                </p>
+                {l.erpClientId ? (
+                  <p className="mt-2">
+                    Elle est liée au client de l'ERP <strong>{l.clientName ?? l.erpClientId}</strong>. La suppression est notée au journal.
+                  </p>
+                ) : (
+                  <p className="mt-2">La suppression est notée au journal.</p>
+                )}
+              </>
+            }
+            confirmLabel="Supprimer"
+            danger
+            busy={deleting}
+            confirmDisabled={l.erpClientId !== null && word.trim().toLowerCase() !== "supprimer"}
+            onConfirm={() => void onDelete()}
+            onClose={() => setConfirmDelete(false)}
+          >
+            {l.erpClientId ? (
+              <div className="mt-4">
+                <Field label="Pour confirmer, taper « supprimer »">
+                  <Input value={word} onChange={(e) => setWord(e.target.value)} autoComplete="off" spellCheck={false} />
+                </Field>
+              </div>
+            ) : null}
+          </ConfirmDialog>
         </div>
       ) : null}
     </Modal>

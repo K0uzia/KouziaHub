@@ -40,6 +40,21 @@ const NO_SIGNING = "Émission impossible : la clé de signature est absente sur 
 
 const slugParams = z.object({ slug: routeParam });
 const keyParams = z.object({ slug: routeParam, id: routeParam });
+const deleteSchema = z.object({ confirm: z.string().max(64).optional() }).strict();
+/** Mot à taper pour supprimer une licence liée à un client de l'ERP. */
+export const DELETE_WORD = "supprimer";
+/** Identifiants des licences supprimées (HubSetting) : jamais réémis. */
+const DELETED_PREFIX = "licence.supprimee.";
+
+/** Identifiant neuf : 96 bits aléatoires, jamais celui d'une licence existante ou supprimée. */
+async function freshLicenseId(): Promise<string> {
+  for (let i = 0; i < 5; i++) {
+    const id = randomBytes(12).toString("base64url");
+    const [used, deleted] = await Promise.all([prisma.license.findUnique({ where: { id } }), prisma.hubSetting.findUnique({ where: { key: `${DELETED_PREFIX}${id}` } })]);
+    if (!used && !deleted) return id;
+  }
+  throw new HttpError(500, "Identifiant de licence introuvable : relancer.");
+}
 const erpId = z.string().regex(ERP_CLIENT_ID).nullable().optional();
 const text = (max: number) => z.string().max(max).nullable().optional();
 const createSchema = z
@@ -318,7 +333,7 @@ export function licensesRoutes(services: Services): FastifyPluginAsync {
       if (erpClientId) await ensureErpClient(services, erpClientId);
       const key = await signingKey(software.slug);
       if (!key) throw new HttpError(503, NO_SIGNING, "signing_unavailable");
-      const id = randomBytes(12).toString("base64url");
+      const id = await freshLicenseId();
       const signed = { v: 1 as const, id, entreprise: entreprise.value, emise, expire: expire.value };
       const cle = software.format === TB1 ? signTb1(signed, key) : signKz1(software.keyPrefix!, { ...signed, logiciel: software.slug }, key);
       const row = await prisma.license.create({
@@ -364,6 +379,35 @@ export function licensesRoutes(services: Services): FastifyPluginAsync {
       const updated = await prisma.license.update({ where: { id: row.id }, data });
       await audit({ action: "licence.modifier", result: "ok", detail: `${software.slug} : clé ${row.id}` });
       return detailOf(updated, (await erpNames(services)).names, parisToday());
+    });
+
+    // Suppression du registre (licences de test) : PAS une révocation, la clé installée reste valide (vérification
+    // hors ligne). Liée à un client de l'ERP : mot de confirmation exigé. Identifiant gardé à part, jamais réémis.
+    app.delete("/api/logiciels/:slug/cles/:id", async (request) => {
+      const { slug, id } = keyParams.parse(request.params);
+      const parsed = deleteSchema.safeParse(request.body ?? {});
+      if (!parsed.success) throw new HttpError(400, "Confirmation invalide.");
+      const software = await softwareOf(slug);
+      const row = await prisma.license.findFirst({ where: { id, softwareId: software.id } });
+      if (!row) throw new HttpError(404, "Clé introuvable.");
+      const clientName = row.erpClientId ? ((await erpNames(services)).names.get(row.erpClientId) ?? null) : null;
+      if (row.erpClientId && (parsed.data.confirm ?? "").trim().toLowerCase() !== DELETE_WORD) {
+        throw new HttpError(400, `Licence liée à un client de l'ERP : pour confirmer, taper « ${DELETE_WORD} ».`, "confirm");
+      }
+      const deletedAt = new Date().toISOString();
+      await prisma.$transaction([
+        prisma.hubSetting.create({
+          data: { key: `${DELETED_PREFIX}${row.id}`, value: JSON.stringify({ logiciel: software.slug, emise: row.emise, erpClientId: row.erpClientId, deletedAt }) },
+        }),
+        prisma.license.delete({ where: { id: row.id } }),
+      ]);
+      const client = row.erpClientId ? `, client de l'ERP ${clientName ?? row.erpClientId}` : ", sans client de l'ERP";
+      await audit({
+        action: "licence.supprimer",
+        result: "ok",
+        detail: `${software.slug} : clé ${row.id} (${row.entreprise}), émise le ${row.emise}, expire le ${row.expire}${client}. Retirée du hub, la clé installée reste valide.`,
+      });
+      return { deleted: row.id };
     });
   };
 }

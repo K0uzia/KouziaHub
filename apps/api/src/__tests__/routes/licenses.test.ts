@@ -135,7 +135,6 @@ describe("page Logiciels : émission des clés Tracebay", () => {
     expect(ok.json()).toMatchObject({ notes: "Renouvelée en 2027", contact: "jean@atelier.fr", erpClientId: "demo-02", entreprise: "Atelier Nord", cle: created.cle });
     const event = await prisma.auditEvent.findFirstOrThrow({ where: { action: "licence.modifier" } });
     expect(event.detail).toBe(`tracebay : clé ${created.id}`);
-    expect(hub.app.hasRoute({ method: "DELETE", url: "/api/logiciels/:slug/cles/:id" })).toBe(false);
   });
 
   it("tri : expiration la plus proche d'abord, puis entreprise ; compteurs par état", async () => {
@@ -154,5 +153,51 @@ describe("page Logiciels : émission des clés Tracebay", () => {
   it("routes derrière la session", async () => {
     expect((await hub.app.inject({ method: "GET", url: "/api/logiciels" })).statusCode).toBe(401);
     expect((await hub.app.inject({ method: "POST", url: "/api/logiciels/tracebay/cles", headers: { origin: "http://localhost:5174" }, payload: { entreprise: "x", months: 1 } })).statusCode).toBe(401);
+  });
+});
+
+describe("suppression d'une licence (licences de test)", () => {
+  const del = (id: string, payload?: Record<string, unknown>) =>
+    hub.app.inject({ method: "DELETE", url: `/api/logiciels/tracebay/cles/${id}`, headers: hub.headers, ...(payload ? { payload } : {}) });
+
+  it("sans client : retirée du registre et de la liste, journal détaillé, la clé reste vérifiable (pas de révocation)", async () => {
+    const issued = (await emit({ entreprise: "Essai salon", months: 1 })).json() as LicenseDetail;
+    const res = await del(issued.id);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toEqual({ deleted: issued.id });
+    expect((await get<SoftwareDetail>("/api/logiciels/tracebay")).body.licenses).toEqual([]);
+    expect((await get(`/api/logiciels/tracebay/cles/${issued.id}`)).status).toBe(404);
+    const journal = await prisma.auditEvent.findFirstOrThrow({ where: { action: "licence.supprimer" } });
+    expect(journal.detail).toContain(issued.id);
+    expect(journal.detail).toContain(`émise le ${issued.emise}`);
+    expect(journal.detail).toContain("sans client de l'ERP");
+    expect(journal.detail).toContain("la clé installée reste valide");
+    // Vérification hors ligne inchangée : la clé déjà remise reste valide.
+    expect(verifyTb1(issued.cle, publicKey.export({ type: "spki", format: "pem" }).toString(), parisToday()).ok).toBe(true);
+    expect((await del(issued.id)).statusCode).toBe(404);
+  });
+
+  it("liée à un client de l'ERP : mot de confirmation exigé, client nommé au journal", async () => {
+    const issued = (await emit({ entreprise: "Société Ébène", erpClientId: "demo-01", months: 12 })).json() as LicenseDetail;
+    for (const payload of [undefined, { confirm: "oui" }]) {
+      const refused = await del(issued.id, payload);
+      expect(refused.statusCode).toBe(400);
+      expect(refused.json()).toMatchObject({ code: "confirm" });
+    }
+    expect((await get(`/api/logiciels/tracebay/cles/${issued.id}`)).status).toBe(200);
+    expect((await del(issued.id, { confirm: " Supprimer " })).statusCode).toBe(200);
+    const journal = await prisma.auditEvent.findFirstOrThrow({ where: { action: "licence.supprimer" } });
+    expect(journal.detail).toMatch(/client de l'ERP .+/);
+    expect(journal.detail).not.toContain("sans client");
+    expect((await del("x", { confirm: "supprimer", autre: 1 })).statusCode).toBe(400);
+  });
+
+  it("identifiant d'une licence supprimée jamais réémis", async () => {
+    const issued = (await emit({ entreprise: "Essai", months: 1 })).json() as LicenseDetail;
+    await del(issued.id);
+    expect(await prisma.hubSetting.findUnique({ where: { key: `licence.supprimee.${issued.id}` } })).not.toBeNull();
+    const ids = new Set<string>();
+    for (let i = 0; i < 5; i++) ids.add(((await emit({ entreprise: `Essai ${i}`, months: 1 })).json() as LicenseDetail).id);
+    expect(ids.has(issued.id)).toBe(false);
   });
 });
