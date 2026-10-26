@@ -380,6 +380,12 @@ function readEnvFile(path) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  // Filet : l'erreur d'un flux (tube d'une commande fermée, connexion coupée) est journalisée sans arrêter l'agent,
+  // l'opération en cours voit l'échec de sa commande. Toute autre erreur l'arrête (supervise-daemon le relance).
+  process.on("uncaughtException", (err) => {
+    console.error(`${new Date().toISOString()} erreur non rattrapée :`, err?.stack ?? err);
+    if (!["EPIPE", "ECONNRESET", "ERR_STREAM_DESTROYED", "ERR_STREAM_WRITE_AFTER_END"].includes(err?.code)) process.exit(1);
+  });
   const env = readEnvFile("/etc/kouziaphp/agent.env");
   const secret = readText("/etc/kouziaphp/agent.secret") ?? "";
   const port = Number(env.KP_AGENT_PORT ?? 8790);
