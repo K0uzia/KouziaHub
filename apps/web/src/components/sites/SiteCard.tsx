@@ -26,15 +26,16 @@ export function SiteCard({ site, headingLevel = 3 }: { site: SiteSummary; headin
             </Link>
           </Heading>
         </div>
-        {/* Nom du site = nom du client : la ligne du client le répéterait. */}
-        {site.kind === "CLIENT" && site.clientName === site.name ? null : (
-          <div className="flex min-w-0 flex-wrap items-center gap-2 text-sm text-[var(--text)]">
+        {/* Client : son nom sous le titre, sauf s'il est déjà le nom du site. */}
+        {site.kind === "CLIENT" && site.clientName !== site.name ? (
+          <div className="flex min-w-0 text-sm text-[var(--text)]">
             <OwnerLabel site={site} />
           </div>
-        )}
-        {/* Un seul état (panne, erreur, création, hors ligne, en ligne) ; l'échéance proche reste à côté, en petit. */}
+        ) : null}
+        {/* Une seule rangée, même ordre sur toutes les cartes : état, type (Perso ou Client), PHP, échéance proche. */}
         <div className="flex flex-wrap items-center gap-2">
           <StateBadge site={site} />
+          {site.kind === "PERSO" ? <Badge tone="violet">Perso</Badge> : <Badge tone="blue">Client</Badge>}
           {site.hosting === "php" ? <Badge tone="violet">PHP</Badge> : null}
           <ExpiryBadge monitor={site.monitor} />
         </div>
