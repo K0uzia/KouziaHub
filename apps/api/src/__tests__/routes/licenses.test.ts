@@ -173,7 +173,7 @@ describe("suppression d'une licence (licences de test)", () => {
     expect(journal.detail).toContain("sans client de l'ERP");
     expect(journal.detail).toContain("la clé installée reste valide");
     // Vérification hors ligne inchangée : la clé déjà remise reste valide.
-    expect(verifyTb1(issued.cle, publicKey.export({ type: "spki", format: "pem" }).toString(), parisToday()).ok).toBe(true);
+    expect(verifyTb1(issued.cle, publicKey).ok).toBe(true);
     expect((await del(issued.id)).statusCode).toBe(404);
   });
 
