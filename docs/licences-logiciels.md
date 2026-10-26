@@ -27,7 +27,7 @@ Tracebay (version portable, poste du client)
   n'ouvre aucune connexion vers le hub
 ```
 
-Le hub ne sait pas si une clé a été collée, sur quel poste, ni si elle est encore utilisée. Il n'y a pas de rappel, pas de liste de révocation, pas de lien au poste. L'expiration tient lieu de fin de droit : l'application passe en lecture seule.
+Le hub ne sait pas si une clé a été collée, sur quel poste, ni si elle est encore utilisée. Il n'y a pas de rappel, pas de liste de révocation, pas de lien au poste. Une licence peut être retirée du registre du hub (licences de test) ; ce n'est pas une révocation : la clé déjà installée reste valide jusqu'à son expiration. L'expiration tient lieu de fin de droit : l'application passe en lecture seule.
 
 Une clé est liée au nom de l'entreprise, figé dans la signature. Ce nom est imposé sur les PDF. Une clé prêtée produit des documents au nom d'une autre entreprise.
 
@@ -340,7 +340,15 @@ type UpdateLicenseInput = {
 
 Refus de tout autre champ (`strict`), en particulier `entreprise`, `emise`, `expire`. Journal `licence.modifier`, détail limité au slug et à l'identifiant, sans le contact.
 
-Pas de `DELETE`.
+### 6.6 Supprimer une licence du registre
+
+`DELETE /api/logiciels/:slug/cles/:id`, corps `{ confirm?: string }`.
+
+Réservé aux licences de test. La ligne disparaît du hub ; la clé n'est pas révoquée (vérification hors ligne), elle reste valide jusqu'à son expiration.
+
+- Licence liée à un client de l'ERP : `confirm` doit valoir « supprimer », sinon 400 `confirm`.
+- Témoin `licence.supprimee.<id>` (HubSetting) écrit dans la même transaction : un identifiant supprimé n'est jamais réémis (l'émission tire un autre identifiant).
+- Journal `licence.supprimer` : logiciel, identifiant, entreprise, émission, expiration, client de l'ERP ou son absence ; jamais le contact.
 
 ## 7. Écrans
 
@@ -387,6 +395,8 @@ Pas de seconde confirmation : la clé n'éteint rien. Le texte sous le bouton ra
 ### 7.4 Après l'émission
 
 Notes, contact et client ERP se modifient sur le détail. L'entreprise, les dates et la chaîne restent en lecture seule, avec la phrase : « Pour changer le nom ou la date, émettez une nouvelle clé. L'ancienne reste valable jusqu'à son expiration. »
+
+En bas du détail, section « Supprimer du hub » (licences de test), bouton « Supprimer la licence ». Confirmation : « La licence de <entreprise> (clé <identifiant>, émise le <date>) disparaît du hub, mais la clé déjà installée continue de fonctionner. » Licence liée à un client de l'ERP : le client est nommé, et le bouton reste inactif tant que « supprimer » n'est pas tapé dans le champ prévu.
 
 ## 8. Côté Tracebay Autonome
 
@@ -439,6 +449,7 @@ Sur le modèle de `apps/api/src/__tests__/routes/sites.test.ts` et des tests de 
 - Le journal de l'émission ne contient pas la chaîne `TB1` ni le contact.
 - KZ1 : préfixe, JSON canonique, refus d'une clé d'un autre logiciel (`logiciel`) ou d'une autre paire (`signature`) ; création, champs refusés, doublons en 409, PATCH sans identifiant ni préfixe, suppression seulement sans clé, vignette (`software.test.ts`, `kz1.test.ts`).
 - Une base copiée ne montre pas la clé en clair (colonne `keyEncrypted`).
+- Suppression sans client, avec mot de confirmation si client ERP, numéro jamais réémis, clé toujours vérifiable (`licenses.test.ts`).
 
 ## 11. Hors de ce branchement
 
