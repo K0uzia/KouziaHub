@@ -7,6 +7,7 @@ import {
   journalStatus,
   notificationsStatus,
   reportsStatus,
+  smtpStatus,
   securityStatus,
   storageStatus,
   veilleStatus,
@@ -140,5 +141,14 @@ describe("serveur des sites PHP", () => {
     expect(status({ configured: true, reachable: true, sitesMemoryMb: 512, scriptsAvailable: "a".repeat(64), state: { ...state, lastUpgrade: "2026-10-01" } })?.level).toBe("todo");
     expect(status({ configured: true, reachable: true, sitesMemoryMb: 512, scriptsAvailable: "a".repeat(64), state: { ...state, lastUpgrade: null } })?.level).toBe("todo");
     expect(status({ configured: true, reachable: true, state, sitesMemoryMb: 512, scriptsAvailable: "a".repeat(64) })).toMatchObject({ level: "ok", reason: "Joignable : PHP 8.3, 1 site." });
+  });
+});
+
+describe("tuile Envoi d'e-mails", () => {
+  it("à faire tant que le compte SMTP n'est pas complet", () => {
+    expect(smtpStatus({ data: null, error: null })).toBeNull();
+    expect(smtpStatus({ data: null, error: "réseau" })?.level).toBe("error");
+    expect(smtpStatus({ data: { configured: false, host: null }, error: null })?.level).toBe("todo");
+    expect(smtpStatus({ data: { configured: true, host: "smtp.exemple.fr" }, error: null })).toMatchObject({ level: "ok", reason: "E-mails capturés remis par smtp.exemple.fr." });
   });
 });

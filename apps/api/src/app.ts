@@ -27,9 +27,10 @@ import { maintenanceRoutes } from "@/routes/maintenance.js";
 import { systemRoutes } from "@/routes/system.js";
 import { monitorRoutes } from "@/routes/monitor.js";
 import { pushRoutes } from "@/routes/push.js";
-import { settingsRoutes } from "@/routes/settings.js";
+import { settingsRoutes, smtpSettingsRoutes } from "@/routes/settings.js";
 import { phpRoutes } from "@/routes/php.js";
 import { phpSiteRoutes } from "@/routes/php-site.js";
+import { phpMailRoutes } from "@/routes/php-mails.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -89,7 +90,8 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         fontSrc: ["'self'"],
         connectSrc: ["'self'"],
         objectSrc: ["'none'"],
-        frameSrc: ["'none'"],
+        // Seul cadre : le HTML d'un e-mail capturé, servi par le hub (sandbox, CSP propre à la réponse).
+        frameSrc: ["'self'"],
         frameAncestors: ["'none'"],
         baseUri: ["'self'"],
         formAction: ["'self'"],
@@ -132,8 +134,10 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   await app.register(monitorRoutes(services));
   await app.register(pushRoutes(services));
   await app.register(settingsRoutes);
+  await app.register(smtpSettingsRoutes(services));
   await app.register(phpRoutes(services));
   await app.register(phpSiteRoutes(services));
+  await app.register(phpMailRoutes(services, { sender: services.mailSender, limiter: services.mailLimiter }));
 
   // Par le tunnel : état seulement, comme l'ERP. Le détail (migrations, veille, Intl) ne sert qu'à hubctl
   // status, appel local du CT.

@@ -32,7 +32,7 @@ function parseTarget(raw: string): { kind: "file" | "dir"; path: string } | { er
 }
 
 /** En-tête de téléchargement : nom ASCII de repli puis nom UTF-8 (RFC 6266). */
-function contentDisposition(filePath: string): string {
+export function contentDisposition(filePath: string): string {
   const base = filePath.slice(filePath.lastIndexOf("/") + 1);
   const ascii = base.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(base)}`;

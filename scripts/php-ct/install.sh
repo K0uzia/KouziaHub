@@ -137,7 +137,7 @@ if [ "$SCRIPT_DIR" != "$KP_LIB_DIR" ]; then
     install -o root -g root -m 755 "${SCRIPT_DIR}/${_f}" "${KP_LIB_DIR}/${_f}"
   done
   mkdir -p "${KP_LIB_DIR}/openrc" "${KP_LIB_DIR}/agent"
-  for _f in agent.mjs sites.mjs update.mjs; do
+  for _f in agent.mjs sites.mjs update.mjs mail.mjs; do
     install -o root -g root -m 644 "${SCRIPT_DIR}/agent/${_f}" "${KP_LIB_DIR}/agent/${_f}"
   done
   install -o root -g root -m 755 "${SCRIPT_DIR}/mail-capture" "${KP_LIB_DIR}/mail-capture"
@@ -151,6 +151,9 @@ for _f in kouziaphp-firewall kouziaphp-cgroups cloudflared kouziaphp-agent kouzi
 done
 mkdir -p "${KP_ETC_DIR}/sites" "${KP_ETC_DIR}/fpm"
 chmod 700 "${KP_ETC_DIR}/sites"
+# Dépôt du capteur d'e-mails (lot P5) : à root, hors de portée des sites.
+mkdir -p "${KP_STATE_DIR}/mail"
+chmod 700 "${KP_STATE_DIR}/mail"
 chmod 755 "${KP_ETC_DIR}/fpm"
 # Agent déjà réglé (réinstallation) : relancé sur la nouvelle copie. Sinon : kouziaphpctl agent (README, 11.8).
 # Lancé par l'agent lui-même (mise à jour depuis le hub) : il se relance seul après avoir répondu.

@@ -20,6 +20,8 @@ import { backfillSiteTargets } from "@/lib/monitor/targets.js";
 import { phpAgentFromEnv, type PhpAgentClient } from "@/lib/php-agent/client.js";
 import { startPhpBackups } from "@/lib/php-app.js";
 import { phpDnsTarget } from "@/lib/php-sites.js";
+import { smtpSender, type MailSender } from "@/lib/mailer.js";
+import { ForwardLimiter, startPhpMailRedirect } from "@/lib/php-mails.js";
 
 export type Services = {
   cloudflare: CloudflareGateway;
@@ -39,6 +41,9 @@ export type Services = {
   zones: ZonesDirectory;
   /** Agent du CT des sites PHP (docs/cadrage.md, section 11), null tant qu'il n'est pas posé. */
   phpAgent: PhpAgentClient | null;
+  /** Remise des e-mails capturés par le SMTP du hub (lot P5), et son débit par site. */
+  mailSender: MailSender;
+  mailLimiter: ForwardLimiter;
   /** Minuteries des tâches de fond (startBackground). */
   timers: NodeJS.Timeout[];
   /** Arrête les minuteries et sondages, attend les opérations en cours (borné). */
@@ -58,6 +63,7 @@ export type ServicesOverrides = {
   push?: PushService;
   zones?: ZonesDirectory;
   phpAgent?: PhpAgentClient | null;
+  mailSender?: MailSender;
 };
 
 /** Cloudflare réel si un jeton est posé, sinon simulé (persisté dans HUB_DATA_DIR/fake-cloudflare.json). */
@@ -118,6 +124,8 @@ export function createServices(overrides: ServicesOverrides = {}): Services {
       );
     }
   };
+  services.mailSender = overrides.mailSender ?? smtpSender;
+  services.mailLimiter = new ForwardLimiter();
   services.engine = new OperationEngine(services);
   services.domains = new DomainWatcher(services, overrides.domainWatcher);
   services.timers = [];
@@ -150,6 +158,8 @@ export async function startBackground(services: Services): Promise<void> {
   services.timers.push(first, daily, gc);
   // Bases des sites PHP : export de nuit, rangé dans les données du hub (incluses dans sa sauvegarde chiffrée).
   services.timers.push(startPhpBackups(services));
+  // E-mails capturés : redirection vers les adresses autorisées des sites qui l'ont activée, chaque minute.
+  services.timers.push(startPhpMailRedirect({ services, sender: services.mailSender, limiter: services.mailLimiter }));
   const backfilled = await backfillSiteTargets(services.sitesDomain).catch((err) => {
     console.error("[surveillance] rattrapage des cibles impossible", err instanceof Error ? err.message : err);
     return 0;

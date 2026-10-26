@@ -17,10 +17,11 @@ import { rm } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { createServer, request as httpRequest } from "node:http";
 import { pathToFileURL } from "node:url";
+import { createMailCatcher, MAIL_PORT, mailStore, slugOfUid, uidFromProcNet } from "./mail.mjs";
 import { fileSha256, realSys, siteOperations } from "./sites.mjs";
 import { ctOperations } from "./update.mjs";
 
-export const AGENT_VERSION = "2";
+export const AGENT_VERSION = "3";
 export const WINDOW_SECONDS = 60;
 const MAX_BODY_BYTES = 1024 * 1024;
 const NONCE_RE = /^[0-9a-f]{32}$/;
@@ -162,7 +163,16 @@ const routes = [
   { method: "POST", re: new RegExp(`^/v1/sites/${SITE}/couper$`), site: true, run: (c, [slug]) => c.sites.setEnabled(slug, false) },
   { method: "POST", re: new RegExp(`^/v1/sites/${SITE}/rallumer$`), site: true, run: (c, [slug]) => c.sites.setEnabled(slug, true) },
   { method: "GET", re: new RegExp(`^/v1/sites/${SITE}/verifier$`), site: true, run: (c, [slug]) => c.sites.check(slug) },
-  { method: "DELETE", re: new RegExp(`^/v1/sites/${SITE}$`), site: true, run: (c, [slug]) => c.sites.remove(slug) },
+  { method: "DELETE", re: new RegExp(`^/v1/sites/${SITE}$`), site: true, run: async (c, [slug]) => {
+    const result = await c.sites.remove(slug);
+    await c.mails?.drop(slug);
+    return result;
+  } },
+  // Lot P5 : e-mails capturés (dépôt de l'agent, hors de portée du site).
+  { method: "GET", re: new RegExp(`^/v1/sites/${SITE}/mails$`), mail: true, run: (c, [slug]) => c.mails.list(slug) },
+  { method: "GET", re: new RegExp(`^/v1/sites/${SITE}/mails/([0-9]{13}-[0-9a-f]{8})$`), mail: true, download: true, run: (c, [slug, id]) => c.mails.file(slug, id) },
+  { method: "DELETE", re: new RegExp(`^/v1/sites/${SITE}/mails/([0-9]{13}-[0-9a-f]{8})$`), mail: true, run: (c, [slug, id]) => c.mails.remove(slug, id) },
+  { method: "DELETE", re: new RegExp(`^/v1/sites/${SITE}/mails$`), mail: true, run: (c, [slug]) => c.mails.clear(slug) },
   // Lot P5 : tâche planifiée (réglée par l'upsert du site), journaux du site.
   { method: "GET", re: new RegExp(`^/v1/sites/${SITE}/cron$`), site: true, run: (c, [slug]) => c.sites.cronState(slug) },
   { method: "GET", re: new RegExp(`^/v1/sites/${SITE}/journaux/(php|fpm|nginx|cron)/(\\d{1,4})$`), site: true, run: (c, [slug, kind, n]) => c.sites.logs(slug, kind, Number(n)) },
@@ -186,7 +196,7 @@ const SHA_RE = /^[0-9a-f]{64}$/;
  * sites (opérations sur les sites, sites.mjs ; absentes : 503), log (une ligne par requête : date, IP, méthode,
  * chemin, statut ; jamais un en-tête ni un corps).
  */
-export function createAgent({ secret, allowedIps, probes = systemProbes, sites = null, ct = null, restart = () => {}, log = () => {} }) {
+export function createAgent({ secret, allowedIps, probes = systemProbes, sites = null, mails = null, ct = null, restart = () => {}, log = () => {} }) {
   if (typeof secret !== "string" || secret.length < 32) throw new Error("Secret de l'agent absent ou trop court (32 caractères au moins).");
   const allowed = new Set(allowedIps);
   const seen = new Map();
@@ -239,12 +249,13 @@ export function createAgent({ secret, allowedIps, probes = systemProbes, sites =
       return true;
     };
 
-    // Fichier rendu en flux : empreinte calculée d'abord, signée avec le nonce, puis envoi ; fichier retiré ensuite.
-    const sendFile = async (file) => {
+    // Fichier rendu en flux : empreinte calculée d'abord, signée avec le nonce, puis envoi ; fichier retiré ensuite,
+    // sauf s'il est gardé (e-mail capturé).
+    const sendFile = async ({ file, keep = false, type = "application/gzip" }) => {
       const sha = await fileSha256(file);
       done = true;
       res.writeHead(200, {
-        "content-type": "application/gzip",
+        "content-type": type,
         "cache-control": "no-store",
         "x-kouzia-agent-content-sha256": sha,
         "x-kouzia-agent-signature": signResponseHash(secret, nonce, 200, sha),
@@ -252,7 +263,7 @@ export function createAgent({ secret, allowedIps, probes = systemProbes, sites =
       try {
         await pipeline(createReadStream(file), res);
       } finally {
-        await rm(file, { force: true });
+        if (!keep) await rm(file, { force: true });
         log(`${new Date(probes.now()).toISOString()} ${ip} ${req.method} ${path} 200`);
       }
     };
@@ -261,9 +272,10 @@ export function createAgent({ secret, allowedIps, probes = systemProbes, sites =
       if (!route) return reply(404, { error: "Opération inconnue." });
       if (route.site && !sites) return reply(503, { error: "Opérations sur les sites indisponibles sur cet agent." });
       if (route.ct && !ct) return reply(503, { error: "Mise à jour du CT indisponible sur cet agent." });
+      if (route.mail && !mails) return reply(503, { error: "Capteur d'e-mails indisponible sur cet agent." });
       try {
         const result = await route.run(ctx, params);
-        if (route.download) return await sendFile(result.file);
+        if (route.download) return await sendFile(result);
         // Scripts mis à jour : réponse envoyée d'abord, puis l'agent s'arrête ; supervise-daemon le relance sur la nouvelle copie.
         if (result?.restart) res.once("finish", () => setTimeout(restart, 300));
         return reply(200, result);
@@ -348,7 +360,7 @@ export function createAgent({ secret, allowedIps, probes = systemProbes, sites =
           return {};
         }
       };
-      void execute({ probes, sites, ct, json });
+      void execute({ probes, sites, mails, ct, json });
     });
   });
   server.requestTimeout = 15 * 60_000;
@@ -409,6 +421,19 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       }),
     sys: realSys(runImpl),
   });
+  // Capteur d'e-mails : SMTP local, site reconnu par l'UID de la connexion (/proc/net/tcp), dépôt à root.
+  const mails = mailStore({ dir: "/var/lib/kouziaphp/mail" });
+  const catcher = createMailCatcher({
+    store: mails,
+    siteOf: (socket) => {
+      const uid = uidFromProcNet(readText("/proc/net/tcp") ?? "", socket.remotePort ?? 0, MAIL_PORT);
+      const slug = uid === null ? null : slugOfUid(readText("/etc/passwd") ?? "", uid);
+      return slug && existsSync(`/etc/kouziaphp/sites/${slug}.json`) ? slug : null;
+    },
+    log: (line) => console.log(line),
+  });
+  catcher.on("error", (err) => console.error(`Capteur d'e-mails indisponible : ${err.message}`));
+  catcher.listen(MAIL_PORT, "127.0.0.1");
   const ct = ctOperations({ stateDir: "/var/lib/kouziaphp", libDir: "/usr/local/lib/kouziaphp", initDir: "/etc/init.d", sys: realSys(runImpl), now: Date.now });
   const server = createAgent({
     secret,
@@ -417,6 +442,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     restart: () => process.exit(0),
     allowedIps: hubIps,
     sites,
+    mails,
     log: (line) => {
       try {
         appendFileSync("/var/log/kouziaphp/agent.log", `${line}\n`);

@@ -279,11 +279,34 @@ export class PhpAgentClient {
    * requête, recalculée ici. Fichier retiré si elle diffère.
    */
   async exportDb(slug: string, file: string): Promise<{ sha256: string; size: number }> {
-    const path = `/v1/sites/${slug}/base/export`;
+    return this.download(`/v1/sites/${slug}/base/export`, file, DUMP_TIMEOUT_MS, "export");
+  }
+
+  /** E-mail capturé (.eml) écrit dans « file », même contrôle d'empreinte signée que l'export. */
+  async downloadMail(slug: string, id: string, file: string): Promise<{ sha256: string; size: number }> {
+    return this.download(`/v1/sites/${slug}/mails/${id}`, file, OPERATION_TIMEOUT_MS, "e-mail");
+  }
+
+  async mails(slug: string): Promise<PhpAgentMail[]> {
+    const parsed = mailsSchema.safeParse(await this.request("GET", `/v1/sites/${slug}/mails`, undefined, undefined, OPERATION_TIMEOUT_MS));
+    if (!parsed.success) throw new PhpAgentUnavailableError("Serveur des sites PHP : liste des e-mails illisible.");
+    return parsed.data.mails;
+  }
+
+  async removeMail(slug: string, id: string): Promise<void> {
+    await this.request("DELETE", `/v1/sites/${slug}/mails/${id}`, undefined, undefined, OPERATION_TIMEOUT_MS);
+  }
+
+  async clearMails(slug: string): Promise<number> {
+    const r = (await this.request("DELETE", `/v1/sites/${slug}/mails`, undefined, undefined, OPERATION_TIMEOUT_MS)) as { removed?: unknown };
+    return typeof r.removed === "number" ? r.removed : 0;
+  }
+
+  private async download(path: string, file: string, timeoutMs: number, what: string): Promise<{ sha256: string; size: number }> {
     const timestamp = String(Math.floor(this.now() / 1000));
     const nonce = randomBytes(16).toString("hex");
     let res: Response;
-    const signal = AbortSignal.timeout(DUMP_TIMEOUT_MS);
+    const signal = AbortSignal.timeout(timeoutMs);
     try {
       res = await this.send(this.base + path, {
         method: "GET",
@@ -296,7 +319,7 @@ export class PhpAgentClient {
         signal,
       });
     } catch (err) {
-      throw new PhpAgentUnavailableError(failureText(err, signal.aborted, DUMP_TIMEOUT_MS, `GET ${path}`));
+      throw new PhpAgentUnavailableError(failureText(err, signal.aborted, timeoutMs, `GET ${path}`));
     }
     if (res.status !== 200 || !res.body) {
       // Refus : réponse JSON signée ordinaire.
@@ -316,7 +339,7 @@ export class PhpAgentClient {
     const declared = res.headers.get("x-kouzia-agent-content-sha256") ?? "";
     if (!/^[0-9a-f]{64}$/.test(declared) || !sameText(res.headers.get("x-kouzia-agent-signature") ?? "", signAgentResponseHash(this.#secret, nonce, 200, declared))) {
       await res.body.cancel().catch(() => undefined);
-      throw new PhpAgentUnavailableError("Serveur des sites PHP : export non signé, ignoré.");
+      throw new PhpAgentUnavailableError(`Serveur des sites PHP : ${what} non signé, ignoré.`);
     }
     const hash = createHash("sha256");
     let size = 0;
@@ -331,16 +354,36 @@ export class PhpAgentClient {
       await pipeline(Readable.fromWeb(res.body as unknown as WebReadableStream), counter, createWriteStream(file, { mode: 0o600 }));
     } catch {
       await rm(file, { force: true });
-      throw new PhpAgentUnavailableError("Serveur des sites PHP : export interrompu.");
+      throw new PhpAgentUnavailableError(`Serveur des sites PHP : ${what} interrompu.`);
     }
     const sha256 = hash.digest("hex");
     if (sha256 !== declared) {
       await rm(file, { force: true });
-      throw new PhpAgentUnavailableError("Serveur des sites PHP : export altéré en route (empreinte différente).");
+      throw new PhpAgentUnavailableError(`Serveur des sites PHP : ${what} altéré en route (empreinte différente).`);
     }
     return { sha256, size };
   }
 }
+
+const mailsSchema = z.object({
+  mails: z
+    .array(
+      z.object({
+        id: z.string().regex(/^[0-9]{13}-[0-9a-f]{8}$/),
+        receivedAt: z.string().max(40),
+        size: z.number().int().nonnegative(),
+        envelopeFrom: z.string().max(320),
+        envelopeTo: z.array(z.string().max(320)).max(100),
+        subject: z.string().max(1000).nullable(),
+        from: z.string().max(1000).nullable(),
+        to: z.string().max(1000).nullable(),
+        date: z.string().max(1000).nullable(),
+        attachments: z.number().int().nonnegative(),
+      }),
+    )
+    .max(1000),
+});
+export type PhpAgentMail = z.infer<typeof mailsSchema>["mails"][number];
 
 const cronSchema = z.object({
   cron: z.object({ script: z.string().max(200), every: z.enum(["5m", "15m", "30m", "1h", "1d"]) }).nullable(),

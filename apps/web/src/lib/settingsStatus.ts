@@ -123,3 +123,11 @@ export function phpServerStatus({ data, error: err }: Read<PhpServerStatus>): Ti
   if (age === null || age > PHP_UPGRADE_MAX_DAYS) return todo("Mises à jour de sécurité en retard : kouziaphpctl upgrade dans le CT.");
   return ok(`Joignable : PHP ${s.php.join(", ") || "absent"}, ${plural(s.sites, "site", "sites")}.`);
 }
+
+/** Envoi d'e-mails (SMTP du hub, lot P5) : remise des e-mails capturés des sites PHP. */
+export function smtpStatus({ data, error: err }: Read<{ configured: boolean; host: string | null }>): TileStatus | null {
+  if (err && !data) return error("Réglage SMTP illisible.");
+  if (!data) return null;
+  if (!data.configured) return todo("Pas de compte SMTP : les e-mails capturés ne peuvent pas être remis à votre adresse.");
+  return ok(`E-mails capturés remis par ${data.host}.`);
+}

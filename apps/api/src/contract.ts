@@ -189,6 +189,51 @@ export type PhpLogKind = "php" | "fpm" | "nginx" | "cron";
 /** GET /api/sites/:id/php/journaux/:kind : dernières lignes, valeurs du .env masquées. */
 export type PhpLogView = { kind: PhpLogKind; text: string };
 
+/** E-mail capturé d'un site PHP (lot P5), en-têtes décodés. */
+export type PhpMailSummary = {
+  id: string;
+  receivedAt: string;
+  size: number;
+  subject: string | null;
+  from: string | null;
+  /** Destinataires d'origine : enveloppe SMTP (Cci compris), sinon en-tête To. */
+  to: string[];
+  attachments: number;
+};
+/** Redirection des e-mails capturés : adresses autorisées (10 au plus), envoi par le SMTP du hub. */
+export type PhpMailRedirect = { enabled: boolean; recipients: string[] };
+/** GET /api/sites/:id/php/mails. */
+export type PhpMailList = {
+  mails: PhpMailSummary[];
+  redirect: PhpMailRedirect;
+  /** SMTP du hub réglé, et adresse de réception (« mon adresse »). */
+  smtp: { configured: boolean; to: string | null };
+};
+export type PhpMailAttachment = { index: number; filename: string; mimeType: string; size: number; inline: boolean };
+/** GET /api/sites/:id/php/mails/:mailId : contenu décodé ; le HTML se lit par sa route (cadre isolé). */
+export type PhpMailDetail = PhpMailSummary & {
+  cc: string[];
+  date: string | null;
+  headers: Array<{ name: string; value: string }>;
+  text: string | null;
+  hasHtml: boolean;
+  /** Le HTML charge des ressources distantes (images...), bloquées tant qu'on ne les demande pas. */
+  remoteContent: boolean;
+  attachmentsList: PhpMailAttachment[];
+};
+
+/** Compte SMTP du hub (réglages) : le mot de passe n'est jamais renvoyé. */
+export type SmtpSettings = {
+  host: string | null;
+  port: number | null;
+  security: "ssl" | "starttls";
+  user: string | null;
+  passwordSet: boolean;
+  from: string | null;
+  to: string | null;
+  configured: boolean;
+};
+
 /** Bornes des limites d'un site PHP (mêmes que l'agent). */
 export const PHP_LIMITS = {
   memoryLimitMb: { min: 64, max: 1024, default: 256 },

@@ -1,27 +1,79 @@
-#!/bin/sh
-# Capteur d'e-mails des sites PHP (docs/cadrage.md, section 11.6) : sendmail_path de chaque site. Lancé par PHP sous
-# le compte du site ; lit le message sur l'entrée et le range dans /srv/sites/<slug>/mail/. Il ne l'envoie JAMAIS :
-# le SMTP du CT est fermé. L'écran « E-mails capturés » et la redirection vers les adresses autorisées (par le hub)
-# viennent au lot P5.
-#
-# Usage (par PHP) : mail-capture <slug>   (code 0 : rangé ; 1 : refusé)
-set -eu
+#!/usr/bin/node
+// Capteur d'e-mails des sites PHP (docs/cadrage.md, section 11.6) : sendmail_path de chaque site. Lancé par PHP sous
+// le compte du site, il remet le message lu sur l'entrée au capteur de l'agent (SMTP sur 127.0.0.1:1025), qui
+// reconnaît le site par ce compte et le range hors de sa portée. Rien n'est JAMAIS envoyé : le SMTP sortant du CT
+// est fermé. Destinataires : arguments en forme d'adresse, sinon To, Cc et Bcc du message (comme « sendmail -t »).
+//
+// Usage (par PHP) : mail-capture <slug> [-t] [-i] [-f expéditeur] [adresses...]   (code 0 : rangé ; 1 : refusé)
+"use strict";
+const net = require("node:net");
 
-slug="${1:-}"
-case "$slug" in
-  ""|-*|*[!a-z0-9-]*) exit 1 ;;
-esac
-dir="/srv/sites/${slug}/mail"
-[ -d "$dir" ] && [ -w "$dir" ] || exit 1
+const MAX_BYTES = 25 * 1024 * 1024;
+const PORT = Number(process.env.KP_MAIL_PORT_TEST || 1025);
+const ADDRESS_RE = /[^\s<>,;:"()[\]\\]+@[^\s<>,;:"()[\]\\]+/g;
 
-umask 077
-file="${dir}/$(date '+%Y%m%d-%H%M%S')-$$.eml"
-# 25 Mo au plus par message.
-head -c 26214400 > "$file"
+const [slug, ...args] = process.argv.slice(2);
+if (!slug || !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(slug)) process.exit(1);
 
-# 100 derniers messages gardés. Noms fabriqués ici (date et numéro de processus) : ls trié par date suffit.
-# shellcheck disable=SC2012
-ls -1t "$dir"/*.eml 2>/dev/null | tail -n +101 | while IFS= read -r old; do
-  rm -f "$old"
-done
-exit 0
+let sender = "";
+const fromArgs = [];
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === "-f" && args[i + 1] !== undefined) sender = args[++i];
+  else if (args[i].startsWith("-f") && args[i].length > 2) sender = args[i].slice(2);
+  else if (!args[i].startsWith("-")) fromArgs.push(...(args[i].match(ADDRESS_RE) || []));
+}
+if (!/^[^\s<>]{0,320}$/.test(sender)) sender = "";
+
+const chunks = [];
+let size = 0;
+process.stdin.on("data", (c) => {
+  size += c.length;
+  if (size > MAX_BYTES) process.exit(1);
+  chunks.push(c);
+});
+process.stdin.on("end", () => {
+  // Fins de ligne en CRLF, points de tête doublés (transparence SMTP).
+  let text = Buffer.concat(chunks).toString("latin1").replace(/\r?\n/g, "\r\n");
+  if (!text.endsWith("\r\n")) text += "\r\n";
+  text = text.replace(/(^|\r\n)\./g, "$1..");
+  const head = text.split("\r\n\r\n")[0].replace(/\r\n[ \t]+/g, " ");
+  const fromHeaders = [];
+  for (const line of head.split("\r\n")) if (/^(to|cc|bcc):/i.test(line)) fromHeaders.push(...(line.slice(line.indexOf(":") + 1).match(ADDRESS_RE) || []));
+  const rcpts = [...new Set(fromArgs.length ? fromArgs : fromHeaders)].slice(0, 100);
+  if (!rcpts.length) rcpts.push("destinataire-absent@capture.invalid");
+  send(Buffer.from(text, "latin1"), rcpts);
+});
+
+function send(body, rcpts) {
+  const socket = net.connect(PORT, "127.0.0.1");
+  socket.setTimeout(30000, () => process.exit(1));
+  socket.on("error", () => process.exit(1));
+  // Dialogue : chaque étape attend une réponse du code attendu (réponses sur plusieurs lignes : « 250-... »).
+  const steps = [
+    [null, 220],
+    ["EHLO localhost", 250],
+    [`MAIL FROM:<${sender}>`, 250],
+    ...rcpts.map((r) => [`RCPT TO:<${r}>`, 250]),
+    ["DATA", 354],
+    ["BODY", 250],
+  ];
+  let buffer = "";
+  socket.on("data", (chunk) => {
+    buffer += chunk.toString("latin1");
+    let nl;
+    while ((nl = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, nl).replace(/\r$/, "");
+      buffer = buffer.slice(nl + 1);
+      if (/^\d{3}-/.test(line)) continue;
+      const [, expected] = steps.shift();
+      if (Number(line.slice(0, 3)) !== expected) process.exit(1);
+      if (!steps.length) {
+        socket.end("QUIT\r\n");
+        process.exit(0);
+      }
+      const [next] = steps[0];
+      if (next === "BODY") socket.write(Buffer.concat([body, Buffer.from(".\r\n")]));
+      else socket.write(`${next}\r\n`);
+    }
+  });
+}

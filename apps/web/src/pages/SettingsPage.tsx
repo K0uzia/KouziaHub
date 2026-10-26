@@ -12,6 +12,7 @@ import { StorageSection } from "@/components/settings/StorageSection";
 import { VeilleTile } from "@/components/settings/VeilleTile";
 import { AuditSection } from "@/components/settings/AuditSection";
 import { ReportsSection } from "@/components/settings/ReportsSection";
+import { SmtpTile } from "@/components/settings/SmtpTile";
 
 /**
  * Réglages du hub en grille bento : une tuile par sujet, avec son état (Configuré, À faire, Erreur), ses actions
@@ -39,6 +40,7 @@ export function SettingsPage() {
         <ErpTile system={system} />
         <PhpServerTile />
         <VeilleTile />
+        <SmtpTile />
         <ReportsSection />
         <StorageSection />
         <AuditSection />

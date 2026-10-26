@@ -6,7 +6,7 @@
 //   releases/<n>/   versions publiées, à root, lecture seule pour le site (750/640, groupe du site)
 //   current         lien vers la version servie (bascule atomique, retour arrière)
 //   shared/         dossiers persistants (data/...) et .env (lot P4), au compte du site, 700
-//   tmp/ sessions/ logs/ mail/   au compte du site (mail/ : e-mails capturés, lot P5)
+//   tmp/ sessions/ logs/   au compte du site (les e-mails capturés sont hors du site : agent/mail.mjs)
 //   incoming/       archives reçues, à root, 700
 // Compte php-<slug> (UID 20000 à 29999, groupe à lui ; nginx est ajouté à ce groupe pour lire les fichiers).
 // PHP-FPM : un maître par site (service OpenRC kouziaphp-site.<slug>), socket /run/kouziaphp/<slug>.sock.
@@ -549,7 +549,6 @@ export function siteOperations(ctx) {
         ["tmp", user, user, 0o700],
         ["sessions", user, user, 0o700],
         ["logs", user, user, 0o750],
-        ["mail", user, user, 0o700],
       ]) {
         const p = path.posix.join(home, dir);
         await sys.mkdir(p, mode);
