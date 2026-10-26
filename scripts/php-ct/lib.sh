@@ -145,3 +145,38 @@ php_without_argon2() {
 dns_servers() {
   awk '$1 == "nameserver" { print $2 }' /etc/resolv.conf 2>/dev/null
 }
+
+# --- Menu et sites (kouziaphpctl) ---
+
+# Attente d'Entrée entre deux commandes du menu (rien en dehors d'un terminal).
+pause_enter() {
+  if [ -t 0 ]; then
+    printf '\n  Entrée pour revenir au menu...'
+    IFS= read -r _ || true
+  fi
+}
+
+KP_BACKUP_DIR="${KP_STATE_DIR}/sauvegardes"
+
+# Sites posés par l'agent (un fichier de réglages par site), un identifiant par ligne.
+site_slugs() {
+  for _f in "${KP_ETC_DIR}/sites/"*.json; do
+    [ -f "$_f" ] || continue
+    _s="$(basename "$_f" .json)"
+    case "$_s" in *.env) continue ;; esac
+    printf '%s\n' "$_s"
+  done
+}
+
+# Identifiant de site sûr et connu sur ce CT, sinon arrêt.
+require_site() {
+  case "${1:-}" in
+    ''|*[!a-z0-9-]*) die "Identifiant de site attendu (kouziaphpctl sites)." ;;
+  esac
+  [ -f "${KP_ETC_DIR}/sites/$1.json" ] || die "Site inconnu sur ce CT : $1 (kouziaphpctl sites)."
+}
+
+# Nom de la base du site, lu dans son fichier de compte (même nom que le compte MariaDB) ; vide sans base.
+site_db() {
+  sed -n 's/^user=//p' "${KP_ETC_DIR}/sites/$1.db.cnf" 2>/dev/null || true
+}

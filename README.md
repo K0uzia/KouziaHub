@@ -642,10 +642,17 @@ La première ligne affiche `cpu memory pids` (d'autres contrôleurs peuvent s'y 
 
 ### 11.7 Au quotidien
 
+`kouziaphpctl` sans argument ouvre un menu (comme `hubctl`) ; `kouziaphpctl help` liste tout.
+
 | Commande (dans le CT) | Rôle |
 |---|---|
 | `kouziaphpctl upgrade` | Mises à jour de sécurité (une fois par semaine) : paquets de la version d'Alpine installée, vérification de nginx, redémarrage des services touchés. `status` alerte après 14 jours sans mise à jour |
 | `kouziaphpctl status` | État du CT |
+| `kouziaphpctl sites` | Sites du CT : en ligne ou coupé, version servie, PHP, base, place prise |
+| `kouziaphpctl logs [agent|erreurs|tunnel|maj|nginx <site>|php <site>] [lignes]` | Journaux du CT ou d'un site |
+| `kouziaphpctl restart [nginx|mariadb|agent|tunnel|<site>]` | Redémarrer un service, un site, ou tout |
+| `kouziaphpctl backup` | Sauvegarder maintenant toutes les bases, sur le CT (7 jours ; le hub en garde déjà une chaque nuit) |
+| `kouziaphpctl restore [site] [date]` | Remettre une base depuis une sauvegarde du CT (nom du site retapé pour confirmer) |
 | `kouziaphpctl update` | Secours : réinstaller les derniers scripts reçus du hub |
 | `kouziaphpctl install` | Réparer ou rejouer l'installation (rien n'est remplacé qui marche) |
 | `kouziaphpctl firewall` | Reposer le pare-feu du CT |

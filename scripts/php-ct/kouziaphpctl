@@ -1,6 +1,6 @@
 #!/bin/sh
-# Outil du CT des sites PHP (docs/cadrage.md, section 11 ; README, section 9). Copié de hubctl pour l'esprit :
-# une commande, des sous-commandes en français, rien d'affiché qui soit secret.
+# kouziaphpctl : outil d'exploitation du CT des sites PHP (docs/cadrage.md, section 11 ; README, section 11), calqué sur hubctl :
+# menu sans argument, commandes directes en français, rien d'affiché qui soit secret.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
@@ -9,16 +9,31 @@ SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 
 usage() {
   cat <<EOF
-kouziaphpctl : CT des sites PHP du hub Kouzia
+${C_BOLD}kouziaphpctl${C_RESET} : CT des sites PHP du hub Kouzia
 
-  install      installer ou réparer nginx, PHP, MariaDB, pare-feu du CT, outil (rejouable)
-  update       réinstaller les derniers scripts reçus du hub (secours : d'habitude, « hubctl update » le fait seul)
-  tunnel       coller le jeton du tunnel Cloudflare « kouziaphp »
-  agent        régler l'agent piloté par le hub (IP du hub, secret partagé, lus sur l'entrée)
-  firewall     reposer le pare-feu du CT (comptes des sites)
-  cgroups      contrôler les limites CPU, mémoire et processus par site
-  upgrade      mises à jour de sécurité (apk upgrade dans la version d'Alpine installée)
-  status       état du CT
+  kouziaphpctl                menu
+  kouziaphpctl <commande>     commande directe
+
+Tous les jours
+  status                      état : système, services, PHP, pare-feu, tunnel, limites, scripts
+  sites                       sites du CT : en ligne ou coupé, version servie, PHP, base, place prise
+  logs [quoi] [lignes]        agent | erreurs | tunnel | maj | nginx <site> | php <site> (80 lignes)
+  restart [service]           nginx | mariadb | agent | tunnel | <site> (sans service : tous)
+
+Mise à jour
+  update                      réinstaller les derniers scripts reçus du hub (d'habitude, « hubctl update » le fait seul)
+  upgrade                     mises à jour de sécurité (apk upgrade dans la version d'Alpine installée)
+  install                     installer ou réparer nginx, PHP, MariaDB, pare-feu, outil (rejouable)
+
+Bases des sites (secours : le hub sauvegarde déjà chaque base la nuit, dans ses propres sauvegardes)
+  backup                      sauvegarder maintenant toutes les bases, sur ce CT (7 jours gardés)
+  restore [site] [date]       remettre une base depuis une sauvegarde de ce CT (liste et choix sinon)
+
+Réglages (rien n'est affiché à l'écran)
+  tunnel                      jeton du tunnel Cloudflare « kouziaphp »
+  agent                       agent piloté par le hub (IP du hub, secret partagé, lus sur l'entrée)
+  firewall                    reposer le pare-feu du CT (comptes des sites)
+  cgroups                     contrôler les limites CPU, mémoire et processus par site
 EOF
 }
 
@@ -94,15 +109,222 @@ update() {
   return "$_rc"
 }
 
-case "${1:-}" in
-  install) require_root; exec sh "${SCRIPT_DIR}/install.sh" ;;
-  update) update ;;
-  tunnel) exec sh "${SCRIPT_DIR}/tunnel.sh" ;;
-  agent) exec sh "${SCRIPT_DIR}/agent.sh" ;;
-  firewall) require_root; exec sh "${SCRIPT_DIR}/firewall.sh" ;;
-  cgroups) require_root; exec sh "${SCRIPT_DIR}/cgroups.sh" ;;
-  upgrade) upgrade ;;
-  status) exec sh "${SCRIPT_DIR}/status.sh" ;;
-  ""|-h|--help|help) usage ;;
-  *) usage; exit 1 ;;
-esac
+# Sites du CT, une ligne chacun : en ligne ou coupé (bloc nginx), version servie, PHP, base, place prise.
+sites() {
+  _list="$(site_slugs)"
+  if [ -z "$_list" ]; then
+    echo "Aucun site sur ce CT (ils se créent depuis le hub)."
+    return 0
+  fi
+  printf '%s\n' "${C_BOLD}$(printf '%-28s %-9s %-8s %-6s %-14s %s' "Site" "État" "Version" "PHP" "Base" "Place")${C_RESET}"
+  for _s in $_list; do
+    if [ -f "${KP_NGINX_SITES_DIR}/${_s}.conf" ]; then _state="en ligne"; else _state="${C_YELLOW}coupé${C_RESET}   "; fi
+    _cur="$(readlink "${KP_SITES_DIR}/${_s}/current" 2>/dev/null | sed -n 's#^releases/##p' || true)"
+    _php="$(sed -n 's/^KP_PHP="\([0-9]\)\([0-9]\)"$/\1.\2/p' "/etc/conf.d/$(printf 'kouziaphp-site.%s' "$_s")" 2>/dev/null || true)"
+    _db="$(site_db "$_s")"
+    _size="$(du -sh "${KP_SITES_DIR}/${_s}" 2>/dev/null | cut -f1 || true)"
+    printf '%-28s %-9s %-8s %-6s %-14s %s\n' "$_s" "$_state" "${_cur:--}" "${_php:-?}" "${_db:-aucune}" "${_size:-?}"
+  done
+}
+
+# Journaux : ceux du CT, ou ceux d'un site (nginx, PHP) ; jamais un secret (les .env ne sont pas des journaux).
+logs() {
+  _which="${1:-agent}"
+  _n="${2:-80}"
+  case "$_which" in
+    nginx|php)
+      _site="${2:-}"
+      _n="${3:-80}"
+      require_site "$_site"
+      ;;
+  esac
+  case "$_n" in *[!0-9]*|'') die "Nombre de lignes invalide : $_n" ;; esac
+  case "$_which" in
+    agent) tail -n "$_n" "${KP_LOG_DIR}/agent.log" 2>/dev/null || echo "Journal de l'agent vide." ;;
+    erreurs|err) tail -n "$_n" "${KP_LOG_DIR}/agent.err" 2>/dev/null || echo "Aucune erreur de l'agent." ;;
+    tunnel) tail -n "$_n" "${KP_LOG_DIR}/cloudflared.err" "${KP_LOG_DIR}/cloudflared.log" 2>/dev/null || echo "Journal du tunnel vide." ;;
+    maj|upgrade) tail -n "$_n" "${KP_LOG_DIR}/system-upgrade.log" 2>/dev/null || echo "Aucune mise à jour de sécurité lancée." ;;
+    nginx) tail -n "$_n" "${KP_SITES_DIR}/${_site}/logs/nginx-error.log" 2>/dev/null || echo "Aucune erreur nginx pour ${_site}." ;;
+    php) tail -n "$_n" "${KP_SITES_DIR}/${_site}/logs/php-errors.log" "${KP_SITES_DIR}/${_site}/logs/php-fpm.log" 2>/dev/null || echo "Aucune erreur PHP pour ${_site}." ;;
+    *) die "logs : agent, erreurs, tunnel, maj, nginx <site> ou php <site>" ;;
+  esac
+}
+
+# Redémarrage d'un service du CT, d'un site, ou de tout.
+restart() {
+  require_root
+  case "${1:-tous}" in
+    nginx) rc_service nginx restart ;;
+    mariadb) rc_service mariadb restart ;;
+    agent) rc_service kouziaphp-agent restart ;;
+    tunnel) rc_service "$KP_TUNNEL_SERVICE" restart ;;
+    tous)
+      for _svc in mariadb nginx kouziaphp-agent "$KP_TUNNEL_SERVICE"; do
+        if service_exists "$_svc"; then rc_service "$_svc" restart >/dev/null 2>&1 || warn "${_svc} n'a pas redémarré."; fi
+      done
+      for _s in $(site_slugs); do
+        if service_running "kouziaphp-site.${_s}"; then rc_service "kouziaphp-site.${_s}" restart >/dev/null 2>&1 || warn "PHP de ${_s} n'a pas redémarré."; fi
+      done
+      ok "Services redémarrés."
+      return 0
+      ;;
+    *)
+      require_site "$1"
+      rc_service "kouziaphp-site.$1" restart
+      ;;
+  esac
+}
+
+# Sauvegarde locale de secours de chaque base (compte du site, jamais root) ; 7 jours gardés sur ce CT.
+backup() {
+  require_root
+  ops_lock
+  _day="$(date '+%Y-%m-%d')"
+  _dir="${KP_BACKUP_DIR}/${_day}"
+  mkdir -p "$_dir"
+  chmod 700 "$KP_BACKUP_DIR" "$_dir"
+  _done=0
+  for _s in $(site_slugs); do
+    _db="$(site_db "$_s")"
+    [ -n "$_db" ] || continue
+    _out="${_dir}/${_s}.sql.gz"
+    if mariadb-dump --defaults-extra-file="${KP_ETC_DIR}/sites/${_s}.db.cnf" --single-transaction --no-tablespaces --routines --triggers "$_db" | gzip > "${_out}.part"; then
+      mv -f "${_out}.part" "$_out"
+      chmod 600 "$_out"
+      ok "${_s} : base sauvegardée ($(du -h "$_out" | cut -f1))."
+      _done=$((_done + 1))
+    else
+      rm -f "${_out}.part"
+      warn "${_s} : sauvegarde de la base impossible."
+    fi
+  done
+  # Plus de 7 jours : retirées.
+  find "$KP_BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2>/dev/null || true
+  [ "$_done" -gt 0 ] || echo "Aucune base à sauvegarder."
+}
+
+# Remet une base depuis une sauvegarde de ce CT : vidée puis importée avec le compte du site (confirmation tapée).
+restore() {
+  require_root
+  _site="${1:-}"
+  _day="${2:-}"
+  if [ -z "$_site" ]; then
+    echo "Sites avec une base :"
+    for _s in $(site_slugs); do if [ -n "$(site_db "$_s")" ]; then echo "  $_s"; fi; done
+    printf 'Site : '
+    IFS= read -r _site || exit 1
+  fi
+  require_site "$_site"
+  _db="$(site_db "$_site")"
+  [ -n "$_db" ] || die "${_site} n'a pas de base."
+  if [ -z "$_day" ]; then
+    echo "Sauvegardes de ${_site} sur ce CT :"
+    for _d in $(ls -1 "$KP_BACKUP_DIR" 2>/dev/null | sort -r); do
+      if [ -f "${KP_BACKUP_DIR}/${_d}/${_site}.sql.gz" ]; then echo "  $_d"; fi
+    done
+    printf 'Date (AAAA-MM-JJ) : '
+    IFS= read -r _day || exit 1
+  fi
+  case "$_day" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;; *) die "Date invalide : $_day" ;; esac
+  _file="${KP_BACKUP_DIR}/${_day}/${_site}.sql.gz"
+  [ -f "$_file" ] || die "Pas de sauvegarde de ${_site} le ${_day}."
+  warn "La base de ${_site} va être VIDÉE, puis remise comme le ${_day}. Ce qui a été écrit depuis est perdu."
+  printf 'Pour confirmer, taper le nom du site : '
+  IFS= read -r _confirm || exit 1
+  [ "$_confirm" = "$_site" ] || die "Confirmation différente : rien n'a changé."
+  ops_lock
+  printf 'DROP DATABASE IF EXISTS `%s`;\nCREATE DATABASE `%s` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;\nGRANT ALL PRIVILEGES ON `%s`.* TO `%s`@`localhost`;\n' "$_db" "$_db" "$_db" "$_db" | mariadb \
+    || die "Base de ${_site} : réinitialisation impossible."
+  gunzip -c "$_file" | mariadb --defaults-extra-file="${KP_ETC_DIR}/sites/${_site}.db.cnf" "$_db" || die "Import refusé par MariaDB (base vidée : relancer la restauration)."
+  ok "Base de ${_site} remise comme le ${_day}."
+}
+
+run_cmd() {
+  _cmd="$1"
+  shift
+  case "$_cmd" in
+    install) require_root; sh "${SCRIPT_DIR}/install.sh" ;;
+    update) update ;;
+    tunnel) sh "${SCRIPT_DIR}/tunnel.sh" ;;
+    agent) sh "${SCRIPT_DIR}/agent.sh" ;;
+    firewall) require_root; sh "${SCRIPT_DIR}/firewall.sh" ;;
+    cgroups) require_root; sh "${SCRIPT_DIR}/cgroups.sh" ;;
+    upgrade) upgrade ;;
+    status) sh "${SCRIPT_DIR}/status.sh" ;;
+    sites) sites ;;
+    logs) logs "$@" ;;
+    restart) restart "$@" ;;
+    backup) backup ;;
+    restore) restore "$@" ;;
+    menu) show_menu ;;
+    help|-h|--help) usage ;;
+    *) usage; die "Commande inconnue : ${_cmd}" ;;
+  esac
+}
+
+# Une commande du menu qui échoue ne ferme pas le menu.
+menu_run() {
+  ( run_cmd "$@" ) || warn "La commande s'est arrêtée sur une erreur (message ci-dessus)."
+  pause_enter
+}
+
+menu_item() {
+  printf '  %s%3s)%s %-30s %s\n' "$C_GREEN" "$1" "$C_RESET" "$2" "${C_YELLOW}${3:-}${C_RESET}"
+}
+
+show_menu() {
+  while true; do
+    printf '\n%s\n' "${C_BOLD}Sites PHP du hub Kouzia${C_RESET}  (kouziaphpctl, CT $(hostname))"
+    printf '\n  %s\n' "${C_BOLD}Tous les jours${C_RESET}"
+    menu_item 1 "État" "services, PHP, pare-feu, limites"
+    menu_item 2 "Sites" "en ligne, version, base, place"
+    menu_item 3 "Journal de l'agent" ""
+    menu_item 4 "Erreurs de l'agent" ""
+    menu_item 5 "Erreurs d'un site" "nginx et PHP"
+    menu_item 6 "Redémarrer les services" "tous"
+    printf '\n  %s\n' "${C_BOLD}Mise à jour${C_RESET}"
+    menu_item 7 "Mises à jour de sécurité" "apk upgrade"
+    menu_item 8 "Réinstaller les scripts du hub" "secours"
+    printf '\n  %s\n' "${C_BOLD}Bases des sites${C_RESET}"
+    menu_item 9 "Sauvegarder les bases" "sur ce CT, 7 jours"
+    menu_item 10 "Remettre une base" "liste et choix"
+    printf '\n  %s\n' "${C_BOLD}Réglages${C_RESET}"
+    menu_item 11 "Tunnel Cloudflare" "jeton du tunnel"
+    menu_item 12 "Agent" "IP du hub, secret"
+    menu_item 13 "Limites par site" "contrôle des cgroups"
+    menu_item 14 "Installer ou réparer" "long"
+    menu_item q "Quitter" ""
+    printf '\n  Choix : '
+    _choice=""
+    IFS= read -r _choice || exit 0
+    case "$_choice" in
+      1) menu_run status ;;
+      2) menu_run sites ;;
+      3) menu_run logs agent 40 ;;
+      4) menu_run logs erreurs 40 ;;
+      5)
+        printf '  Site : '
+        _s=""
+        IFS= read -r _s || true
+        menu_run logs php "$_s" 40
+        ;;
+      6) menu_run restart ;;
+      7) menu_run upgrade ;;
+      8) menu_run update ;;
+      9) menu_run backup ;;
+      10) menu_run restore ;;
+      11) menu_run tunnel ;;
+      12) menu_run agent ;;
+      13) menu_run cgroups ;;
+      14) menu_run install ;;
+      q|Q|0) exit 0 ;;
+      *) warn "Choix inconnu : ${_choice}" ;;
+    esac
+  done
+}
+
+if [ $# -eq 0 ]; then
+  show_menu
+else
+  run_cmd "$@"
+fi

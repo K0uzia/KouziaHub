@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, posix } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -125,6 +125,38 @@ describe("CT PHP : pare-feu", () => {
   it("ni flush ruleset ni service nftables d'Alpine", () => {
     const risky = all.filter((f) => /flush ruleset|rc-update add nftables|rc-service nftables/.test(text(f)));
     expect(risky).toEqual([]);
+  });
+});
+
+describe("kouziaphpctl : aide complète et liste des sites", () => {
+  const ctl = join(ROOT, "php-ct/kouziaphpctl");
+
+  it("chaque commande acceptée figure dans l'aide", () => {
+    const text = readFileSync(ctl, "utf8");
+    const runCmd = text.slice(text.indexOf("run_cmd() {"), text.indexOf("# Une commande du menu"));
+    const commands = [...runCmd.matchAll(/^ {4}([a-z][a-z|-]*)\)/gm)].flatMap((m) => m[1]!.split("|")).filter((c) => !["menu", "help", "-h", "--help"].includes(c));
+    const usage = text.slice(text.indexOf("usage() {"), text.indexOf("\nEOF\n"));
+    expect(commands.length).toBeGreaterThan(10);
+    for (const c of commands) expect(usage, c).toMatch(new RegExp(`^  ${c}\\b`, "m"));
+  });
+
+  const shAvailable = spawnSync("sh", ["-c", "exit 0"]).status === 0;
+  it.runIf(shAvailable)("sites : une ligne par site, base lue dans son fichier de compte, fichiers de variables ignorés", () => {
+    const etc = mkdtempSync(join(tmpdir(), "kouzia-ctl-etc-"));
+    const sitesDir = mkdtempSync(join(tmpdir(), "kouzia-ctl-sites-"));
+    mkdirSync(join(etc, "sites"));
+    writeFileSync(join(etc, "sites", "mytakumi.json"), "{}");
+    writeFileSync(join(etc, "sites", "mytakumi.env.json"), "{}");
+    writeFileSync(join(etc, "sites", "mytakumi.db.cnf"), "[client]\nuser=s_mytakumi\npassword=x\n");
+    writeFileSync(join(etc, "sites", "vitrine.json"), "{}");
+    mkdirSync(join(sitesDir, "mytakumi"));
+    const run = spawnSync("sh", [ctl, "sites"], { encoding: "utf8", env: { ...process.env, KP_ETC_DIR: etc, KP_SITES_DIR: sitesDir } });
+    expect(run.status, run.stderr).toBe(0);
+    const lines = run.stdout.trim().split("\n").slice(1);
+    expect(lines.map((l) => l.split(/\s+/)[0])).toEqual(["mytakumi", "vitrine"]);
+    expect(lines[0]).toContain("s_mytakumi");
+    expect(lines[1]).toContain("aucune");
+    expect(run.stdout).not.toContain("password");
   });
 });
 
