@@ -13,6 +13,14 @@ export function memorySys(answer: (file: string, args: string[]) => RunResult = 
   const sys: Sys = {
     run: async (file, args) => {
       runs.push([file, ...args].join(" "));
+      if (file === "/bin/chown" && args[0] === "-h") owners.set(args[2]!, args[1]!);
+      // « stat -c "%U %F" » : propriétaire (root sans chown connu) et type, comme BusyBox ; absent : code 1.
+      if (file === "/bin/stat") {
+        const n = nodes.get(args.at(-1)!);
+        if (!n) return { code: 1, stdout: "", stderr: "stat: can't stat" };
+        const type = n.type === "dir" ? "directory" : n.type === "link" ? "symbolic link" : "regular file";
+        return { code: 0, stdout: `${(owners.get(args.at(-1)!) ?? "root:root").split(":")[0]} ${type}\n`, stderr: "" };
+      }
       // Copie de côté d'une installation (« cp -a ») : simulée sur l'arbre en mémoire.
       if (file === "/bin/cp" && args[0] === "-a") {
         for (const k of under(args[1]!)) nodes.set(args[2]! + k.slice(args[1]!.length), nodes.get(k)!);
@@ -60,7 +68,9 @@ export function memorySys(answer: (file: string, args: string[]) => RunResult = 
     runIo: async (file, args, io = {}) => {
       runs.push([file, ...args].join(" "));
       inputs.push({ file, args, input: io.input ?? (io.inputFile ? (nodes.get(io.inputFile) as { text?: string } | undefined)?.text ?? null : null), io });
-      // Dossiers persistants : création et copie sans écraser, faites sous le compte du site (simulées ici).
+      // Dossiers persistants : création et copie sans écraser, faites sous le compte du site (simulées ici) ; ce qui
+      // est créé appartient au compte de l'UID, comme en vrai.
+      const before = new Set(nodes.keys());
       if (file === "/bin/mkdir" && args[0] === "-p") await sys.mkdir(args[1]!, 0o750);
       if (args[0] === "-e" && args[1]?.includes("cpSync")) {
         const [src, dst] = [args[2]!, args[3]!];
@@ -68,6 +78,11 @@ export function memorySys(answer: (file: string, args: string[]) => RunResult = 
           const target = dst + k.slice(src.length);
           if (!nodes.has(target)) nodes.set(target, nodes.get(k)!);
         }
+      }
+      if (io.uid !== undefined) {
+        const passwd = nodes.get("/etc/passwd");
+        const name = passwd?.type === "file" ? passwd.text.split("\n").find((l) => l.split(":")[2] === String(io.uid))?.split(":")[0] : undefined;
+        if (name) for (const k of nodes.keys()) if (!before.has(k)) owners.set(k, `${name}:${name}`);
       }
       const r = answer(file, args);
       if (io.outputFile && r.code === 0) nodes.set(io.outputFile, { type: "file", text: r.stdout });

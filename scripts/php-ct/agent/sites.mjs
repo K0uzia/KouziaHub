@@ -420,6 +420,30 @@ export function siteOperations(ctx) {
     );
   }
 
+  /**
+   * Reprise d'un site publié par un agent plus ancien : il créait EN ROOT les dossiers parents d'un dossier
+   * persistant (shared/public/, shared/public/assets/...), où le compte du site ne peut plus rien créer. Chaque
+   * dossier existant de shared/<dossier> (parents compris) est rendu au compte du site, sans suivre aucun lien :
+   * un lien posé par le site arrête tout (root ne doit jamais agir ailleurs). Le .env du site n'est pas dans shared/.
+   */
+  async function repairShared(slug, dir) {
+    const user = userOf(slug);
+    const segments = dir.split("/");
+    for (let i = 1; i <= segments.length; i++) {
+      const p = path.posix.join(siteDir(slug), "shared", ...segments.slice(0, i));
+      const st = await sys.run("/bin/stat", ["-c", "%U %F", p]);
+      if (st.code !== 0) return; // absent : le compte du site le créera (son parent lui appartient).
+      const [owner, ...kind] = st.stdout.trim().split(" ");
+      const type = kind.join(" ");
+      if (type === "symbolic link") throw new OpError(409, `Dossier persistant : « ${p} » est un lien, refusé (le site ne doit pas rediriger ses dossiers persistants).`);
+      if (type !== "directory") throw new OpError(409, `Dossier persistant : « ${p} » n'est pas un dossier.`);
+      if (owner !== user) {
+        await run("/bin/chown", ["-h", `${user}:${user}`, p], "Reprise du dossier persistant");
+        await run("/bin/chmod", ["750", p], "Reprise du dossier persistant");
+      }
+    }
+  }
+
   /** Commande sous le compte du site (UID et GID du compte, groupes de root retirés), échec rendu lisible. */
   async function asSite(slug, file, args, what) {
     const ids = idsOf(await sys.readFile(paths.passwdFile), userOf(slug));
@@ -519,6 +543,7 @@ export function siteOperations(ctx) {
         // déjà présent (envoyé ou modifié par le site) n'est jamais remplacé. Une première publication sans ces
         // fichiers (page d'attente) ne fige donc rien. Tout se fait SOUS LE COMPTE DU SITE : root ne touche jamais
         // un chemin que le site contrôle (un lien qu'il y aurait posé ne mène pas root ailleurs).
+        await repairShared(spec.slug, d);
         await asSite(spec.slug, "/bin/mkdir", ["-p", shared], "Dossier persistant");
         if (await sys.exists(inRelease)) await asSite(spec.slug, process.execPath, ["-e", COPY_MISSING, inRelease, shared], "Fichiers du dossier persistant");
         // Privé (données, clés) : au seul compte du site. Public : lisible de nginx (groupe), jamais exécuté.
