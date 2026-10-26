@@ -501,3 +501,23 @@ describe("sortie réseau par site (lot P5) : relève IMAP et HTTPS", () => {
     await expect(failing.ops.upsert({ ...spec, imapOpen: true })).rejects.toThrow(/Pare-feu du CT .*nftables refusé/);
   });
 });
+
+describe("page du site pour la vignette (lot P5)", () => {
+  it("lue sur nginx local sous le nom du site ; chemin contrôlé ; sans lecteur : 503", async () => {
+    const m = memorySys();
+    const asked: string[] = [];
+    const httpGet = async (host: string, p: string, max: number) => {
+      asked.push(`${host} ${p} ${max}`);
+      return { status: 200, contentType: "text/html", location: null, body: Buffer.from("<h1>Boutique</h1>") };
+    };
+    const ops = siteOperations({ ...ctx, paths, limitsEffective: () => true, httpStatus: async () => 403, httpGet, sys: m.sys });
+    await ops.upsert(spec);
+    const r = await ops.page("mytakumi", "/oeuvres?page=2");
+    expect(r).toEqual({ status: 200, contentType: "text/html", location: null, body: Buffer.from("<h1>Boutique</h1>").toString("base64") });
+    expect(asked).toEqual(["mytakumi.kouzia.com /oeuvres?page=2 8388608"]);
+    for (const bad of ["oeuvres", "/a b", "/a\nHost: x", "", "http://autre/"]) await expect(ops.page("mytakumi", bad)).rejects.toThrow(/Chemin de page invalide/);
+    await expect(ops.page("inconnu", "/")).rejects.toThrow(/Site inconnu/);
+    const without = siteOperations({ ...ctx, paths, limitsEffective: () => true, httpStatus: async () => 403, sys: m.sys });
+    await expect(without.page("mytakumi", "/")).rejects.toMatchObject({ status: 503 });
+  });
+});

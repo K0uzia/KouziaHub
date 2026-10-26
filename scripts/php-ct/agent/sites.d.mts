@@ -6,6 +6,8 @@ export const RELEASES_KEPT: number;
 export const SLUG_RE: RegExp;
 export const MARIADB_SOCKET: string;
 export const DUMPS_KEPT: number;
+export const PAGE_PATH_RE: RegExp;
+export const PAGE_MAX_BYTES: number;
 export const DB_VARS: string[];
 export const LIVE_KEY_RE: RegExp;
 export function checkEnvVars(input: unknown): Record<string, string>;
@@ -97,6 +99,8 @@ export type SiteContext = {
   limitsEffective(): boolean;
   /** Statut HTTP de nginx local pour ce nom d'hôte et ce chemin. */
   httpStatus(host: string, path: string): Promise<number>;
+  /** Ressource lue sur nginx local (vignette), au plus maxBytes. */
+  httpGet?(host: string, path: string, maxBytes: number): Promise<{ status: number; contentType: string | null; location: string | null; body: Buffer }>;
   sys: Sys;
 };
 
@@ -108,6 +112,7 @@ export type SiteOperations = {
   receive(slug: string, n: number, archivePath: string): Promise<{ slug: string; version: number }>;
   publish(slug: string, n: number): Promise<{ slug: string; current: number }>;
   setEnabled(slug: string, enabled: boolean): Promise<{ slug: string; enabled: boolean }>;
+  page(slug: string, path: string): Promise<{ status: number; contentType: string | null; location: string | null; body: string }>;
   check(slug: string): Promise<{ slug: string; ok: boolean; results: Array<{ path: string; status: number }> }>;
   remove(slug: string): Promise<{ slug: string; removed: boolean }>;
   setEnv(slug: string, input: unknown): Promise<{ slug: string; names: string[] }>;

@@ -163,6 +163,8 @@ const routes = [
   { method: "POST", re: new RegExp(`^/v1/sites/${SITE}/couper$`), site: true, run: (c, [slug]) => c.sites.setEnabled(slug, false) },
   { method: "POST", re: new RegExp(`^/v1/sites/${SITE}/rallumer$`), site: true, run: (c, [slug]) => c.sites.setEnabled(slug, true) },
   { method: "GET", re: new RegExp(`^/v1/sites/${SITE}/verifier$`), site: true, run: (c, [slug]) => c.sites.check(slug) },
+  // Page du site lue sur nginx local, pour la vignette (navigateur du hub sans réseau).
+  { method: "POST", re: new RegExp(`^/v1/sites/${SITE}/page$`), site: true, run: (c, [slug]) => c.sites.page(slug, c.json().path) },
   { method: "DELETE", re: new RegExp(`^/v1/sites/${SITE}$`), site: true, run: async (c, [slug]) => {
     const result = await c.sites.remove(slug);
     await c.mails?.drop(slug);
@@ -415,6 +417,25 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     domain: env.KP_SITES_DOMAIN || "kouzia.com",
     phpInstalled: () => systemProbes.php(),
     limitsEffective: () => systemProbes.cgroups().result === "ok",
+    httpGet: (host, p, maxBytes) =>
+      new Promise((resolve, reject) => {
+        const r = httpRequest({ host: "127.0.0.1", port: 8080, path: p, method: "GET", headers: { host, "user-agent": "KouziaHub-vignette" }, timeout: 15_000 }, (res) => {
+          const chunks = [];
+          let size = 0;
+          res.on("data", (c) => {
+            size += c.length;
+            if (size > maxBytes) r.destroy(new Error("Page trop lourde pour la vignette."));
+            else chunks.push(c);
+          });
+          res.on("end", () =>
+            resolve({ status: res.statusCode ?? 0, contentType: res.headers["content-type"] ?? null, location: res.headers.location ?? null, body: Buffer.concat(chunks) }),
+          );
+          res.on("error", reject);
+        });
+        r.on("timeout", () => r.destroy(new Error("Page trop lente (15 s).")));
+        r.on("error", reject);
+        r.end();
+      }),
     httpStatus: (host, p) =>
       new Promise((resolve) => {
         const r = httpRequest({ host: "127.0.0.1", port: 8080, path: p, method: "GET", headers: { host }, timeout: 2000 }, (res) => {

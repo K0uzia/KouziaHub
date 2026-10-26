@@ -23,6 +23,12 @@ export const CAPTURE_CSP =
 
 export { resolveChromium } from "@/lib/chromium.js";
 
+/** Image d'une seule couleur (page blanche, erreur sans contenu) : jamais gardée comme vignette. */
+export async function isUniform(png: Buffer): Promise<boolean> {
+  const { channels } = await sharp(png).stats();
+  return channels.slice(0, 3).every((c) => c.stdev < 2.5);
+}
+
 /** Chromium ne résout aucun nom : seul 127.0.0.1 (serveur éphémère) est joignable. */
 const CAPTURE_ARGS = ["--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1"];
 
@@ -30,6 +36,10 @@ export type ThumbnailOptions = ChromiumConfig & {
   dataDir: string;
   blobs: BlobStore;
   timeoutMs?: number;
+  /** Pages des sites PHP, lues par l'agent du CT PHP (null : capture des sites PHP impossible). */
+  phpPages?: () => { page(slug: string, path: string): Promise<{ status: number; contentType: string | null; location: string | null; body: Buffer }> } | null;
+  /** Domaine des sous-domaines (adresse des sites PHP dans le navigateur de capture). */
+  sitesDomain?: string;
   /** Pour les tests : lancement par pipe, démarrage du lanceur, connexion CDP (lib/chromium.ts). */
   start?: Pick<StartOptions, "launch" | "spawnBrowser" | "connect">;
 };
@@ -138,7 +148,11 @@ export class ThumbnailService {
     });
   }
 
-  /** Capture de la version servie ; false si impossible (Chromium absent, page d'attente, délai). */
+  /**
+   * Capture de la version servie ; false si impossible (Chromium absent, page d'attente, délai, page en erreur ou
+   * blanche). Site statique : ses fichiers servis par un serveur éphémère sur 127.0.0.1. Site PHP : ses pages lues
+   * par l'agent sur le nginx du CT (le navigateur n'a toujours aucun réseau). Rien n'est gardé d'une capture ratée.
+   */
   async capture(siteId: string): Promise<boolean> {
     const launcher = await chromiumLauncher("Capture des vignettes", this.options);
     if (!launcher.ok) return false;
@@ -146,11 +160,12 @@ export class ThumbnailService {
     if (!site?.currentVersionId) return false;
     const version = await prisma.version.findUnique({ where: { id: site.currentVersionId }, include: { files: true } });
     if (!version || version.source === "placeholder" || version.files.length === 0) return false;
-    const files = new Map(version.files.map((f) => [f.path, f.sha256]));
+    const php = site.hosting === "php";
+    const pages = php ? (this.options.phpPages?.() ?? null) : null;
+    if (php && !pages) return false;
 
-    const server = await this.serveVersion(files);
-    const port = (server.address() as AddressInfo).port;
-    const origin = `http://127.0.0.1:${port}`;
+    const server = php ? null : await this.serveVersion(new Map(version.files.map((f) => [f.path, f.sha256])));
+    const origin = server ? `http://127.0.0.1:${(server.address() as AddressInfo).port}` : `https://${site.slug}.${this.options.sitesDomain ?? "kouzia.com"}`;
     const timeoutMs = this.options.timeoutMs ?? 30_000;
     let started: Awaited<ReturnType<typeof startChromium>> | null = null;
     const blocked: string[] = [];
@@ -168,11 +183,25 @@ export class ThumbnailService {
       }
       const browser = started.browser;
       const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: "block", acceptDownloads: false });
-      await context.route("**/*", (route) => {
+      await context.route("**/*", async (route) => {
         const url = route.request().url();
-        if (url.startsWith(`${origin}/`) || url === origin) return route.continue();
-        blocked.push(url);
-        return route.abort();
+        if (!(url.startsWith(`${origin}/`) || url === origin)) {
+          blocked.push(url);
+          return route.abort();
+        }
+        if (!pages) return route.continue();
+        // Site PHP : GET seulement, réponse de l'agent (statut, type, redirection) rendue telle quelle.
+        if (route.request().method() !== "GET") return route.abort();
+        try {
+          const r = await pages.page(site.slug, url.slice(origin.length) || "/");
+          return route.fulfill({
+            status: r.status || 502,
+            headers: { ...(r.contentType ? { "content-type": r.contentType } : {}), ...(r.location ? { location: r.location } : {}), "content-security-policy": CAPTURE_CSP },
+            body: r.body,
+          });
+        } catch {
+          return route.abort();
+        }
       });
       await context.routeWebSocket(
         () => true,
@@ -182,21 +211,34 @@ export class ThumbnailService {
         },
       );
       const page = await context.newPage();
-      await page.goto(`${origin}/`, { waitUntil: "load", timeout: timeoutMs });
+      const response = await page.goto(`${origin}/`, { waitUntil: "load", timeout: timeoutMs });
+      if (!response || response.status() >= 400) throw new Error(`page d'accueil en erreur (statut ${response?.status() ?? "absent"})`);
+      // Rendu complet : réseau calme, polices chargées, animations d'entrée finies.
+      await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => undefined);
+      await page.evaluate("document.fonts ? document.fonts.ready.then(() => true) : true").catch(() => undefined);
       await page.waitForTimeout(400);
-      const png = await page.screenshot({ type: "png", timeout: timeoutMs });
+      let png = await page.screenshot({ type: "png", timeout: timeoutMs });
+      if (await isUniform(png)) {
+        // Page encore vide (rendu tardif) : un second essai, puis abandon sans rien garder.
+        await page.waitForTimeout(2500);
+        png = await page.screenshot({ type: "png", timeout: timeoutMs });
+        if (await isUniform(png)) throw new Error("capture d'une page vide (uniforme)");
+      }
       await this.save(siteId, await toThumbnail(png), "capture");
       await audit({ action: "thumbnail.capture", result: "ok", siteId, siteSlug: site.slug });
       return true;
     } catch (err) {
-      await audit({ action: "thumbnail.capture", result: "error", siteId, siteSlug: site.slug, detail: "capture impossible" });
-      console.error("[vignette] capture impossible", err instanceof Error ? err.message : err);
+      const reason = err instanceof Error ? err.message : "capture impossible";
+      await audit({ action: "thumbnail.capture", result: "error", siteId, siteSlug: site.slug, detail: reason.slice(0, 200) });
+      console.error("[vignette] capture impossible", reason);
       return false;
     } finally {
       clearTimeout(deadline);
       await started?.close();
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      if (server) {
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
     }
   }
 

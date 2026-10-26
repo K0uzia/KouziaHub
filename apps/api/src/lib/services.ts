@@ -100,7 +100,8 @@ export function createServices(overrides: ServicesOverrides = {}): Services {
     blobs,
     dataDir,
     sitesDomain,
-    thumbnails: new ThumbnailService({ dataDir, blobs, chromiumPath: overrides.chromiumPath }),
+    // Sites PHP : pages lues par l'agent (posé plus bas, lu à la capture).
+    thumbnails: new ThumbnailService({ dataDir, blobs, chromiumPath: overrides.chromiumPath, sitesDomain, phpPages: () => services.phpAgent }),
     projects: new ProjectCounter(cloudflare),
     // Cible des CNAME des sites PHP, lue à la demande (l'agent est posé plus bas).
     orphans: new OrphanService(cloudflare, sitesDomain, () => (services.phpAgent ? phpDnsTarget(services) : Promise.resolve(null))),

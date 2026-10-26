@@ -32,6 +32,9 @@ export const MARIADB_SOCKET = "/run/mysqld/mysqld.sock";
  */
 export const COPY_MISSING = "require('fs').cpSync(process.argv[1], process.argv[2], { recursive: true, force: false, errorOnExist: false })";
 export const DUMPS_KEPT = 5;
+/** Page lue pour la vignette : chemin absolu et sa requête, sans espace ni caractère de contrôle. */
+export const PAGE_PATH_RE = /^\/[\x21-\x7e]{0,2047}$/;
+export const PAGE_MAX_BYTES = 8 * 1024 * 1024;
 
 // --- Variables d'environnement (.env du site, lot P4) ---
 
@@ -695,6 +698,18 @@ export function siteOperations(ctx) {
       // Relève IMAP et HTTPS refermées quand le site est coupé, rouvertes selon ses réglages au rallumage.
       await writeNetwork();
       return { slug: spec.slug, enabled };
+    },
+
+    /**
+     * Une ressource du site lue sur nginx local, sous son nom (GET seulement), pour la vignette : le navigateur du hub
+     * n'a aucun réseau et reçoit les pages par le hub. Ni cookie ni corps envoyés ; réponse de 8 Mio au plus.
+     */
+    async page(slug, reqPath) {
+      const spec = await known(slug);
+      if (typeof reqPath !== "string" || !PAGE_PATH_RE.test(reqPath)) throw bad("Chemin de page invalide.");
+      if (typeof ctx.httpGet !== "function") throw new OpError(503, "Lecture des pages indisponible sur cet agent.");
+      const r = await ctx.httpGet(spec.hostname, reqPath, PAGE_MAX_BYTES);
+      return { status: r.status, contentType: r.contentType ?? null, location: r.location ?? null, body: r.body.toString("base64") };
     },
 
     /**

@@ -7,7 +7,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BlobStore } from "@/lib/blobs.js";
-import { CAPTURE_CSP, resolveChromium, ThumbnailService } from "@/lib/thumbnails.js";
+import { CAPTURE_CSP, isUniform, resolveChromium, ThumbnailService } from "@/lib/thumbnails.js";
 import { prisma, resetDb } from "../helpers/db.js";
 import { buildTestHub, createPersoSite, multipart, settle, uploadFiles, type TestHub } from "../helpers/hub.js";
 
@@ -216,7 +216,8 @@ describe("capture : même lancement que la mesure de vitesse (lib/chromium.ts)",
     it("capture réelle par pipe", { timeout: 60_000 }, async () => {
       const { siteId, dataDir, blobs } = await published();
       const svc = new ThumbnailService({ dataDir, blobs, chromiumPath: chromium });
-      expect(await svc.capture(siteId)).toBe(true);
+      const ok = await svc.capture(siteId);
+    expect(ok).toBe(true);
       expect(svc.lastVia).toBe("pipe");
       expect(await svc.captureStatus()).toEqual({ available: true, reason: null });
     });
@@ -233,12 +234,80 @@ describe("capture : même lancement que la mesure de vitesse (lib/chromium.ts)",
           },
         },
       });
-      expect(await svc.capture(siteId)).toBe(true);
+      const ok = await svc.capture(siteId);
+    expect(ok).toBe(true);
       expect(svc.lastVia).toBe("port");
       const site = await prisma.site.findUniqueOrThrow({ where: { id: siteId } });
       expect(site.thumbnailSource).toBe("capture");
       const { info } = await sharp(join(dataDir, site.thumbnailPath!)).raw().toBuffer({ resolveWithObject: true });
       expect([info.width, info.height]).toEqual([640, 400]);
     });
+  });
+});
+
+describe("capture ratée : jamais gardée (lot P5, vignette blanche de my-takumi)", () => {
+  it("image d'une seule couleur reconnue ; une vraie page ne l'est pas", async () => {
+    const white = await sharp({ create: { width: 1280, height: 800, channels: 3, background: "#ffffff" } }).png().toBuffer();
+    const page = await sharp(white).composite([{ input: await sharp({ create: { width: 600, height: 120, channels: 3, background: "#222222" } }).png().toBuffer(), top: 80, left: 80 }]).png().toBuffer();
+    expect(await isUniform(white)).toBe(true);
+    expect(await isUniform(page)).toBe(false);
+  });
+});
+
+describe.skipIf(!chromium)("capture ratée et sites PHP (Chromium local)", () => {
+  const read = async (hub: TestHub, siteId: string) => (await hub.app.inject({ method: "GET", url: `/api/sites/${siteId}`, headers: hub.headers })).json() as SiteDetail;
+  const publish = async (hub: TestHub, siteId: string, files: Array<{ filename: string; content: string }>) => {
+    await uploadFiles(hub, siteId, files);
+    await hub.app.inject({ method: "POST", url: `/api/sites/${siteId}/publish`, headers: hub.headers, payload: {} });
+    await settle(hub);
+    await hub.services.thumbnails.idle();
+  };
+
+  it("page blanche, ou sans page d'accueil (404) : pas de vignette, la raison au journal", { timeout: 60_000 }, async () => {
+    const { hub, siteId } = await setup(chromium);
+    await publish(hub, siteId, [{ filename: "index.html", content: "<!doctype html><html><body style='background:#fff'></body></html>" }]);
+    expect((await read(hub, siteId)).thumbnailUrl).toBeNull();
+    const blank = await prisma.auditEvent.findFirst({ where: { action: "thumbnail.capture", result: "error" }, orderBy: { at: "desc" } });
+    expect(blank?.detail).toContain("page vide");
+
+    await publish(hub, siteId, [{ filename: "a-propos.html", content: "<h1>Sans accueil</h1>" }]);
+    await hub.app.inject({ method: "DELETE", url: `/api/sites/${siteId}/files?path=index.html`, headers: hub.headers });
+    await hub.services.thumbnails.capture(siteId);
+    expect((await read(hub, siteId)).thumbnailUrl).toBeNull();
+  });
+
+  it("site PHP : pages lues par l'agent, navigateur toujours sans réseau ; accueil blanc refusé", { timeout: 60_000 }, async () => {
+    const { hub, siteId } = await setup(chromium);
+    await publish(hub, siteId, [{ filename: "index.html", content: "<h1>x</h1>" }, { filename: "public/index.php", content: "<?php echo 'x';" }]);
+    await prisma.site.update({ where: { id: siteId }, data: { hosting: "php", pagesProject: null } });
+    const asked: string[] = [];
+    let home = '<!doctype html><link rel="stylesheet" href="/style.css"><img src="https://cdn.exemple/x.png" alt=""><h1>Boutique</h1>';
+    const pages = {
+      page: async (slug: string, path: string) => {
+        asked.push(`${slug} ${path}`);
+        if (path === "/") return { status: 200, contentType: "text/html; charset=utf-8", location: null, body: Buffer.from(home) };
+        if (path === "/style.css") return { status: 200, contentType: "text/css", location: null, body: Buffer.from("body{background:#1f6f3f;margin:0}") };
+        return { status: 404, contentType: "text/plain", location: null, body: Buffer.from("404") };
+      },
+    };
+    const dataDir = hub.services.dataDir;
+    const svc = new ThumbnailService({ dataDir, blobs: hub.services.blobs, chromiumPath: chromium, sitesDomain: "kouzia.com", phpPages: () => pages });
+    const ok = await svc.capture(siteId);
+    expect(ok).toBe(true);
+    expect(asked).toEqual(expect.arrayContaining(["alpha /", "alpha /style.css"]));
+    // Ressource extérieure arrêtée (CSP puis interception) : jamais demandée à personne.
+    expect(asked.some((a) => a.includes("cdn"))).toBe(false);
+    const img = await hub.app.inject({ method: "GET", url: (await read(hub, siteId)).thumbnailUrl!, headers: hub.headers });
+    const { data, info } = await sharp(img.rawPayload).raw().toBuffer({ resolveWithObject: true });
+    const at = (info.width * 300 + 500) * info.channels;
+    expect([data[at]! < 80, data[at + 1]! > 80, data[at + 2]! < 100]).toEqual([true, true, true]);
+
+    // Accueil blanc (erreur PHP sans affichage) : la vignette d'avant reste, rien de blanc n'est gardé.
+    const before = (await read(hub, siteId)).thumbnailUrl;
+    home = "<!doctype html><html><body></body></html>";
+    expect(await svc.capture(siteId)).toBe(false);
+    expect((await read(hub, siteId)).thumbnailUrl).toBe(before);
+    // Sans agent PHP : capture impossible, sans erreur.
+    expect(await new ThumbnailService({ dataDir, blobs: hub.services.blobs, chromiumPath: chromium, phpPages: () => null }).capture(siteId)).toBe(false);
   });
 });

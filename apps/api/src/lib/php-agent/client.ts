@@ -203,6 +203,13 @@ export class PhpAgentClient {
     return parsed.data;
   }
 
+  /** Ressource du site lue par l'agent sur nginx local (vignette : le navigateur du hub n'a aucun réseau). */
+  async page(slug: string, path: string): Promise<{ status: number; contentType: string | null; location: string | null; body: Buffer }> {
+    const parsed = pageSchema.safeParse(await this.request("POST", `/v1/sites/${slug}/page`, { path }, undefined, CHECK_TIMEOUT_MS));
+    if (!parsed.success) throw new PhpAgentUnavailableError("Serveur des sites PHP : page illisible.");
+    return { ...parsed.data, body: Buffer.from(parsed.data.body, "base64") };
+  }
+
   async removeSite(slug: string): Promise<void> {
     await this.request("DELETE", `/v1/sites/${slug}`, undefined, undefined, OPERATION_TIMEOUT_MS);
   }
@@ -364,6 +371,13 @@ export class PhpAgentClient {
     return { sha256, size };
   }
 }
+
+const pageSchema = z.object({
+  status: z.number().int().min(0).max(999),
+  contentType: z.string().max(300).nullable(),
+  location: z.string().max(4000).nullable(),
+  body: z.string().max(12 * 1024 * 1024),
+});
 
 const mailsSchema = z.object({
   mails: z
