@@ -52,9 +52,11 @@ export function InfoTip({ term, children }: { term: string; children: ReactNode 
     const onPointer = (e: PointerEvent) => {
       if (!inside(e.target)) close(false);
     };
+    // Échap pris en capture et arrêté : il ferme la bulle seule, jamais la modale qui la contient.
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
+        e.stopPropagation();
         close(true);
       }
     };
@@ -64,13 +66,13 @@ export function InfoTip({ term, children }: { term: string; children: ReactNode 
     // Défilement d'un conteneur ou redimensionnement : la bulle suit son bouton.
     const onMove = () => measure();
     document.addEventListener("pointerdown", onPointer);
-    document.addEventListener("keydown", onKey);
+    document.addEventListener("keydown", onKey, true);
     document.addEventListener("focusin", onFocus);
     window.addEventListener("resize", onMove);
     window.addEventListener("scroll", onMove, true);
     return () => {
       document.removeEventListener("pointerdown", onPointer);
-      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("keydown", onKey, true);
       document.removeEventListener("focusin", onFocus);
       window.removeEventListener("resize", onMove);
       window.removeEventListener("scroll", onMove, true);

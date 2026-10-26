@@ -50,7 +50,8 @@ export function MoreMenu({
   const [place, setPlace] = useState<Place | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLUListElement>(null);
-  const viaKeyboard = useRef(false);
+  /** Ouvert au clavier : premier choix (Entrée, Espace, Flèche bas) ou dernier (Flèche haut), comme l'APG. */
+  const viaKeyboard = useRef<"first" | "last" | null>(null);
   const panelId = useId();
 
   const close = useCallback((refocus: boolean) => {
@@ -90,9 +91,11 @@ export function MoreMenu({
       // Clic ailleurs : le focus suit ce clic, il ne revient au bouton que s'il était dans le menu.
       close(panelRef.current?.contains(document.activeElement) ?? false);
     };
+    // Échap pris en capture et arrêté : il ferme le menu seul, jamais la modale qui le contient.
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
+        e.stopPropagation();
         close(true);
       }
     };
@@ -105,12 +108,12 @@ export function MoreMenu({
     // Défilement d'un conteneur ou redimensionnement : le menu suit son bouton.
     const onMove = () => measure();
     document.addEventListener("pointerdown", onPointer);
-    document.addEventListener("keydown", onKey);
+    document.addEventListener("keydown", onKey, true);
     window.addEventListener("resize", onMove);
     window.addEventListener("scroll", onMove, true);
     return () => {
       document.removeEventListener("pointerdown", onPointer);
-      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("keydown", onKey, true);
       document.removeEventListener("focusin", onFocus);
       window.removeEventListener("resize", onMove);
       window.removeEventListener("scroll", onMove, true);
@@ -120,8 +123,9 @@ export function MoreMenu({
   // Ouvert au clavier : le focus va au premier choix actif.
   useEffect(() => {
     if (!open || !place || !viaKeyboard.current) return;
-    viaKeyboard.current = false;
-    enabledButtons()[0]?.focus();
+    const list = enabledButtons();
+    (viaKeyboard.current === "last" ? list[list.length - 1] : list[0])?.focus();
+    viaKeyboard.current = null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, place]);
 
@@ -157,7 +161,7 @@ export function MoreMenu({
       const list = enabledButtons();
       if (open && list.length) list[e.key === "ArrowUp" ? list.length - 1 : 0]?.focus();
       else {
-        viaKeyboard.current = true;
+        viaKeyboard.current = e.key === "ArrowUp" ? "last" : "first";
         setOpen(true);
       }
     }
@@ -175,7 +179,7 @@ export function MoreMenu({
         disabled={disabled}
         onClick={(e) => {
           // Entrée ou Espace : detail vaut 0 (pas de pointeur), le focus ira au premier choix.
-          viaKeyboard.current = e.detail === 0;
+          viaKeyboard.current = e.detail === 0 ? "first" : null;
           if (open) close(false);
           else setOpen(true);
         }}

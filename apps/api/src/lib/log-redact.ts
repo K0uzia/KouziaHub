@@ -25,12 +25,29 @@ export function redactUrl(url: string | undefined): string {
   return `${url.slice(0, q)}?${query}`;
 }
 
+/**
+ * Adresse d'une requête sans route (404, lien mal tapé, robot) : rien de la requête après « ? », et tout segment qui
+ * ressemble à un jeton (16 caractères ou plus, sans espace) masqué. Un jeton collé dans un mauvais lien ne finit
+ * jamais en clair dans le journal.
+ */
+export function redactUnknownUrl(url: string | undefined): string {
+  if (!url) return "";
+  const q = url.indexOf("?");
+  const path = (q === -1 ? url : url.slice(0, q))
+    .split("/")
+    .map((seg) => (seg.length >= 16 && /^[A-Za-z0-9%_.~+=:-]+$/.test(seg) ? "[masqué]" : seg.slice(0, 64)))
+    .join("/");
+  return q === -1 ? path : `${path}?[masqué]`;
+}
+
 /** Sérialiseur des requêtes du journal Fastify (URL masquée, aucun en-tête). */
 export const logSerializers = {
   req(request: FastifyRequest) {
+    // Route connue : adresse avec ses paramètres sensibles masqués. Sans route : chemin réduit (redactUnknownUrl).
+    const known = Boolean(request.routeOptions?.url);
     return {
       method: request.method,
-      url: redactUrl(request.url),
+      url: known ? redactUrl(request.url) : redactUnknownUrl(request.url),
       host: request.headers?.host,
       remoteAddress: request.ip,
     };

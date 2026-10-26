@@ -3,7 +3,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import type { User } from "@prisma/client";
 import { audit } from "@/lib/audit.js";
 import { prisma } from "@/lib/prisma.js";
-import { decrypt, encrypt } from "@/lib/crypto.js";
+import { decrypt, encrypt, encryptionKey, subKey } from "@/lib/crypto.js";
 import { getCookieSecure } from "@/lib/env.js";
 import { generateTotpSecret, matchTotpStep } from "@/lib/admin/totp.js";
 
@@ -136,10 +136,14 @@ function normalizeRecoveryCode(code: string): string {
   return code.toUpperCase().replace(/[^A-Z0-9]/g, "");
 }
 
-function hashRecoveryCode(code: string): string {
-  const hex = process.env.ENCRYPTION_KEY;
-  if (!hex || hex.length !== 64) throw new Error("ENCRYPTION_KEY must be a 64-char hex string (32 bytes)");
-  return createHmac("sha256", Buffer.from(hex, "hex")).update(normalizeRecoveryCode(code)).digest("hex");
+/** Empreinte d'un code de secours : HMAC avec une sous-clé dédiée (HKDF), jamais la clé de chiffrement elle-même. */
+export function hashRecoveryCode(code: string): string {
+  return createHmac("sha256", subKey("codes-de-secours")).update(normalizeRecoveryCode(code)).digest("hex");
+}
+
+/** Ancien format (HMAC avec la clé de chiffrement) : accepté, puis réécrit au nouveau quand le code sert. */
+export function legacyRecoveryHash(code: string): string {
+  return createHmac("sha256", encryptionKey()).update(normalizeRecoveryCode(code)).digest("hex");
 }
 
 /** Remplace tous les codes de secours : 10 codes « XXXXX-XXXXX » (50 bits chacun), affichés une seule fois. */
@@ -161,7 +165,13 @@ export async function consumeRecoveryCode(userId: string, code: string): Promise
     where: { userId, codeHash: hashRecoveryCode(code), usedAt: null },
     data: { usedAt: new Date() },
   });
-  return count === 1;
+  if (count === 1) return true;
+  // Code émis avant la sous-clé : vérifié à l'ancien format, puis réécrit au nouveau en même temps qu'il est utilisé.
+  const legacy = await prisma.adminRecoveryCode.updateMany({
+    where: { userId, codeHash: legacyRecoveryHash(code), usedAt: null },
+    data: { usedAt: new Date(), codeHash: hashRecoveryCode(code) },
+  });
+  return legacy.count === 1;
 }
 
 export async function remainingRecoveryCodes(userId: string): Promise<number> {

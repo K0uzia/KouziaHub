@@ -63,7 +63,9 @@ export function Modal({
       // Modale ouverte par-dessus une autre (aperçu plein écran) : seule la plus haute réagit.
       const panels = document.querySelectorAll("[data-modal-panel]");
       if (panel && panels[panels.length - 1] !== panel) return;
+      // Échap déjà traité par un menu ou une bulle ouverts dans la modale : la modale reste ouverte.
       if (e.key === "Escape") {
+        if (e.defaultPrevented) return;
         onCloseRef.current();
         return;
       }
