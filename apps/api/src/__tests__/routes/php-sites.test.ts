@@ -32,12 +32,15 @@ let server: Server;
 let mem: ReturnType<typeof memorySys>;
 let leaks: Set<string>;
 let silent: Set<string>;
+/** Version qui fuit une fois servie (lien current) : le contrôle d'avant la bascule passe, celui d'après refuse. */
+let leakWhenServed: string | null;
 const incoming = mkdtempSync(join(tmpdir(), "kouzia-php-in-"));
 
 beforeEach(async () => {
   await resetDb();
   leaks = new Set();
   silent = new Set();
+  leakWhenServed = null;
   // tar simulé : la liste annonce un fichier ordinaire, l'extraction ne fait rien (mémoire).
   mem = memorySys((file, args) =>
     file === "/bin/tar" && args[0] === "-tvzf" ? { code: 0, stdout: "-rw-r--r-- 0/0 1 2026-10-25 10:00 public/index.html\n", stderr: "" } : { code: 0, stdout: "", stderr: "" },
@@ -47,7 +50,11 @@ beforeEach(async () => {
     domain: "kouzia.com",
     phpInstalled: () => ["8.3"],
     limitsEffective: () => true,
-    httpStatus: async (_host, p) => (silent.has(p) ? 0 : leaks.has(p) ? 200 : 404),
+    httpStatus: async (_host, p) => {
+      const served = (mem.nodes.get("/srv/sites/mytakumi/current") as { target?: string } | undefined)?.target;
+      if (silent.has(p)) return 0;
+      return leaks.has(p) || (p === "/.env" && leakWhenServed !== null && served === leakWhenServed) ? 200 : 404;
+    },
     sys: mem.sys,
   });
   const probes = {
@@ -172,11 +179,30 @@ describe("site PHP de bout en bout", () => {
     await settle(hub);
     const op = (await detail(id)).operation as Operation;
     expect(op).toMatchObject({ kind: "PUBLISH", status: "FAILED" });
-    expect(op.error).toMatch(/Fuite détectée/);
+    expect(op.error).toBe(
+      "Fichiers envoyés au serveur des sites PHP : Fuite détectée avant la bascule, version non publiée (la version servie ne change pas), site coupé : /.env (200) répond(ent) au lieu d'être refusé(s).",
+    );
     // Rien n'a basculé : le lien du CT et le hub désignent toujours la version 2 ; « Rallumer » ne relance pas la 3.
     expect(mem.nodes.get("/srv/sites/mytakumi/current")).toEqual({ type: "link", target: "releases/2" });
     expect((await detail(id)).currentVersion?.number).toBe(2);
     expect(mem.nodes.has("/etc/nginx/kouziaphp-sites/mytakumi.conf.off")).toBe(true);
+  });
+
+  it("fuite vue seulement après la bascule : version d'avant remise, message qui le dit", async () => {
+    const id = ((await create()).json() as SiteDetail).id;
+    await settle(hub);
+    await uploadFiles(hub, id, [{ filename: "public/index.php", content: "<?php echo 2;" }]);
+    await post(id, "publish");
+    await settle(hub);
+    await uploadFiles(hub, id, [{ filename: "public/index.php", content: "<?php echo 3;" }]);
+    leakWhenServed = "releases/3";
+    await post(id, "publish");
+    await settle(hub);
+    const op = (await detail(id)).operation as Operation;
+    expect(op.error).toBe(
+      "Fichiers envoyés au serveur des sites PHP : Fuite détectée après la bascule, version précédente (2) remise, site coupé : /.env (200) répond(ent) au lieu d'être refusé(s).",
+    );
+    expect(mem.nodes.get("/srv/sites/mytakumi/current")).toEqual({ type: "link", target: "releases/2" });
   });
 
   it("agent injoignable à la publication : étape PHP nommée comme telle, cause dite (pas « erreur inattendue »)", async () => {
@@ -202,7 +228,9 @@ describe("site PHP de bout en bout", () => {
     await settle(hub);
     const op = (await detail(id)).operation as Operation;
     expect(op).toMatchObject({ kind: "PUBLISH", status: "FAILED" });
-    expect(op.error).toBe("Fichiers envoyés au serveur des sites PHP : Contrôle anti-fuite incomplet, site coupé par prudence : pas de réponse de nginx en 2 s sur /composer.json.");
+    expect(op.error).toBe(
+      "Fichiers envoyés au serveur des sites PHP : Contrôle anti-fuite incomplet avant la bascule, version non publiée, site coupé par prudence : pas de réponse de nginx en 2 s sur /composer.json.",
+    );
     expect(mem.nodes.has("/etc/nginx/kouziaphp-sites/mytakumi.conf.off")).toBe(true);
   });
 

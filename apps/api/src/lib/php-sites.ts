@@ -61,19 +61,33 @@ export async function phpDnsTarget(services: Services): Promise<string> {
 }
 
 /**
- * Contrôle anti-fuite (nginx local, sous le nom du site). Une fuite coupe le site et fait échouer la publication ; avant de
- * couper, rollback() remet la version acceptée si la nouvelle avait déjà basculé.
+ * Contrôle anti-fuite (nginx local, sous le nom du site). Une fuite coupe le site et fait échouer la publication. Avant la
+ * bascule : la version n'est pas publiée. Après : previous (version servie avant) est remise, puis le site coupé. Le
+ * message dit lequel des deux contrôles a refusé et ce qui est servi ensuite.
  */
-async function leakGate(agent: ReturnType<typeof agentOf>, slug: string, rollback: () => Promise<void> = async () => {}): Promise<void> {
+async function leakGate(agent: ReturnType<typeof agentOf>, slug: string, after: { previous: number | null } | null = null): Promise<void> {
   const check = await agent.check(slug);
   if (check.ok) return;
-  await rollback().catch(() => undefined);
+  let state = "version non publiée (la version servie ne change pas)";
+  if (after) {
+    if (after.previous === null) state = "aucune version précédente à remettre";
+    else {
+      const previous = after.previous;
+      state = await agent.publish(slug, previous).then(
+        () => `version précédente (${previous}) remise`,
+        () => `retour à la version ${previous} impossible`,
+      );
+    }
+  }
   await agent.setEnabled(slug, false).catch(() => undefined);
+  const when = after ? "après la bascule" : "avant la bascule";
   // Statut 0 : nginx n'a pas répondu (délai de 2 s ou refus) ; le site est coupé quand même, par prudence.
   const silent = check.results.filter((r) => r.status === 0).map((r) => r.path);
-  if (silent.length) throw new HttpError(500, `Contrôle anti-fuite incomplet, site coupé par prudence : pas de réponse de nginx en 2 s sur ${silent.join(", ")}.`, "php_check");
+  if (silent.length) {
+    throw new HttpError(500, `Contrôle anti-fuite incomplet ${when}, ${after ? state : "version non publiée"}, site coupé par prudence : pas de réponse de nginx en 2 s sur ${silent.join(", ")}.`, "php_check");
+  }
   const leaks = check.results.filter((r) => r.status !== 403 && r.status !== 404).map((r) => `${r.path} (${r.status})`);
-  throw new HttpError(500, `Fuite détectée après publication, site coupé : ${leaks.join(", ")} répond(ent) au lieu d'être refusé(s).`, "php_leak");
+  throw new HttpError(500, `Fuite détectée ${when}, ${state}, site coupé : ${leaks.join(", ")} répond(ent) au lieu d'être refusé(s).`, "php_leak");
 }
 
 /**
@@ -120,9 +134,7 @@ export async function deployPhpVersion(services: Services, siteId: string, versi
   const previous = site.currentVersionId && site.currentVersionId !== versionId
     ? await prisma.version.findUnique({ where: { id: site.currentVersionId }, select: { number: true } })
     : null;
-  await leakGate(agent, site.slug, async () => {
-    if (previous) await agent.publish(site.slug, previous.number);
-  });
+  await leakGate(agent, site.slug, { previous: previous?.number ?? null });
 
   const now = new Date();
   await prisma.version.update({ where: { id: versionId }, data: { status: "PUBLISHED", publishedAt: now, error: null } });
