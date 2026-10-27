@@ -221,7 +221,13 @@ const phpRemoveStep: StepDef = {
   key: "php-remove",
   label: "Site retiré du serveur PHP",
   async run({ services, site }) {
-    await agentOf(services).removeSite(site.slug);
+    try {
+      await agentOf(services).removeSite(site.slug);
+    } catch (err) {
+      // Déjà absent du CT (création arrêtée avant, ou suppression faite dont la réponse s'est perdue) : le but est
+      // atteint. Sans cela, chaque reprise échouait et le site restait « en suppression » (audit du 27/10/2026).
+      if (!(err instanceof PhpAgentOpError && err.status === 404)) throw err;
+    }
   },
 };
 

@@ -94,7 +94,7 @@ const create = (php: Record<string, unknown> = {}) =>
     headers: hub.headers,
     payload: { kind: "PERSO", slug: "mytakumi", label: "MyTakumi", hosting: "php", php: { persistentDirs: ["data"], ...php } },
   });
-const call = (method: "GET" | "POST" | "PUT" | "PATCH", url: string, payload?: unknown) => hub.app.inject({ method, url, headers: hub.headers, ...(payload !== undefined ? { payload: payload as object } : {}) });
+const call = (method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE", url: string, payload?: unknown) => hub.app.inject({ method, url, headers: hub.headers, ...(payload !== undefined ? { payload: payload as object } : {}) });
 const text = (p: string) => (mem.nodes.get(p) as { text?: string } | undefined)?.text ?? null;
 
 async function site(php: Record<string, unknown> = {}): Promise<string> {
@@ -395,5 +395,17 @@ describe("page 404 d'un site PHP (lot P5) : vérifiée par HTTP, pas par un fich
     expect(await check()).toMatchObject({ ok: false, status: 200 });
     pageAnswer = () => ({ status: 404, contentType: "application/json", location: null, body: Buffer.from("{}") });
     expect(await check()).toMatchObject({ ok: false, html: false });
+  });
+});
+
+describe("suppression d'un site PHP absent du CT (audit du 27/10/2026)", () => {
+  it("le CT ne connaît plus le site : la suppression aboutit quand même (plus de site bloqué « en suppression »)", async () => {
+    const id = await site();
+    // CT reconstruit, ou suppression déjà faite dont la réponse s'est perdue : l'agent répond « Site inconnu » (404).
+    mem.nodes.delete("/etc/kouziaphp/sites/mytakumi.json");
+    const del = await call("DELETE", `/api/sites/${id}`, { confirm: "mytakumi" });
+    expect(del.statusCode, del.body).toBe(200);
+    await settle(hub);
+    expect(await prisma.site.findUnique({ where: { id } })).toBeNull();
   });
 });
