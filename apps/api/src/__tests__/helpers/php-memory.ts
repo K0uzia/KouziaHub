@@ -83,6 +83,9 @@ export function memorySys(answer: (file: string, args: string[]) => RunResult = 
       // est créé appartient au compte de l'UID, comme en vrai.
       const before = new Set(nodes.keys());
       if (file === "/bin/mkdir" && args[0] === "-p") await sys.mkdir(args[1]!, 0o750);
+      // Sonde du contrôle anti-fuite, posée puis retirée sous le compte du site.
+      if (args[0] === "-e" && args[1]?.includes("writeFileSync")) nodes.set(args[2]!, { type: "file", text: "<?php echo 'EXECUTE';\n" });
+      if (file === "/bin/rm" && args[0] === "-f") await sys.rm(args[1]!);
       if (args[0] === "-e" && args[1]?.includes("cpSync")) {
         const [src, dst] = [args[2]!, args[3]!];
         // Comme Node : copier un lien vers sa propre cible (shared/ sur lui-même) est refusé.

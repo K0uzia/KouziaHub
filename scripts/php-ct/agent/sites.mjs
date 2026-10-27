@@ -31,6 +31,8 @@ export const MARIADB_SOCKET = "/run/mysqld/mysqld.sock";
  * dossier persistant. Même résultat partout, quand « cp -n » change de code de sortie selon la version.
  */
 export const COPY_MISSING = "require('fs').cpSync(process.argv[1], process.argv[2], { recursive: true, force: false, errorOnExist: false })";
+/** Sonde du contrôle anti-fuite, écrite par le compte du site (création exclusive : jamais à travers un lien posé avant). */
+export const WRITE_PROBE = `require('fs').writeFileSync(process.argv[1], "<?php echo 'EXECUTE';\\n", { flag: 'wx', mode: 0o644 })`;
 export const DUMPS_KEPT = 5;
 /** Page lue pour la vignette : chemin absolu et sa requête, sans espace ni caractère de contrôle. */
 export const PAGE_PATH_RE = /^\/[\x21-\x7e]{0,2047}$/;
@@ -736,11 +738,12 @@ export function siteOperations(ctx) {
         if (!(await sys.exists(shared))) continue;
         const name = `kouzia-sonde-${randomBytes(8).toString("hex")}.php`;
         const file = path.posix.join(shared, name);
-        await sys.writeFile(file, "<?php echo 'EXECUTE';\n", 0o644);
+        // Sous le compte du site : root n'écrit ni ne supprime rien dans un dossier que le site contrôle (revue du 27/10/2026).
+        await asSite(spec.slug, process.execPath, ["-e", WRITE_PROBE, file], "Sonde du contrôle anti-fuite");
         try {
           results.push({ path: `${servedPath(spec, d)}/${name}`, status: await ctx.httpStatus(spec.hostname, `${servedPath(spec, d)}/${name}`) });
         } finally {
-          await sys.rm(file);
+          await asSite(spec.slug, "/bin/rm", ["-f", file], "Sonde du contrôle anti-fuite").catch(() => undefined);
         }
       }
       const leaks = results.filter((r) => r.status !== 403 && r.status !== 404);

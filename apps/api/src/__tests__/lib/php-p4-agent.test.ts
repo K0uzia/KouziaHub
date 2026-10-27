@@ -295,6 +295,10 @@ describe("base, .env et dumps sur le CT (système simulé)", () => {
     expect(bad.ok).toBe(false);
     expect(bad.results.find((r) => r.path.includes("/kouzia-sonde-"))?.status).toBe(200);
     expect([...m.nodes.keys()].some((k) => k.includes("kouzia-sonde"))).toBe(false);
+    // Sonde posée et retirée SOUS LE COMPTE DU SITE (dossier qu'il contrôle : un lien posé à l'avance ne mène root nulle part).
+    const probeCalls = m.inputs.filter((i) => i.args.some((x) => x.includes("kouzia-sonde-")));
+    expect(probeCalls.length).toBeGreaterThanOrEqual(4);
+    for (const call of probeCalls) expect(call.io, `${call.file} ${call.args.join(" ")}`).toMatchObject({ uid: 20001, gid: 20005 });
   });
 
   it("dumps avant publication : rien sans base ; 5 gardés ; restauration = base vidée puis dump importé", async () => {
