@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import { mkdir, readdir, readFile, rename, rm, stat, statfs, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { Readable } from "node:stream";
 import type { CreateUploadInput, RejectedFile, UploadFileDecl, UploadSession } from "@/contract.js";
 import type { FileRef } from "@/lib/files.js";
 import { HttpError } from "@/lib/http.js";
@@ -345,9 +346,11 @@ export class UploadStore {
 
       // Vérification de tous les fichiers d'abord : tout ou rien.
       const bad: string[] = [];
+      // En flux, morceau par morceau : un fichier de 256 Mio n'est jamais rassemblé en mémoire (audit du 27/10/2026).
       for (const f of meta.files) {
-        const sha = createHash("sha256").update(await reader.read(f.size)).digest("hex");
-        if (sha !== f.sha256) bad.push(f.path);
+        const hash = createHash("sha256");
+        for await (const part of reader.stream(f.size)) hash.update(part);
+        if (hash.digest("hex") !== f.sha256) bad.push(f.path);
       }
       if (bad.length) {
         throw new HttpError(
@@ -361,7 +364,7 @@ export class UploadStore {
       const consumer = new ChunkReader(path.join(dir, "chunks"), true);
       try {
         for (const f of meta.files) {
-          const blob = await blobs.putBuffer(await consumer.read(f.size));
+          const blob = await blobs.putStream(Readable.from(consumer.stream(f.size)), f.size);
           stored.push({ path: f.path, sha256: blob.sha256, size: blob.size });
         }
         await consumer.finish();
@@ -415,8 +418,8 @@ class ChunkReader {
     this.current = null;
   }
 
-  async read(size: number): Promise<Buffer> {
-    const parts: Buffer[] = [];
+  /** Les size octets suivants, en tranches (jamais plus d'un morceau en mémoire). */
+  async *stream(size: number): AsyncGenerator<Buffer> {
     let need = size;
     while (need > 0) {
       if (!this.current || this.offset >= this.current.length) {
@@ -426,10 +429,9 @@ class ChunkReader {
         this.offset = 0;
       }
       const take = Math.min(need, this.current.length - this.offset);
-      parts.push(this.current.subarray(this.offset, this.offset + take));
+      yield this.current.subarray(this.offset, this.offset + take);
       this.offset += take;
       need -= take;
     }
-    return Buffer.concat(parts, size);
   }
 }

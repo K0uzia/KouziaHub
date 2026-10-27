@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FilesResponse, UploadFileDecl, UploadResult, UploadSession } from "@/contract.js";
 import { UPLOAD_CHUNK_BYTES } from "@/lib/limits.js";
 import { prisma, resetDb } from "../helpers/db.js";
@@ -168,6 +168,22 @@ describe("sessions d'envoi par morceaux", () => {
     const done = await complete(session.id);
     expect(done.statusCode).toBe(200);
     expect(await workingPaths()).toEqual(["index.html"]);
+  });
+
+  it("finalisation en flux : aucun fichier rassemblé en mémoire au-delà d'un morceau (audit P1-j)", async () => {
+    const { local, session, chunks } = await bigSession();
+    for (const [n, c] of chunks.entries()) await put(session.id, n, c);
+    const concat = vi.spyOn(Buffer, "concat");
+    try {
+      expect((await complete(session.id)).statusCode).toBe(200);
+      const largest = Math.max(0, ...concat.mock.results.map((r) => (Buffer.isBuffer(r.value) ? r.value.length : 0)));
+      expect(largest).toBeLessThanOrEqual(UPLOAD_CHUNK_BYTES);
+    } finally {
+      concat.mockRestore();
+    }
+    // Contenu intact, à l'octet près.
+    const raw = await hub.app.inject({ method: "GET", url: `/api/sites/${siteId}/files/raw?path=site/media/a.bin`, headers: hub.headers });
+    expect(sha(raw.rawPayload)).toBe(sha(local[1]!.content));
   });
 
   it("empreinte fausse : morceau refusé, rien d'enregistré", async () => {
