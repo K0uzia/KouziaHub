@@ -100,10 +100,22 @@ export async function findLoginChallenge(request: FastifyRequest) {
   return challenge;
 }
 
-/** Échec sur un challenge : compte l'essai, le supprime au dernier. */
+/**
+ * Réserve un essai AVANT de vérifier le code : écriture conditionnelle atomique (SQLite sérialise les écritures). Des
+ * requêtes lancées en parallèle ne peuvent pas évaluer plus de CHALLENGE_MAX_ATTEMPTS codes (audit du 27/10/2026).
+ */
+export async function reserveChallengeAttempt(challengeId: string): Promise<boolean> {
+  const { count } = await prisma.adminLoginChallenge.updateMany({
+    where: { id: challengeId, attempts: { lt: CHALLENGE_MAX_ATTEMPTS }, expiresAt: { gt: new Date() } },
+    data: { attempts: { increment: 1 } },
+  });
+  return count === 1;
+}
+
+/** Échec sur un challenge (essai déjà compté par reserveChallengeAttempt) : supprimé au dernier essai. */
 export async function failLoginChallenge(challengeId: string): Promise<void> {
-  const c = await prisma.adminLoginChallenge.update({ where: { id: challengeId }, data: { attempts: { increment: 1 } } });
-  if (c.attempts >= CHALLENGE_MAX_ATTEMPTS) {
+  const c = await prisma.adminLoginChallenge.findUnique({ where: { id: challengeId } });
+  if (c && c.attempts >= CHALLENGE_MAX_ATTEMPTS) {
     await prisma.adminLoginChallenge.delete({ where: { id: c.id } }).catch(() => undefined);
   }
 }

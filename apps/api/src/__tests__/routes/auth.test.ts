@@ -102,6 +102,35 @@ describe("connexion", () => {
     expect(recovery.cookies.some((c) => c.name === "kz_hub_session")).toBe(true);
   });
 
+  it("codes TOTP envoyés en parallèle depuis plusieurs adresses : 5 essais au plus par connexion (audit du 27/10/2026)", async () => {
+    // Instance à part : ses connexions n'épuisent pas la limite de débit des autres tests.
+    const own = await buildApp({ silent: true, serveStatic: false, accessVerifier: null });
+    try {
+      const cookie = await loginCookie(own);
+      const secret = (await own.inject({ method: "POST", url: "/api/auth/2fa/setup", headers: authed(cookie) })).json().secret as string;
+      await own.inject({ method: "POST", url: "/api/auth/2fa/enable", headers: authed(cookie), payload: { code: hotp(base32Decode(secret), totpStep(Date.now())) } });
+      const login = await own.inject({ method: "POST", url: "/api/auth/login", headers: ORIGIN, payload: { email: TEST_EMAIL, password: TEST_PASSWORD } });
+      const challenge = login.cookies.find((c) => c.name === "kz_hub_mfa")!;
+      const tries = await Promise.all(
+        Array.from({ length: 12 }, (_, i) =>
+          own.inject({
+            method: "POST",
+            url: "/api/auth/2fa",
+            remoteAddress: `192.0.2.${i + 1}`,
+            headers: { ...ORIGIN, cookie: `kz_hub_mfa=${challenge.value}` },
+            payload: { code: String(100000 + i) },
+          }),
+        ),
+      );
+      const evaluated = tries.filter((r) => r.json().error === "Code incorrect.").length;
+      expect(evaluated).toBeGreaterThan(0);
+      expect(evaluated).toBeLessThanOrEqual(5);
+      expect(tries.every((r) => r.statusCode === 401)).toBe(true);
+    } finally {
+      await own.close();
+    }
+  });
+
   it("refuse une mutation venue d'une autre origine", async () => {
     const res = await app.inject({
       method: "POST",

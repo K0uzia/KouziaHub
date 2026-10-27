@@ -20,6 +20,7 @@ import {
   consumeRecoveryCode,
   consumeTotpCode,
   failLoginChallenge,
+  reserveChallengeAttempt,
   findLoginChallenge,
   isLocked,
   isTwoFactorEnabled,
@@ -156,6 +157,8 @@ export const authRoutes =
       await closeLoginChallenge(user.id, request, reply);
       return reply.code(401).send(CHALLENGE_EXPIRED);
     }
+    // Essai compté avant toute vérification : plus de 5 codes par challenge, même en parallèle, est impossible.
+    if (!(await reserveChallengeAttempt(challenge.id))) return reply.code(401).send(CHALLENGE_EXPIRED);
 
     const ok =
       "code" in parsed.data

@@ -479,7 +479,9 @@ export function siteOperations(ctx) {
       if (type !== "directory") throw new OpError(409, `Dossier persistant : « ${p} » n'est pas un dossier.`);
       if (owner !== user) {
         await run("/bin/chown", ["-h", `${user}:${user}`, p], "Reprise du dossier persistant");
-        await run("/bin/chmod", ["750", p], "Reprise du dossier persistant");
+        // Sous le compte du site (désormais propriétaire) : si le site a glissé un lien entre le stat et ici, le chmod
+        // ne peut toucher qu'à ce qui est à lui, jamais un fichier de root (audit du 27/10/2026).
+        await asSite(slug, "/bin/chmod", ["750", p], "Reprise du dossier persistant");
       }
     }
   }

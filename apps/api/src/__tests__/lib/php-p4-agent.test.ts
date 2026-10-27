@@ -264,6 +264,8 @@ describe("base, .env et dumps sur le CT (système simulé)", () => {
     expect(fixedAssets).toBeGreaterThan(fixedPublic);
     expect(mkdirAsSite).toBeGreaterThan(fixedAssets);
     expect(m.runs).toContain("/bin/chmod 750 /srv/sites/mytakumi/shared/public");
+    // chmod sous le compte du site, jamais en root : un lien glissé après le stat ne mène root nulle part.
+    expect(m.inputs.find((i) => i.file === "/bin/chmod" && i.args.join(" ") === "750 /srv/sites/mytakumi/shared/public")?.io).toMatchObject({ uid: 20001, gid: 20005 });
     expect(text(m, "/srv/sites/mytakumi/shared/public/assets/img/oeuvres/vase.webp")).toBe("vase");
     // Republication : déjà au compte du site, rien à reprendre.
     m.runs.length = 0;
