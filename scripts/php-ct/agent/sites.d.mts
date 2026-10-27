@@ -92,6 +92,8 @@ export type Sys = {
   readdir(p: string): Promise<string[]>;
   chown(p: string, user: string, group: string): Promise<void>;
   exists(p: string): Promise<boolean>;
+  /** Dossiers base/segments rendus au compte ids, sans suivre de lien à aucun niveau ; arrêt au premier absent. */
+  claimDirs(base: string, segments: string[], ids: { uid: number; gid: number }, mode: number): Promise<{ refused: { kind: "link" | "notdir"; path: string } | null }>;
   cp(a: string, b: string): Promise<void>;
   runIo(file: string, args: string[], io?: RunIo): Promise<RunResult>;
 };

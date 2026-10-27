@@ -13,7 +13,7 @@
 
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { createReadStream, createWriteStream } from "node:fs";
+import { constants as fsConstants, createReadStream, createWriteStream } from "node:fs";
 import * as fsp from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -471,23 +471,13 @@ export function siteOperations(ctx) {
    * un lien posé par le site arrête tout (root ne doit jamais agir ailleurs). Le .env du site n'est pas dans shared/.
    */
   async function repairShared(slug, dir) {
-    const user = userOf(slug);
-    const segments = dir.split("/");
-    for (let i = 1; i <= segments.length; i++) {
-      const p = path.posix.join(siteDir(slug), "shared", ...segments.slice(0, i));
-      const st = await sys.run("/bin/stat", ["-c", "%U %F", p]);
-      if (st.code !== 0) return; // absent : le compte du site le créera (son parent lui appartient).
-      const [owner, ...kind] = st.stdout.trim().split(" ");
-      const type = kind.join(" ");
-      if (type === "symbolic link") throw new OpError(409, `Dossier persistant : « ${p} » est un lien, refusé (le site ne doit pas rediriger ses dossiers persistants).`);
-      if (type !== "directory") throw new OpError(409, `Dossier persistant : « ${p} » n'est pas un dossier.`);
-      if (owner !== user) {
-        await run("/bin/chown", ["-h", `${user}:${user}`, p], "Reprise du dossier persistant");
-        // Sous le compte du site (désormais propriétaire) : si le site a glissé un lien entre le stat et ici, le chmod
-        // ne peut toucher qu'à ce qui est à lui, jamais un fichier de root (audit du 27/10/2026).
-        await asSite(slug, "/bin/chmod", ["750", p], "Reprise du dossier persistant");
-      }
-    }
+    const ids = idsOf(await sys.readFile(paths.passwdFile), userOf(slug));
+    // Chaque niveau ouvert sans suivre de lien, relativement au précédent déjà ouvert ; propriétaire et droits changés sur
+    // le descripteur. Un parent remplacé par un lien entre deux étapes ne mène root nulle part (revue du 27/10/2026).
+    // Absent : le compte du site le créera (son parent lui appartient).
+    const { refused } = await sys.claimDirs(path.posix.join(siteDir(slug), "shared"), dir.split("/"), ids, 0o750);
+    if (refused?.kind === "link") throw new OpError(409, `Dossier persistant : « ${refused.path} » est un lien, refusé (le site ne doit pas rediriger ses dossiers persistants).`);
+    if (refused) throw new OpError(409, `Dossier persistant : « ${refused.path} » n'est pas un dossier.`);
   }
 
   // --- Tâche planifiée (lot P5) : crontab du compte du site, lue par crond (BusyBox) ---
@@ -1012,6 +1002,49 @@ export function realSys(runImpl) {
       if (r.code !== 0) throw new OpError(500, `Droits de ${p} : échec.`);
     },
     exists: (p) => fsp.lstat(p).then(() => true, () => false),
+    /**
+     * Dossiers base/s1/s2... rendus au compte (ids) : chacun ouvert par /proc/self/fd/<parent>/<nom> avec O_NOFOLLOW, donc
+     * sans suivre de lien à aucun niveau, puis fchown et fchmod sur le descripteur. Arrêt au premier absent ; refus d'un
+     * lien ou d'un fichier.
+     */
+    async claimDirs(base, segments, ids, mode) {
+      const flags = fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW;
+      const refusal = (err, at) =>
+        err.code === "ELOOP" ? { kind: "link", path: at } : err.code === "ENOTDIR" ? { kind: "notdir", path: at } : null;
+      let fh;
+      try {
+        fh = await fsp.open(base, flags);
+      } catch (err) {
+        if (err.code === "ENOENT") return { refused: null };
+        const r = refusal(err, base);
+        if (r) return { refused: r };
+        throw err;
+      }
+      let at = base;
+      try {
+        for (const seg of segments) {
+          at = path.posix.join(at, seg);
+          let next;
+          try {
+            next = await fsp.open(`/proc/self/fd/${fh.fd}/${seg}`, flags);
+          } catch (err) {
+            if (err.code === "ENOENT") return { refused: null };
+            const r = refusal(err, at);
+            if (r) return { refused: r };
+            throw err;
+          }
+          await fh.close();
+          fh = next;
+          if ((await fh.stat()).uid !== ids.uid) {
+            await fh.chown(ids.uid, ids.gid);
+            await fh.chmod(mode);
+          }
+        }
+        return { refused: null };
+      } finally {
+        await fh.close().catch(() => undefined);
+      }
+    },
     cp: (a, b) => fsp.cp(a, b, { recursive: true, dereference: false, verbatimSymlinks: true }),
     runIo,
   };

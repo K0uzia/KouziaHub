@@ -259,28 +259,29 @@ describe("base, .env et dumps sur le CT (système simulé)", () => {
     m.nodes.set("/srv/sites/mytakumi/releases/1/public/assets/img/oeuvres/vase.webp", { type: "file", text: "vase" });
     m.runs.length = 0;
     await ops.publish("mytakumi", 1);
-    // Rendus au compte du site, sans suivre de lien, AVANT la création sous son compte.
-    const fixedPublic = m.runs.indexOf("/bin/chown -h php-mytakumi:php-mytakumi /srv/sites/mytakumi/shared/public");
-    const fixedAssets = m.runs.indexOf("/bin/chown -h php-mytakumi:php-mytakumi /srv/sites/mytakumi/shared/public/assets");
+    // Rendus au compte du site AVANT la création sous son compte, par descripteurs ouverts sans suivre de lien à aucun
+    // niveau : un parent remplacé par un lien entre deux étapes ne mène root nulle part (revue de l'agent, TOCTOU).
+    const claimPublic = m.runs.indexOf("claim /srv/sites/mytakumi/shared/public 20001:20005 750");
+    const claimAssets = m.runs.indexOf("claim /srv/sites/mytakumi/shared/public/assets 20001:20005 750");
     const mkdirAsSite = m.runs.indexOf("/bin/mkdir -p /srv/sites/mytakumi/shared/public/assets/img/oeuvres");
-    expect(fixedPublic).toBeGreaterThanOrEqual(0);
-    expect(fixedAssets).toBeGreaterThan(fixedPublic);
-    expect(mkdirAsSite).toBeGreaterThan(fixedAssets);
-    expect(m.runs).toContain("/bin/chmod 750 /srv/sites/mytakumi/shared/public");
-    // chmod sous le compte du site, jamais en root : un lien glissé après le stat ne mène root nulle part.
-    expect(m.inputs.find((i) => i.file === "/bin/chmod" && i.args.join(" ") === "750 /srv/sites/mytakumi/shared/public")?.io).toMatchObject({ uid: 20001, gid: 20005 });
+    expect(claimPublic).toBeGreaterThanOrEqual(0);
+    expect(claimAssets).toBeGreaterThan(claimPublic);
+    expect(mkdirAsSite).toBeGreaterThan(claimAssets);
+    // Plus aucun stat, chown ou chmod de root sur un chemin du site (ils suivaient les parents).
+    const rootOnShared = m.runs.filter((r) => /^\/bin\/(stat|chown) /.test(r) && r.includes("/shared/"));
+    expect(rootOnShared).toEqual([]);
     expect(text(m, "/srv/sites/mytakumi/shared/public/assets/img/oeuvres/vase.webp")).toBe("vase");
     // Republication : déjà au compte du site, rien à reprendre.
     m.runs.length = 0;
     await ops.publish("mytakumi", 1);
-    expect(m.runs.some((r) => r.startsWith("/bin/chown -h"))).toBe(false);
+    expect(m.runs.some((r) => r.startsWith("claim "))).toBe(false);
 
     // Le site a remplacé un parent par un lien vers ailleurs : refus, root ne touche à rien au-delà.
     m.nodes.set("/srv/sites/mytakumi/shared/public/assets", { type: "link", target: "/etc" });
     m.runs.length = 0;
     await expect(ops.publish("mytakumi", 1)).rejects.toThrow(/est un lien, refusé/);
     // (data/, traité avant, n'est pas en cause.)
-    expect(m.runs.some((r) => (r.startsWith("/bin/chown") || r.startsWith("/bin/mkdir")) && r.includes("/shared/public"))).toBe(false);
+    expect(m.runs.some((r) => (r.startsWith("claim") || r.startsWith("/bin/mkdir")) && r.includes("/shared/public"))).toBe(false);
   });
 
   it("contrôle anti-fuite : un .php déposé dans un dossier public persistant ne doit pas s'exécuter (sonde retirée)", async () => {

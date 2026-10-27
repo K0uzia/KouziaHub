@@ -64,6 +64,24 @@ export function memorySys(answer: (file: string, args: string[]) => RunResult = 
     readdir: async (p) => [...new Set(under(p).filter((k) => k !== p).map((k) => k.slice(p.length + 1).split("/")[0]!))],
     chown: async (p, u, g) => void owners.set(p, `${u}:${g}`),
     exists: async (p) => nodes.has(p),
+    // Reprise des dossiers par descripteurs (sans suivre de lien) : notée « claim <chemin> <uid>:<gid> <droits> ».
+    claimDirs: async (base, segments, ids, mode) => {
+      const passwd = nodes.get("/etc/passwd");
+      const user = passwd?.type === "file" ? passwd.text.split("\n").find((l) => l.split(":")[2] === String(ids.uid))?.split(":")[0] : undefined;
+      let at = base;
+      for (const seg of segments) {
+        at = `${at}/${seg}`;
+        const n = nodes.get(at);
+        if (!n) return { refused: null };
+        if (n.type === "link") return { refused: { kind: "link" as const, path: at } };
+        if (n.type !== "dir") return { refused: { kind: "notdir" as const, path: at } };
+        if ((owners.get(at) ?? "root:root").split(":")[0] !== user) {
+          runs.push(`claim ${at} ${ids.uid}:${ids.gid} ${mode.toString(8)}`);
+          owners.set(at, `${user}:${user}`);
+        }
+      }
+      return { refused: null };
+    },
     cp: async (a, b) => {
       for (const k of under(a)) nodes.set(b + k.slice(a.length), nodes.get(k)!);
     },
