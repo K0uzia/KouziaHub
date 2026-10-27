@@ -12,7 +12,7 @@
 
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { execFile } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, appendFileSync, statfsSync, createReadStream, createWriteStream } from "node:fs";
+import { existsSync, readFileSync, readdirSync, appendFileSync, writeFileSync, statfsSync, createReadStream, createWriteStream } from "node:fs";
 import { rm } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { createServer, request as httpRequest } from "node:http";
@@ -193,15 +193,34 @@ const routes = [
 export const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
 const SHA_RE = /^[0-9a-f]{64}$/;
 
+/** Numéros reçus dans les 2 dernières fenêtres, relus au démarrage ; le fichier est réécrit avec eux seuls. */
+function loadNonces(file, nowS) {
+  const seen = new Map();
+  if (!file) return seen;
+  let text = "";
+  try {
+    text = readFileSync(file, "utf8");
+  } catch {
+    return seen;
+  }
+  for (const line of text.split("\n")) {
+    const [n, at] = line.split(" ");
+    if (NONCE_RE.test(n ?? "") && nowS - Number(at) <= 2 * WINDOW_SECONDS) seen.set(n, Number(at));
+  }
+  writeFileSync(file, [...seen].map(([n, at]) => `${n} ${at}\n`).join(""), { mode: 0o600 });
+  return seen;
+}
+
 /**
  * Serveur de l'agent. options : secret (au moins 32 caractères), allowedIps (IP du hub), probes (sondes),
  * sites (opérations sur les sites, sites.mjs ; absentes : 503), log (une ligne par requête : date, IP, méthode,
- * chemin, statut ; jamais un en-tête ni un corps).
+ * chemin, statut ; jamais un en-tête ni un corps). nonceFile : numéros déjà reçus gardés sur disque, pour qu'une requête
+ * captée ne soit pas rejouable après un redémarrage de l'agent (dans sa fenêtre de 60 s).
  */
-export function createAgent({ secret, allowedIps, probes = systemProbes, sites = null, mails = null, ct = null, restart = () => {}, log = () => {} }) {
+export function createAgent({ secret, allowedIps, probes = systemProbes, sites = null, mails = null, ct = null, restart = () => {}, log = () => {}, nonceFile = null }) {
   if (typeof secret !== "string" || secret.length < 32) throw new Error("Secret de l'agent absent ou trop court (32 caractères au moins).");
   const allowed = new Set(allowedIps);
-  const seen = new Map();
+  const seen = loadNonces(nonceFile, Math.floor(probes.now() / 1000));
 
   const server = createServer((req, res) => {
     const ip = (req.socket.remoteAddress ?? "").replace(/^::ffff:/, "");
@@ -246,6 +265,15 @@ export function createAgent({ secret, allowedIps, probes = systemProbes, sites =
       if (seen.has(nonce)) {
         reply(401, { error: "Requête déjà reçue." });
         return false;
+      }
+      if (nonceFile) {
+        // Gardé AVANT d'exécuter : sans écriture possible, la requête est refusée (jamais de rejeu silencieux).
+        try {
+          appendFileSync(nonceFile, `${nonce} ${nowS}\n`, { mode: 0o600 });
+        } catch {
+          reply(503, { error: "Journal des requêtes indisponible sur l'agent." });
+          return false;
+        }
       }
       seen.set(nonce, nowS);
       return true;
@@ -468,6 +496,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     // Après une mise à jour des scripts : arrêt propre, supervise-daemon relance l'agent sur la nouvelle copie.
     restart: () => process.exit(0),
     allowedIps: hubIps,
+    nonceFile: "/var/lib/kouziaphp/agent-nonces",
     sites,
     mails,
     log: (line) => {

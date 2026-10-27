@@ -38,4 +38,6 @@ export function createAgent(options: {
   ct?: CtOperations | null;
   restart?: () => void;
   log?: (line: string) => void;
+  /** Numéros déjà reçus, gardés sur disque (rejeu refusé après un redémarrage). */
+  nonceFile?: string | null;
 }): Server;

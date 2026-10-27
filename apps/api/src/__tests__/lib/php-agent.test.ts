@@ -1,4 +1,7 @@
+import { mkdtempSync } from "node:fs";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { PhpServerStatus } from "@/contract.js";
@@ -28,8 +31,8 @@ let server: Server;
 let base: string;
 const lines: string[] = [];
 
-async function start(allowedIps = ["127.0.0.1"]) {
-  server = createAgent({ secret: SECRET, allowedIps, probes, log: (l) => lines.push(l) });
+async function start(allowedIps = ["127.0.0.1"], nonceFile: string | null = null) {
+  server = createAgent({ secret: SECRET, allowedIps, probes, nonceFile, log: (l) => lines.push(l) });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 }
@@ -78,6 +81,25 @@ describe("protocole de l'agent des sites PHP", () => {
     const headers = { "x-kouzia-hub-timestamp": ts, "x-kouzia-hub-nonce": nonce, "x-kouzia-hub-signature": signAgentRequest(SECRET, ts, nonce, "GET", "/v1/etat", "") };
     expect((await fetch(`${base}/v1/etat`, { headers })).status).toBe(200);
     expect((await fetch(`${base}/v1/etat`, { headers })).status).toBe(401);
+  });
+
+  it("rejeu après un redémarrage de l'agent : refusé (numéros déjà vus gardés sur disque)", async () => {
+    const file = join(mkdtempSync(join(tmpdir(), "kouzia-agent-")), "nonces");
+    await new Promise((resolve) => server.close(resolve));
+    await start(["127.0.0.1"], file);
+    const ts = String(Math.floor(clock / 1000));
+    const nonce = "e".repeat(32);
+    const headers = { "x-kouzia-hub-timestamp": ts, "x-kouzia-hub-nonce": nonce, "x-kouzia-hub-signature": signAgentRequest(SECRET, ts, nonce, "GET", "/v1/etat", "") };
+    expect((await fetch(`${base}/v1/etat`, { headers })).status).toBe(200);
+    // Redémarrage (mise à jour, plantage) 20 s plus tard : la requête captée, encore dans la fenêtre de 60 s, est refusée.
+    await new Promise((resolve) => server.close(resolve));
+    clock += 20_000;
+    await start(["127.0.0.1"], file);
+    const replay = await fetch(`${base}/v1/etat`, { headers });
+    expect(replay.status).toBe(401);
+    expect(await replay.json()).toEqual({ error: "Requête déjà reçue." });
+    // Une requête neuve passe toujours.
+    expect((await client().state()).alpine).toBe("3.22.2");
   });
 
   it("réponse forgée (sans la bonne signature) : refusée par le hub", async () => {
