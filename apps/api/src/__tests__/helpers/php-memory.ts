@@ -50,6 +50,10 @@ export function memorySys(answer: (file: string, args: string[]) => RunResult = 
       for (const k of under(p)) nodes.delete(k);
     },
     symlink: async (target, p) => void nodes.set(p, { type: "link", target }),
+    readlink: async (p) => {
+      const n = nodes.get(p);
+      return n?.type === "link" ? n.target : null;
+    },
     rename: async (a, b) => {
       for (const k of under(b)) nodes.delete(k);
       for (const k of under(a)) {

@@ -859,8 +859,14 @@ export function siteOperations(ctx) {
       const spec = await known(slug);
       versionOf(n);
       if (!(await dbPassword(spec.slug))) return { slug: spec.slug, dumped: false };
+      // Reprise d'une publication dont la bascule a déjà eu lieu (réponse perdue) : la base a pu migrer, le dump pris
+      // avant reste le seul état d'avant la version. Jamais écrasé (audit du 27/10/2026).
+      const file = path.posix.join(dumpsDir(spec.slug), `${n}.sql.gz`);
+      if ((await sys.readlink(path.posix.join(siteDir(spec.slug), "current"))) === `releases/${n}` && (await sys.exists(file))) {
+        return { slug: spec.slug, dumped: false, kept: true, version: n };
+      }
       await sys.mkdir(dumpsDir(spec.slug), 0o700);
-      await dumpTo(spec.slug, path.posix.join(dumpsDir(spec.slug), `${n}.sql.gz`));
+      await dumpTo(spec.slug, file);
       const all = (await sys.readdir(dumpsDir(spec.slug))).map((f) => /^(\d+)\.sql\.gz$/.exec(f)?.[1]).filter(Boolean).map(Number).sort((a, b) => b - a);
       for (const old of all.slice(DUMPS_KEPT)) await sys.rm(path.posix.join(dumpsDir(spec.slug), `${old}.sql.gz`));
       return { slug: spec.slug, dumped: true, version: n };
@@ -990,6 +996,7 @@ export function realSys(runImpl) {
     },
     rm: (p) => fsp.rm(p, { recursive: true, force: true }),
     symlink: (target, p) => fsp.symlink(target, p),
+    readlink: (p) => fsp.readlink(p).catch(() => null),
     rename: (a, b) => fsp.rename(a, b),
     readdir: (p) => fsp.readdir(p),
     async chown(p, user, group) {

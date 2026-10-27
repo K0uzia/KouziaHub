@@ -84,6 +84,8 @@ export type Sys = {
   mkdir(p: string, mode: number): Promise<void>;
   rm(p: string): Promise<void>;
   symlink(target: string, p: string): Promise<void>;
+  /** Cible d'un lien symbolique, null si ce n'est pas un lien (ou s'il est absent). */
+  readlink(p: string): Promise<string | null>;
   rename(a: string, b: string): Promise<void>;
   readdir(p: string): Promise<string[]>;
   chown(p: string, user: string, group: string): Promise<void>;
@@ -121,7 +123,7 @@ export type SiteOperations = {
   importDb(slug: string, file: string, gz: boolean): Promise<DbState>;
   exportDb(slug: string): Promise<{ file: string }>;
   resetDb(slug: string): Promise<DbState>;
-  dumpBefore(slug: string, n: number): Promise<{ slug: string; dumped: boolean; version?: number }>;
+  dumpBefore(slug: string, n: number): Promise<{ slug: string; dumped: boolean; kept?: boolean; version?: number }>;
   restoreDump(slug: string, n: number): Promise<DbState>;
   cronState(slug: string): Promise<{ slug: string; cron: CronSpec | null; line: string | null; maxSec: number | null; active: boolean; last: CronLast | null; output: string }>;
   logs(slug: string, kind: string, lines: number): Promise<{ slug: string; kind: string; text: string }>;

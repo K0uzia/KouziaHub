@@ -317,6 +317,22 @@ describe("base, .env et dumps sur le CT (système simulé)", () => {
     await expect(ops.restoreDump("mytakumi", 1)).rejects.toThrow(/Pas de dump/);
   });
 
+  it("reprise d'une publication déjà basculée : le dump d'avant la version est gardé, jamais refait (audit P1-b)", async () => {
+    const { m, ops } = await site();
+    await ops.createDb("mytakumi");
+    await ops.dumpBefore("mytakumi", 3);
+    const dumps = () => m.inputs.filter((i) => i.file === "/usr/bin/mariadb-dump").length;
+    expect(dumps()).toBe(1);
+    // Première tentative : bascule faite, réponse perdue. La reprise redemande le dump : la base a déjà pu migrer.
+    m.nodes.set("/srv/sites/mytakumi/current", { type: "link", target: "releases/3" });
+    expect(await ops.dumpBefore("mytakumi", 3)).toEqual({ slug: "mytakumi", dumped: false, kept: true, version: 3 });
+    expect(dumps()).toBe(1);
+    // Version pas encore servie (échec avant la bascule) : la base est toujours celle d'avant, dump refait.
+    m.nodes.set("/srv/sites/mytakumi/current", { type: "link", target: "releases/2" });
+    await ops.dumpBefore("mytakumi", 3);
+    expect(dumps()).toBe(2);
+  });
+
   it("import avec le compte du site (fichier retiré ensuite), export compressé ; sans base : refus clair", async () => {
     const { m, ops } = await site();
     m.nodes.set("/srv/sites/mytakumi/incoming/a.sql", { type: "file", text: "CREATE TABLE t (id INT);" });
