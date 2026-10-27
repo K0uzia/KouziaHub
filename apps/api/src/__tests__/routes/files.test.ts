@@ -247,6 +247,22 @@ describe("publication : délai dépassé après création du déploiement", () =
     expect(site.currentVersion?.number).toBe((await versions()).find((v) => v.note === "première tentative")!.number);
   });
 
+  it("nouvelle version publiée juste après l'échec : déploiement neuf, jamais celui de la tentative ratée (audit P1-d)", async () => {
+    const { project } = await failedPublish();
+    const stray = hub.cf.deployments(project).at(-1)!.id;
+    const deploys = () => hub.cf.calls.filter((c) => c.startsWith("deploy:")).length;
+    const deploysBefore = deploys();
+    await upload([{ filename: "index.html", content: "<h1>autre contenu</h1>" }]);
+    expect((await publish("version suivante")).statusCode).toBe(200);
+    await settle(hub);
+    const next = (await prisma.version.findMany({ where: { siteId, note: "version suivante" } }))[0]!;
+    expect(next.status).toBe("PUBLISHED");
+    expect(deploys()).toBe(deploysBefore + 1);
+    expect(next.cfDeploymentId).not.toBe(stray);
+    // Reste de la tentative ratée : supprimé une fois la nouvelle version servie.
+    expect(hub.cf.calls).toContain(`deleteDeployment:${stray}`);
+  });
+
   it("deux déploiements restés de la tentative : le plus récent est rattaché, l'autre supprimé", async () => {
     const { project, failed } = await failedPublish();
     const first = hub.cf.deployments(project).at(-1)!.id;

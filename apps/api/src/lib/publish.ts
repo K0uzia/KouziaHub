@@ -109,8 +109,18 @@ async function strayDeployments(services: Services, site: { id: string; pagesPro
     .sort((a, b) => Date.parse(b.createdOn) - Date.parse(a.createdOn));
 }
 
-/** Début de la fenêtre : création de la version, moins une marge pour un écart d'horloge avec Cloudflare. */
-const windowStart = (createdAt: Date) => new Date(createdAt.getTime() - 60_000);
+/**
+ * Début de la fenêtre : création de la version, moins une marge pour un écart d'horloge avec Cloudflare, et jamais
+ * avant la fin de la dernière opération terminée du site (l'opération en cours, reprise comprise, n'est pas terminée).
+ * Un déploiement resté d'une publication ratée juste avant appartient à celle-ci : il n'est jamais rattaché à la
+ * version suivante (audit du 27/10/2026). Au pire, un écart d'horloge fait créer un déploiement de plus, jamais
+ * servir le contenu d'une autre version.
+ */
+async function windowStart(siteId: string, createdAt: Date): Promise<Date> {
+  const last = await prisma.operation.findFirst({ where: { siteId, finishedAt: { not: null } }, orderBy: { finishedAt: "desc" }, select: { finishedAt: true } });
+  const fromVersion = createdAt.getTime() - 60_000;
+  return new Date(Math.max(fromVersion, last?.finishedAt?.getTime() ?? fromVersion));
+}
 
 async function deleteStrays(services: Services, project: string, ids: string[]): Promise<void> {
   for (const id of ids) await services.cloudflare.deleteDeployment(project, id).catch(() => undefined);
@@ -143,7 +153,7 @@ export async function deployVersion(services: Services, siteId: string, versionI
     return;
   }
   // Reprise : un déploiement de la fenêtre de cette version existe déjà chez Cloudflare.
-  const strays = await strayDeployments(services, { id: site.id, pagesProject: pagesProjectOf(site) }, windowStart(version.createdAt));
+  const strays = await strayDeployments(services, { id: site.id, pagesProject: pagesProjectOf(site) }, await windowStart(siteId, version.createdAt));
   if (strays.length > 0) {
     const [adopted, ...rest] = strays;
     await markPublished(siteId, versionId, adopted!);
@@ -195,8 +205,9 @@ export async function deployVersion(services: Services, siteId: string, versionI
       ...(config.redirectsFile !== undefined ? { redirectsFile: config.redirectsFile } : {}),
     });
     await markPublished(siteId, versionId, deployment);
-    // Appel rejoué après une coupure : d'autres déploiements de la fenêtre peuvent exister, supprimés.
-    const extra = await strayDeployments(services, { id: site.id, pagesProject: pagesProjectOf(site) }, windowStart(version.createdAt)).catch(() => []);
+    // Appel rejoué après une coupure, ou reste d'une tentative ratée juste avant : déploiements inconnus depuis la
+    // création de la version, supprimés (celui servi est désormais le nouveau).
+    const extra = await strayDeployments(services, { id: site.id, pagesProject: pagesProjectOf(site) }, new Date(version.createdAt.getTime() - 60_000)).catch(() => []);
     await deleteStrays(services, pagesProjectOf(site), extra.map((d) => d.id));
   } catch (err) {
     await prisma.version.update({
