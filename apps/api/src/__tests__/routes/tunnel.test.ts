@@ -4,7 +4,7 @@ import { buildApp } from "@/app.js";
 import { encrypt } from "@/lib/crypto.js";
 import { assertSecurityEnv } from "@/lib/env.js";
 import { base32Decode, generateTotpSecret, hotp, totpStep } from "@/lib/admin/totp.js";
-import { LOCK_STEPS_MS } from "@/lib/admin/two-factor.js";
+import { IpThrottle, LOCK_STEPS_MS } from "@/lib/admin/two-factor.js";
 import { createServices } from "@/lib/services.js";
 import type { PushService } from "@/lib/push/service.js";
 import { FakeCloudflare } from "@/lib/cloudflare/fake.js";
@@ -160,6 +160,40 @@ describe("par le tunnel, sans Cloudflare Access", () => {
       "compte verrouillé 15 min après 5 échecs (IP 198.51.100.1)",
       "compte verrouillé 1 h après 5 échecs (IP 198.51.100.2)",
     ]);
+  });
+
+  it("échecs d'un inconnu : les nouveaux appareils attendent, le propriétaire sur un appareil connu entre, alerte envoyée (audit P1-i)", async () => {
+    const { code } = await adminWithTwoFactor();
+    const owner = { "cf-connecting-ip": "198.51.100.44" };
+    const first = await fullLogin(code(), owner);
+    expect(first.statusCode).toBe(200);
+    const device = first.cookies.find((c) => c.name === "kz_hub_device")!;
+    expect(sent).toHaveLength(0);
+
+    // Quelqu'un qui connaît l'e-mail : 5 mauvais mots de passe. Mise en attente des appareils inconnus, alerte.
+    for (let i = 0; i < 5; i++) await login(tunnelHeaders({}, "198.51.100.1"), "faux");
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]!.title).toBe("Connexions au hub refusées");
+    expect(sent[0]!.body).toMatch(/5 échecs.*IP 198.51.100.1.*appareils connus ne sont pas concernés/);
+    // Bon mot de passe depuis un appareil inconnu : refusé pendant l'attente.
+    expect((await login(tunnelHeaders({}, "198.51.100.2"))).statusCode).toBe(401);
+    // Le propriétaire, sur son appareil connu : connexion normale.
+    await prisma.user.updateMany({ data: { totpLastStep: null } });
+    const ownerAgain = await fullLogin(code(), { ...owner, cookie: `kz_hub_device=${device.value}` });
+    expect(ownerAgain.statusCode).toBe(200);
+  });
+
+  it("attente par IP progressive : 15 min après 5 échecs, puis 1 h dans les 24 h ; une autre IP n'est pas touchée", () => {
+    let now = 0;
+    const ips = new IpThrottle(() => now);
+    for (let i = 0; i < 4; i++) expect(ips.fail("198.51.100.1")).toBeNull();
+    expect(ips.fail("198.51.100.1")).toBe(LOCK_STEPS_MS[0]);
+    expect(ips.blocked("198.51.100.1")).toBe(true);
+    expect(ips.blocked("198.51.100.2")).toBe(false);
+    now += LOCK_STEPS_MS[0] + 1;
+    expect(ips.blocked("198.51.100.1")).toBe(false);
+    for (let i = 0; i < 4; i++) ips.fail("198.51.100.1");
+    expect(ips.fail("198.51.100.1")).toBe(LOCK_STEPS_MS[1]);
   });
 
   it("notification à chaque connexion réussie depuis un nouvel appareil, pas depuis un appareil connu", async () => {

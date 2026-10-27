@@ -22,7 +22,10 @@ import {
   failLoginChallenge,
   reserveChallengeAttempt,
   findLoginChallenge,
+  formatLock,
+  IpThrottle,
   isLocked,
+  LOCK_AFTER_FAILURES,
   isTwoFactorEnabled,
   openLoginChallenge,
   regenerateRecoveryCodes,
@@ -32,7 +35,7 @@ import {
   strictLogin,
 } from "@/lib/admin/two-factor.js";
 import { audit } from "@/lib/audit.js";
-import { describeUserAgent, rememberDevice } from "@/lib/admin/devices.js";
+import { describeUserAgent, isKnownDevice, rememberDevice } from "@/lib/admin/devices.js";
 import { frDay, frTime } from "@/lib/monitor/report-text.js";
 import type { PushService } from "@/lib/push/service.js";
 
@@ -111,6 +114,28 @@ async function openSession(
 export const authRoutes =
   (push?: PushService): FastifyPluginAsync =>
   async (app) => {
+  const ips = new IpThrottle();
+  /**
+   * Échec d'une connexion stricte depuis un appareil inconnu : compté pour l'IP, puis pour le compte (userId connu).
+   * Mise en attente du compte : alerte à Alexandre, ses appareils connus continuent d'entrer.
+   */
+  const failed = async (request: FastifyRequest, userId: string | null, knownDevice: boolean) => {
+    if (!strictLogin(request) || knownDevice) return;
+    const ipWait = ips.fail(request.ip);
+    if (ipWait) await audit({ action: "auth.ip-wait", result: "error", detail: `IP ${request.ip} en attente ${formatLock(ipWait)} après ${LOCK_AFTER_FAILURES} échecs` });
+    const wait = userId ? await registerFailure(userId, request, knownDevice) : null;
+    if (wait && push) {
+      void push
+        .sendToAll({
+          title: "Connexions au hub refusées",
+          body: `${LOCK_AFTER_FAILURES} échecs, le dernier depuis l'IP ${request.ip}. Nouveaux appareils en attente ${formatLock(wait)} ; vos appareils connus ne sont pas concernés.`,
+          url: "/reglages/journal",
+          tag: `connexions-refusees:${Date.now()}`,
+        })
+        .catch((err) => request.log.error({ err }, "alerte de connexions refusées non envoyée"));
+    }
+  };
+
   app.post("/api/auth/login", { config: AUTH_RATE_LIMIT }, async (request, reply) => {
     const startedAt = Date.now();
     // Même message et même délai minimal pour tout refus : rien sur l'existence du compte ni son état.
@@ -122,16 +147,19 @@ export const authRoutes =
     const parsed = loginSchema.safeParse(request.body);
     if (!parsed.success) return refuse(400, "demande invalide");
 
+    const known = await isKnownDevice(request);
+    if (strictLogin(request) && !known && ips.blocked(request.ip)) return refuse(401, "IP en attente");
     const email = parsed.data.email.toLowerCase().trim();
     const user = await prisma.user.findUnique({ where: { email } });
     if (!user) {
       await verifyPassword(parsed.data.password, await getDummyHash());
+      await failed(request, null, known);
       return refuse(401, "identifiants refusés");
     }
-    if (isLocked(user, request)) return refuse(401, "compte verrouillé");
+    if (isLocked(user, request, known)) return refuse(401, "compte verrouillé");
 
     if (!(await verifyPassword(parsed.data.password, user.passwordHash))) {
-      await registerFailure(user.id, request);
+      await failed(request, user.id, known);
       return refuse(401, "identifiants refusés");
     }
 
@@ -153,7 +181,8 @@ export const authRoutes =
     const challenge = await findLoginChallenge(request);
     if (!challenge) return reply.code(401).send(CHALLENGE_EXPIRED);
     const { user } = challenge;
-    if (isLocked(user, request) || !isTwoFactorEnabled(user)) {
+    const known = await isKnownDevice(request);
+    if ((strictLogin(request) && !known && ips.blocked(request.ip)) || isLocked(user, request, known) || !isTwoFactorEnabled(user)) {
       await closeLoginChallenge(user.id, request, reply);
       return reply.code(401).send(CHALLENGE_EXPIRED);
     }
@@ -166,12 +195,13 @@ export const authRoutes =
         : await consumeRecoveryCode(user.id, parsed.data.recoveryCode);
     if (!ok) {
       await failLoginChallenge(challenge.id);
-      await registerFailure(user.id, request);
+      await failed(request, user.id, known);
       await audit({ action: "auth.2fa", result: "error", detail: `code refusé (${where(request)})` });
       return reply.code(401).send(BAD_CODE);
     }
 
     await closeLoginChallenge(user.id, request, reply);
+    ips.clear(request.ip);
     return openSession(user, request, reply, push);
   });
 

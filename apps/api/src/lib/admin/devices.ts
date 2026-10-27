@@ -54,6 +54,14 @@ export async function rememberDevice(request: FastifyRequest, reply: FastifyRepl
   return { isNew: !known && devices.length > 1 };
 }
 
+/** Appareil déjà connu (cookie d'une connexion réussie) : jamais mis en attente par les échecs d'un autre. */
+export async function isKnownDevice(request: FastifyRequest): Promise<boolean> {
+  const id = request.cookies[DEVICE_COOKIE];
+  if (!id || !/^[A-Za-z0-9_-]{32,64}$/.test(id)) return false;
+  const hash = sha256(id);
+  return (await readDevices()).some((d) => d.hash === hash);
+}
+
 /** Nom lisible de l'appareil d'après son navigateur (« Chrome sur Android »), pour le journal et l'alerte. */
 export function describeUserAgent(ua: string | undefined): string {
   if (!ua) return "Appareil inconnu";
