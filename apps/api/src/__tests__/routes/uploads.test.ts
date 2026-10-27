@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FilesResponse, UploadFileDecl, UploadResult, UploadSession } from "@/contract.js";
 import { UPLOAD_CHUNK_BYTES } from "@/lib/limits.js";
-import { resetDb } from "../helpers/db.js";
+import { prisma, resetDb } from "../helpers/db.js";
 import { buildTestHub, createPersoSite, makeZip, multipart, patchName, uploadFiles, type TestHub } from "../helpers/hub.js";
 
 let hub: TestHub;
@@ -152,6 +152,22 @@ describe("sessions d'envoi par morceaux", () => {
     expect((await workingPaths()).sort()).toEqual(["site/index.html", "site/media/a.bin", "site/media/b.bin"]);
     // La liste des sessions ouvertes ne la montre plus.
     expect((await hub.app.inject({ method: "GET", url: `/api/sites/${siteId}/uploads`, headers: hub.headers })).json()).toEqual([]);
+  });
+
+  it("« Remplacer tout » pendant une opération du site : refus clair, envoi gardé, finalisation possible ensuite (audit P1-c)", async () => {
+    const local: LocalFile[] = [{ path: "index.html", content: Buffer.from("<h1>nouveau</h1>") }];
+    const session = (await open({ kind: "files", mode: "replace", files: decl(local) })).json() as UploadSession;
+    for (const [n, c] of streamOf(session, local).entries()) expect((await put(session.id, n, c)).statusCode).toBe(200);
+    const op = await prisma.operation.create({ data: { siteId, siteSlug: "portfolio", kind: "PUBLISH", steps: "[]" } });
+    const busy = await complete(session.id);
+    expect(busy.statusCode).toBe(409);
+    expect(busy.json().code).toBe("operation_running");
+    // Rien de perdu : la session et ses morceaux sont toujours là.
+    expect(((await state(session.id)).json() as UploadSession).received).toEqual([0]);
+    await prisma.operation.update({ where: { id: op.id }, data: { status: "DONE", finishedAt: new Date() } });
+    const done = await complete(session.id);
+    expect(done.statusCode).toBe(200);
+    expect(await workingPaths()).toEqual(["index.html"]);
   });
 
   it("empreinte fausse : morceau refusé, rien d'enregistré", async () => {

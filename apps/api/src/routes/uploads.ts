@@ -84,21 +84,25 @@ export function uploadsRoutes(services: Services): FastifyPluginAsync {
       // Session occupée (la purge du cache ne la touche pas) et blobs protégés jusqu'à l'écriture de leurs lignes.
       return withUploadSessionBusy(uid, () => services.blobs.withPins(async () => {
         const site = await loadSite(id);
-        const { session, stored, zipPath, done } = await store.assemble(id, uid, services.blobs);
-        try {
-          const mode = session.mode ?? "merge";
-          // Écartés dès l'ouverture : comptés dans le résultat et dans la reconnaissance du projet (package.json...).
-          const run = () => (zipPath ? importZip(services, site, zipPath, mode) : importFiles(services, site, stored, session.rejected, mode));
-          // Remplacer : purge et écriture en une seule opération, sous le verrou du site (aucune publication entre les deux).
-          const result = mode === "replace" ? await services.engine.withLock(id, run) : await run();
-          await done();
-          // Écartés dès l'ouverture de la session (déjà dans le résultat d'un envoi de fichiers), puis ceux de la finalisation.
-          return zipPath ? { ...result, rejected: [...session.rejected, ...result.rejected] } : result;
-        } catch (err) {
-          // Contenu refusé (zip piégé, plafond du site) : renvoyer les mêmes octets ne changerait rien.
-          if (err instanceof HttpError && err.statusCode < 500) await done();
-          throw err;
-        }
+        const mode = (await store.get(id, uid)).mode ?? "merge";
+        const finish = async (): Promise<UploadResult> => {
+          const { session, stored, zipPath, done } = await store.assemble(id, uid, services.blobs);
+          try {
+            // Écartés dès l'ouverture : comptés dans le résultat et dans la reconnaissance du projet (package.json...).
+            const result = zipPath ? await importZip(services, site, zipPath, mode) : await importFiles(services, site, stored, session.rejected, mode);
+            await done();
+            // Écartés dès l'ouverture de la session (déjà dans le résultat d'un envoi de fichiers), puis ceux de la finalisation.
+            return zipPath ? { ...result, rejected: [...session.rejected, ...result.rejected] } : result;
+          } catch (err) {
+            // Contenu refusé (zip piégé, plafond du site) : renvoyer les mêmes octets ne changerait rien.
+            if (err instanceof HttpError && err.statusCode < 500) await done();
+            throw err;
+          }
+        };
+        // Remplacer : verrou du site pris AVANT d'assembler les morceaux. Une opération en cours refuse la finalisation
+        // sans rien consommer : l'envoi reste entier, à finaliser plus tard (audit du 27/10/2026). Purge et écriture se font
+        // ensuite en un bloc, aucune publication entre les deux.
+        return mode === "replace" ? services.engine.withLock(id, finish) : finish();
       }));
     });
 
