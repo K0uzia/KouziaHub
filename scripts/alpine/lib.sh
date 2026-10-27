@@ -886,8 +886,29 @@ dns_servers() {
   awk '$1 == "nameserver" { print $2 }' "${KH_RESOLV_CONF:-/etc/resolv.conf}" 2>/dev/null
 }
 
+# Préfixes IPv6 globaux du CT, élargis à /56 (les autres réseaux de la box) : en IPv6, la box, le Proxmox et l'ERP ont
+# une adresse publique, que la liste des plages privées ne couvre pas. Bloqués comme le réseau local en IPv4 (audit
+# du 27/10/2026). Lus dans /proc/net/if_inet6 (portée 00 : globale), forme longue acceptée par nft.
+lan_ipv6_prefixes() {
+  awk '
+    function hex(s,   i, n) { n = 0; for (i = 1; i <= length(s); i++) n = n * 16 + index("0123456789abcdef", substr(tolower(s), i, 1)) - 1; return n }
+    $4 == "00" && length($1) == 32 {
+      len = hex($3); if (len > 56) len = 56
+      nib = int(len / 4); net = substr($1, 1, nib)
+      while (length(net) < 32) net = net "0"
+      out = ""
+      for (i = 0; i < 8; i++) out = out (i ? ":" : "") substr(net, i * 4 + 1, 4)
+      print out "/" (nib * 4)
+    }
+  ' "${KH_IF_INET6:-/proc/net/if_inet6}" 2>/dev/null | sort -u
+}
+
 # Écrit la règle (table dédiée, recréée d'un bloc à chaque pose).
 write_nft_rules() {
+  _lan6=""
+  for _p in $(lan_ipv6_prefixes); do
+    _lan6="${_lan6:+${_lan6}, }${_p}"
+  done
   _v4=""
   _v6=""
   for _ns in $(dns_servers); do
@@ -922,6 +943,9 @@ write_nft_rules() {
     fi
     echo "    ip daddr { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4 } counter drop"
     echo "    ip6 daddr { ::/128, ::1/128, ::ffff:0:0/96, fc00::/7, fe80::/10, ff00::/8 } counter drop"
+    if [ -n "$_lan6" ]; then
+      echo "    ip6 daddr { ${_lan6} } counter drop"
+    fi
     echo "  }"
     echo "}"
   } > "$_tmp"

@@ -199,3 +199,31 @@ describe("scripts des CT Alpine : fonctions sûres sous set -e", () => {
     expect(run.stdout).toContain("== Sécurité ==");
   });
 });
+
+describe("pare-feu de Chromium (vignettes)", () => {
+  const shAvailable = spawnSync("sh", ["-c", "exit 0"]).status === 0;
+  it.runIf(shAvailable)("IPv6 filtré comme IPv4 : le préfixe global du réseau local est bloqué (audit P1-g)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "kouzia-nft-"));
+    writeFileSync(join(dir, "resolv.conf"), "nameserver 192.168.1.1\nnameserver 2a01:2e0:12:3456::1\n");
+    writeFileSync(join(dir, "range"), "32768\t60999\n");
+    // /proc/net/if_inet6 : adresse, interface, longueur du préfixe, portée (00 globale, 20 lien, 10 hôte), drapeaux, nom.
+    writeFileSync(
+      join(dir, "if_inet6"),
+      [
+        "2a0102e0001234560000000000000010 02 40 00 00     eth0",
+        "fe800000000000000000000000000010 02 40 20 80     eth0",
+        "00000000000000000000000000000001 01 80 10 80       lo",
+        "",
+      ].join("\n"),
+    );
+    const env = { ...process.env, KH_ETC_DIR: dir, KH_RESOLV_CONF: join(dir, "resolv.conf"), KH_PORT_RANGE_FILE: join(dir, "range"), KH_IF_INET6: join(dir, "if_inet6") };
+    const run = spawnSync("sh", ["-c", `. "${posix.join(ROOT.replace(/\\/g, "/"), "alpine/lib.sh")}"; chown() { :; }; write_nft_rules`], { encoding: "utf8", env });
+    expect(run.status, run.stderr).toBe(0);
+    const rules = readFileSync(join(dir, "nftables.nft"), "utf8");
+    // Plages privées et spéciales, comme avant ; et le préfixe du réseau local (élargi à /56 : les autres réseaux de la box).
+    expect(rules).toContain("ip6 daddr { ::/128, ::1/128, ::ffff:0:0/96, fc00::/7, fe80::/10, ff00::/8 } counter drop");
+    expect(rules).toContain("ip6 daddr { 2a01:02e0:0012:3400:0000:0000:0000:0000/56 } counter drop");
+    // Le résolveur DNS en IPv6 reste joignable (port 53), règle posée avant le blocage.
+    expect(rules.indexOf("2a01:2e0:12:3456::1 } udp dport 53 accept")).toBeLessThan(rules.indexOf("/56 } counter drop"));
+  });
+});
