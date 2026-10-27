@@ -144,8 +144,10 @@ const domainRemoveStep: StepDef = {
 const offlineStep: StepDef = {
   key: "offline",
   label: "Site hors ligne",
-  async run({ site }) {
+  async run({ services, site }) {
     await prisma.site.update({ where: { id: site.id }, data: { state: "OFFLINE", touchedAt: new Date() } });
+    // Version de travail éteinte : plus surveillée, son incident éventuel est clos maintenant.
+    await services.monitor.closeInactiveIncidents();
   },
 };
 

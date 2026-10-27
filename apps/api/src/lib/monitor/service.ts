@@ -186,6 +186,20 @@ export class MonitorService {
     return targets.filter((t) => !(t.siteRole === "working" && t.site && t.site.state !== "ONLINE"));
   }
 
+  /**
+   * Incidents ouverts des cibles sorties de la surveillance (interrupteur coupé, site éteint) : clos à cet instant,
+   * sans notification de retour. Sinon, au rallumage, toute la période compterait comme panne (audit du 27/10/2026).
+   */
+  async closeInactiveIncidents(): Promise<number> {
+    const active = new Set((await this.activeTargets()).map((t) => t.id));
+    const open = await prisma.monitorIncident.findMany({ where: { endedAt: null }, select: { id: true, targetId: true } });
+    const stale = open.filter((i) => !active.has(i.targetId)).map((i) => i.id);
+    if (stale.length === 0) return 0;
+    const now = new Date(this.now());
+    await prisma.monitorIncident.updateMany({ where: { id: { in: stale }, endedAt: null }, data: { endedAt: now, recoveredNotifiedAt: now } });
+    return stale.length;
+  }
+
   /** Configuration du Worker : cibles actives et abonnements. Sérialisée, jamais bloquante. */
   requestSync(): Promise<void> {
     this.syncChain = this.syncChain.then(async () => {
@@ -268,6 +282,7 @@ export class MonitorService {
   }
 
   async runHttpCycle(): Promise<void> {
+    await this.closeInactiveIncidents();
     const targets = await this.activeTargets();
     const observations: HttpObservation[] = [];
     await pool(targets, 8, async (t) => {

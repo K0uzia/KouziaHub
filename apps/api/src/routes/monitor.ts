@@ -218,6 +218,7 @@ export function monitorRoutes(services: Services): FastifyPluginAsync {
         siteSlug: target.site?.slug ?? null,
         detail: parsed.data.enabled === undefined ? target.hostname : `${target.hostname} : ${parsed.data.enabled ? "surveillée" : "non surveillée"}`,
       });
+      if (parsed.data.enabled === false) await monitor.closeInactiveIncidents();
       void monitor.requestSync();
       return entryOf(id);
     });

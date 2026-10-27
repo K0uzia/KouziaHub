@@ -141,6 +141,47 @@ describe("décision et incidents, hub seul (Worker non configuré)", () => {
   });
 });
 
+describe("incidents des cibles retirées de la surveillance (audit du 27/10/2026, P1-f)", () => {
+  it("cible désactivée ou site coupé : l'incident ouvert est clos à ce moment, sans notification de retour", async () => {
+    await createAdmin();
+    const m = service();
+    const a = await target("a.fr");
+    const site = await prisma.site.create({ data: { slug: "alpha", kind: "PERSO", label: "A", pagesProject: "kz-alpha", state: "ONLINE" } });
+    const w = await target("alpha.kouzia.com", { siteId: site.id, siteRole: "working", source: "site" });
+    status.set(a.url, 503);
+    status.set(w.url, 503);
+    await m.runHttpCycle();
+    t += 5 * MIN;
+    await m.runHttpCycle();
+    expect(await prisma.monitorIncident.count({ where: { endedAt: null } })).toBe(2);
+    const sent = push.sent.length;
+
+    t += 10 * MIN;
+    await prisma.monitorTarget.update({ where: { id: a.id }, data: { enabled: false } });
+    await prisma.site.update({ where: { id: site.id }, data: { state: "OFFLINE" } });
+    await m.closeInactiveIncidents();
+    const closed = await prisma.monitorIncident.findMany({ orderBy: { targetId: "asc" } });
+    expect(closed.every((i) => i.endedAt?.getTime() === t)).toBe(true);
+    expect(push.sent).toHaveLength(sent);
+
+    // Rallumage des semaines plus tard : aucune panne héritée, nouvel incident seulement si elle revient.
+    t += 30 * DAY;
+    await prisma.monitorTarget.update({ where: { id: a.id }, data: { enabled: true } });
+    status.delete(a.url);
+    await m.runHttpCycle();
+    expect(await prisma.monitorIncident.count({ where: { endedAt: null } })).toBe(0);
+  });
+
+  it("le passage de contrôle clôt aussi un incident resté ouvert sur une cible désactivée", async () => {
+    const m = service();
+    const a = await target("a.fr");
+    await prisma.monitorIncident.create({ data: { targetId: a.id, startedAt: new Date(t - DAY), observers: "hub" } });
+    await prisma.monitorTarget.update({ where: { id: a.id }, data: { enabled: false } });
+    await m.runHttpCycle();
+    expect((await prisma.monitorIncident.findFirstOrThrow()).endedAt?.getTime()).toBe(t);
+  });
+});
+
 describe("décision avec les observations du Worker", () => {
   it("Worker vivant : l'historique reprend les incidents notifiés par le Worker, aucune alerte urgente du hub", async () => {
     const veille = new FakeVeille();
