@@ -125,6 +125,18 @@ export function monitorRoutes(services: Services): FastifyPluginAsync {
           push: { configured: services.push.configured, devices: await prisma.pushSubscription.count() },
           zonesToken: services.zones.configured,
           speed: await monitor.speedStatus(),
+          blackouts: (
+            await prisma.monitorBlackout.findMany({
+              where: { OR: [{ endedAt: null }, { endedAt: { gte: new Date(monitor.now() - 30 * 86_400_000) } }] },
+              orderBy: { startedAt: "desc" },
+            })
+          ).map((b) => ({
+            startedAt: b.startedAt.toISOString(),
+            endedAt: b.endedAt?.toISOString() ?? null,
+            durationMs: b.endedAt ? b.endedAt.getTime() - b.startedAt.getTime() : null,
+            cause: b.cause,
+            targets: b.targets,
+          })),
         },
       };
     });

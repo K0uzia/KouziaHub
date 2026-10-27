@@ -5,6 +5,7 @@ const TABLES = [
   "MonitorCheck",
   "MonitorHourly",
   "MonitorIncident",
+  "MonitorBlackout",
   "MonitorAlert",
   "MonitorReport",
   "MonitorTarget",

@@ -416,6 +416,8 @@ Décisions d'Alexandre du 18/10/2026 (troisième série, transmises par le super
 | muet depuis 15 min | (seul) | Notification « hub ou box hors ligne » ; le Worker décide seul sur 2 échecs, en le précisant |
 | (seul) | muet depuis 15 min | Notification non urgente du hub « surveillance Cloudflare interrompue » ; le hub décide seul |
 
+- **Coupure de la surveillance** (décision d'Alexandre du 27/10/2026) : si toutes les cibles tombent au même passage du hub et que la sonde de connectivité échoue (TCP 443 sans DNS vers 1.1.1.1 et 8.8.8.8), c'est le hub qui n'a plus Internet. Aucun incident n'est ouvert ; la période (table `MonitorBlackout`) sort du rapport client et des statistiques de disponibilité, et n'apparaît que sur la page Surveillance (« Internet du hub »). Au retour, un avis non urgent donne la durée.
+
 - **Anti-rafale** : une notification à l'ouverture d'un incident, une au retour (avec la durée), un rappel à 24 h si l'incident dure. Plus de 3 cibles en panne dans le même cycle : une seule notification groupée. Les alertes d'échéance (certificat, domaine) ne partent qu'aux seuils de 30, 14 et 7 jours, une fois chacun.
 
 ### 10.2 Stockage partagé : D1 plutôt que KV

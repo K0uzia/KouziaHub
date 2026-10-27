@@ -574,8 +574,15 @@ export type MonitorOverview = {
     push: { configured: boolean; devices: number };
     zonesToken: boolean;
     speed: { available: boolean; reason: string | null };
+    /**
+     * Coupures de la surveillance (hub sans Internet, box coupée) des 30 derniers jours, la plus récente d'abord : aucune
+     * panne comptée pendant ce temps, hors des rapports clients. Vues d'Alexandre seul.
+     */
+    blackouts: MonitorBlackoutEntry[];
   };
 };
+
+export type MonitorBlackoutEntry = { startedAt: string; endedAt: string | null; durationMs: number | null; cause: string; targets: number };
 
 export type CreateMonitorTargetInput = {
   url: string;

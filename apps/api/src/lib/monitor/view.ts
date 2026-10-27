@@ -7,21 +7,43 @@ const DAY_MS = 86_400_000;
 
 type Interval = { startedAt: Date; endedAt: Date | null };
 
+/** Intervalles [s, e] dans [start, to], triés et fusionnés. */
+function merged(list: Interval[], start: number, to: number): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  const parts = list
+    .map((i): [number, number] => [Math.max(start, i.startedAt.getTime()), Math.min(to, i.endedAt?.getTime() ?? to)])
+    .filter(([s, e]) => e > s)
+    .sort((a, b) => a[0] - b[0]);
+  for (const [s, e] of parts) {
+    const last = out.at(-1);
+    if (last && s <= last[1]) last[1] = Math.max(last[1], e);
+    else out.push([s, e]);
+  }
+  return out;
+}
+
+const overlap = (a: [number, number], list: Array<[number, number]>) =>
+  list.reduce((sum, b) => sum + Math.max(0, Math.min(a[1], b[1]) - Math.max(a[0], b[0])), 0);
+
 /**
  * Disponibilité sur [from, to] au sens de la règle de décision : temps hors incident sur le temps
- * observé (depuis le premier contrôle de la cible). null sans contrôle dans la fenêtre.
+ * observé (depuis le premier contrôle de la cible). null sans contrôle dans la fenêtre. Les coupures de la
+ * surveillance (hub sans Internet) sortent du temps observé comme du temps en panne (décision du 27/10/2026).
  */
-export function availability(incidents: Interval[], from: number, to: number, firstCheckAt: number | null): number | null {
+export function availability(incidents: Interval[], from: number, to: number, firstCheckAt: number | null, blackouts: Interval[] = []): number | null {
   if (firstCheckAt === null) return null;
   const start = Math.max(from, firstCheckAt);
   if (start >= to) return null;
-  let down = 0;
-  for (const i of incidents) {
-    const s = Math.max(start, i.startedAt.getTime());
-    const e = Math.min(to, i.endedAt?.getTime() ?? to);
-    if (e > s) down += e - s;
-  }
-  return Math.round((1 - down / (to - start)) * 10_000) / 100;
+  const blind = merged(blackouts, start, to);
+  const observed = to - start - blind.reduce((sum, [s, e]) => sum + e - s, 0);
+  if (observed <= 0) return null;
+  const down = merged(incidents, start, to).reduce((sum, i) => sum + (i[1] - i[0]) - overlap(i, blind), 0);
+  return Math.round((1 - down / observed) * 10_000) / 100;
+}
+
+/** Coupures de la surveillance qui touchent [from, now]. */
+export function blackoutsSince(from: number): Promise<Interval[]> {
+  return prisma.monitorBlackout.findMany({ where: { OR: [{ endedAt: null }, { endedAt: { gt: new Date(from) } }] }, select: { startedAt: true, endedAt: true } });
 }
 
 const parse = <T>(c: MonitorCheck | undefined): T | null => {
@@ -65,7 +87,7 @@ export const incidentEntry = (i: MonitorIncident, label: string): MonitorInciden
 export async function buildEntries(monitor: MonitorService, targets: TargetWithSite[], clientNames: Map<string, string>): Promise<MonitorTargetEntry[]> {
   const now = monitor.now();
   const ids = targets.map((t) => t.id);
-  const [latest, recent, incidents, firsts] = await Promise.all([
+  const [latest, recent, incidents, firsts, blind] = await Promise.all([
     latestChecks(ids),
     monitor.recentChecks(ids, now),
     prisma.monitorIncident.findMany({
@@ -73,6 +95,7 @@ export async function buildEntries(monitor: MonitorService, targets: TargetWithS
       orderBy: { startedAt: "desc" },
     }),
     ids.length ? prisma.monitorCheck.groupBy({ by: ["targetId"], where: { targetId: { in: ids }, kind: "http" }, _min: { at: true } }) : Promise.resolve([]),
+    blackoutsSince(now - 30 * DAY_MS),
   ]);
   const first = new Map(firsts.map((f) => [f.targetId, f._min.at?.getTime() ?? null]));
 
@@ -102,8 +125,8 @@ export async function buildEntries(monitor: MonitorService, targets: TargetWithS
       basis: decision.basis,
       lastHub: observation(get("http", "hub")),
       lastEdge: observation(get("http", "edge")),
-      uptime24h: availability(own, now - DAY_MS, now, first.get(t.id) ?? null),
-      uptime30d: availability(own, now - 30 * DAY_MS, now, first.get(t.id) ?? null),
+      uptime24h: availability(own, now - DAY_MS, now, first.get(t.id) ?? null, blind),
+      uptime30d: availability(own, now - 30 * DAY_MS, now, first.get(t.id) ?? null, blind),
       certificate:
         tls && tls.validTo && tls.daysLeft !== null
           ? { validTo: tls.validTo, daysLeft: tls.daysLeft, issuer: tls.issuer, ok: tls.ok, error: tls.error }
@@ -139,11 +162,12 @@ export async function siteBadges(monitor: MonitorService, siteIds: string[]): Pr
   if (watched.length === 0) return out;
   const now = monitor.now();
   const ids = watched.map((t) => t.id);
-  const [recent, incidents, firsts, expiries] = await Promise.all([
+  const [recent, incidents, firsts, expiries, blind] = await Promise.all([
     monitor.recentChecks(ids, now),
     prisma.monitorIncident.findMany({ where: { targetId: { in: ids }, OR: [{ endedAt: null }, { endedAt: { gte: new Date(now - 30 * DAY_MS) } }] } }),
     prisma.monitorCheck.groupBy({ by: ["targetId"], where: { targetId: { in: ids }, kind: "http" }, _min: { at: true } }),
     latestChecks(ids),
+    blackoutsSince(now - 30 * DAY_MS),
   ]);
   const first = new Map(firsts.map((f) => [f.targetId, f._min.at?.getTime() ?? null]));
   const daysLeftOf = (targetId: string): number | null => {
@@ -156,7 +180,7 @@ export async function siteBadges(monitor: MonitorService, siteIds: string[]): Pr
     const siteId = t.siteId!;
     const own = incidents.filter((i) => i.targetId === t.id);
     const verdict = monitor.decideFor(recent.get(t.id), now).verdict;
-    const uptime = availability(own, now - 30 * DAY_MS, now, first.get(t.id) ?? null);
+    const uptime = availability(own, now - 30 * DAY_MS, now, first.get(t.id) ?? null, blind);
     const open = own.filter((i) => !i.endedAt).map((i) => i.startedAt.getTime());
     const prev = out.get(siteId);
     const oldestOpen = Math.min(...open, prev?.openIncidentSince ? Date.parse(prev.openIncidentSince) : Infinity);

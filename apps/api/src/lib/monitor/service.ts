@@ -20,12 +20,14 @@ import {
   type StateResponse,
 } from "@/lib/monitor/core.js";
 import {
+  CONNECTIVITY_PROBES,
   contentHash,
   defaultResolver,
   dnsDrift,
   dnsSnapshot,
   guardedFetch,
   httpCheck,
+  internetReachable,
   makeTlsConnector,
   RdapClient,
   systemLookup,
@@ -66,6 +68,8 @@ export type MonitorDeps = {
   chromiumPath?: string | null;
   speed?: (url: string) => Promise<SpeedResult>;
   now?: () => number;
+  /** Sonde de connectivité du hub (par défaut : internetReachable). */
+  connectivity?: () => Promise<boolean>;
   /** Dossier des données : rapports PDF des cibles supprimées purgés. */
   dataDir?: string;
 };
@@ -135,6 +139,7 @@ export class MonitorService {
   private readonly dataDir: string | null;
   private readonly chromiumPath: string | null | undefined;
   readonly now: () => number;
+  private readonly connectivity: () => Promise<boolean>;
 
   /** Points de contrôle et synchronisation, pour l'écran Surveillance. */
   readonly health = {
@@ -167,6 +172,7 @@ export class MonitorService {
     this.dataDir = deps.dataDir ?? null;
     this.chromiumPath = deps.chromiumPath;
     this.now = deps.now ?? Date.now;
+    this.connectivity = deps.connectivity ?? (() => internetReachable());
   }
 
   /** Mesure de vitesse disponible, ou la raison de sa désactivation. */
@@ -297,8 +303,40 @@ export class MonitorService {
       }
       await this.pullEdgeState();
     }
-    await this.evaluate(targets);
+    // Coupure de la surveillance (box coupée) : aucun incident décidé tant qu'elle dure.
+    if (!(await this.trackBlackout(observations))) await this.evaluate(targets);
     await this.aggregate(targets.map((t) => t.id), this.now());
+  }
+
+  /**
+   * Coupure de la surveillance (décision d'Alexandre du 27/10/2026) : toutes les cibles tombent au même passage et la sonde
+   * de connectivité échoue, c'est le hub qui n'a plus Internet. Une période MonitorBlackout s'ouvre, aucun incident n'est
+   * ouvert ; elle se ferme au premier passage où la sonde répond, avec un avis à Alexandre. Ces périodes sortent du rapport
+   * client et des statistiques de disponibilité (view.ts). Renvoie vrai tant qu'elle dure.
+   */
+  private async trackBlackout(observations: HttpObservation[]): Promise<boolean> {
+    const open = await prisma.monitorBlackout.findFirst({ where: { endedAt: null } });
+    const allFailed = observations.length > 0 && observations.every((o) => !o.ok);
+    if (!open && !allFailed) return false;
+    const online = await this.connectivity();
+    const now = this.now();
+    if (open) {
+      if (!online) return true;
+      await prisma.monitorBlackout.update({ where: { id: open.id }, data: { endedAt: new Date(now), notifiedAt: new Date(now) } });
+      await this.notify({
+        title: "Surveillance reprise",
+        body: `Internet du hub coupé ${formatDuration(now - open.startedAt.getTime())} (depuis le ${frDateNumeric(open.startedAt)}) : aucune panne comptée pendant ce temps, période exclue des rapports clients.`,
+        url: "/surveillance",
+        urgent: false,
+        tag: `coupure:${open.id}`,
+      });
+      return false;
+    }
+    if (online) return false;
+    await prisma.monitorBlackout.create({
+      data: { startedAt: new Date(now), cause: `hub sans Internet : ${CONNECTIVITY_PROBES.join(" et ")} injoignables`, targets: observations.length },
+    });
+    return true;
   }
 
   /**
@@ -781,6 +819,7 @@ export class MonitorService {
     await prisma.monitorCheck.deleteMany({ where: { kind: { not: "http" }, at: { lt: long } } });
     await prisma.monitorHourly.deleteMany({ where: { hour: { lt: long } } });
     await prisma.monitorIncident.deleteMany({ where: { endedAt: { lt: long } } });
+    await prisma.monitorBlackout.deleteMany({ where: { endedAt: { lt: long } } });
     await prisma.monitorAlert.deleteMany({ where: { sentAt: { lt: long } } });
     await this.purgeOrphanReports();
   }

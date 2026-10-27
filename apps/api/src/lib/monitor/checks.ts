@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import dns, { Resolver } from "node:dns/promises";
 import http from "node:http";
 import https from "node:https";
-import { isIP } from "node:net";
+import net, { isIP } from "node:net";
 import { Readable } from "node:stream";
 import tls, { type PeerCertificate } from "node:tls";
 
@@ -456,3 +456,22 @@ export function normalizeHtml(html: string): string {
 }
 
 export const contentHash = (html: string) => createHash("sha256").update(normalizeHtml(html)).digest("hex");
+
+/** Résolveurs publics joints sans DNS : si aucun ne répond, c'est le hub qui n'a plus Internet, pas les sites. */
+export const CONNECTIVITY_PROBES = ["1.1.1.1", "8.8.8.8"] as const;
+
+/** Sonde de connectivité du hub : connexion TCP 443 à l'un des résolveurs publics en 5 s au plus. */
+export async function internetReachable(timeoutMs = 5_000): Promise<boolean> {
+  const one = (host: string) =>
+    new Promise<boolean>((resolve) => {
+      const socket = net.connect({ host, port: 443 });
+      const done = (ok: boolean) => {
+        socket.destroy();
+        resolve(ok);
+      };
+      socket.setTimeout(timeoutMs, () => done(false));
+      socket.once("connect", () => done(true));
+      socket.once("error", () => done(false));
+    });
+  return (await Promise.all(CONNECTIVITY_PROBES.map(one))).some(Boolean);
+}

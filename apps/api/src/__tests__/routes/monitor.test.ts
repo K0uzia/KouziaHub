@@ -38,7 +38,7 @@ beforeEach(async () => {
   pushCalls.length = 0;
   t = Date.now();
   hub = await buildTestHub({
-    monitor: { fetch: siteFetch, now: () => t, tls: async (host) => peer(host, 12) },
+    monitor: { fetch: siteFetch, now: () => t, tls: async (host) => peer(host, 12), connectivity: async () => true },
     push: new PushService({ fetch: pushFetch, vapid: { ...generateVapidKeys(), subject: "mailto:test@exemple.fr" } }),
     zones: new FakeZonesDirectory(["client-exemple.fr", "autre.fr"]),
   });
@@ -157,7 +157,12 @@ describe("écran Surveillance, détail, rapport", () => {
     t += 60_000;
     const overview = await get<MonitorOverview>("/api/monitor");
     expect(overview.stats).toMatchObject({ watched: 1, up: 1, down: 0, openIncidents: 0 });
-    expect(overview.health).toMatchObject({ edge: { configured: false }, hubChecksRunning: false, push: { configured: true, devices: 0 }, zonesToken: true });
+    expect(overview.health).toMatchObject({ edge: { configured: false }, hubChecksRunning: false, push: { configured: true, devices: 0 }, zonesToken: true, blackouts: [] });
+    // Coupure de la surveillance (hub sans Internet) : listée pour Alexandre, jamais comptée en panne.
+    await prisma.monitorBlackout.create({ data: { startedAt: new Date(t - 50 * 60_000), endedAt: new Date(t - 20 * 60_000), cause: "hub sans Internet", targets: 1 } });
+    expect((await get<MonitorOverview>("/api/monitor")).health.blackouts).toEqual([
+      { startedAt: new Date(t - 50 * 60_000).toISOString(), endedAt: new Date(t - 20 * 60_000).toISOString(), durationMs: 30 * 60_000, cause: "hub sans Internet", targets: 1 },
+    ]);
     const detail = await get<MonitorTargetDetail>(`/api/monitor/targets/${created.id}?days=7`);
     expect(detail.history).toEqual([expect.objectContaining({ observer: "hub", checks: 1, failures: 0 })]);
     expect(detail.uptime24h).toBe(100);

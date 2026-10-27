@@ -414,6 +414,24 @@ model MonitorIncident {
 }
 
 /** Notification non urgente déjà envoyée (déduplication : seuils, écart DNS, contenu). */
+/// Coupure de la surveillance (décision d'Alexandre du 27/10/2026) : toutes les cibles tombent au même passage et le hub
+/// n'a plus Internet (sonde de connectivité). Aucun incident ouvert ; période exclue du rapport client et des
+/// statistiques de disponibilité, visible seulement d'Alexandre.
+model MonitorBlackout {
+  id         String    @id @default(cuid())
+  startedAt  DateTime
+  /// Nul tant que la coupure dure.
+  endedAt    DateTime?
+  /// Texte court, sans secret (« hub sans Internet : 1.1.1.1 et 8.8.8.8 injoignables »).
+  cause      String
+  /// Cibles actives tombées au passage qui a ouvert la coupure.
+  targets    Int
+  notifiedAt DateTime?
+
+  @@index([endedAt])
+  @@index([startedAt])
+}
+
 model MonitorAlert {
   id       String   @id @default(cuid())
   targetId String?

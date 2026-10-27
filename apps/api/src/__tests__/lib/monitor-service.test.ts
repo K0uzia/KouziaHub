@@ -8,6 +8,7 @@ import { verifyRequest, type EdgeObservation, type HttpObservation, type StateRe
 import type { DnsResolver, PeerInfo } from "@/lib/monitor/checks.js";
 import { RdapClient } from "@/lib/monitor/checks.js";
 import { MonitorService } from "@/lib/monitor/service.js";
+import { availability } from "@/lib/monitor/view.js";
 import { HttpVeilleClient, NoVeilleClient, type VeilleClient } from "@/lib/monitor/worker-client.js";
 import { PushService, type PushPayload } from "@/lib/push/service.js";
 import { generateVapidKeys } from "@/lib/push/vapid.js";
@@ -71,6 +72,7 @@ function service(veille: VeilleClient = new NoVeilleClient(), extra: Partial<Con
     fetch: fetchFor,
     now: () => t,
     speed: async () => ({ available: false, reason: "test" }),
+    connectivity: async () => true,
     ...extra,
   });
 }
@@ -179,6 +181,58 @@ describe("incidents des cibles retirées de la surveillance (audit du 27/10/2026
     await prisma.monitorTarget.update({ where: { id: a.id }, data: { enabled: false } });
     await m.runHttpCycle();
     expect((await prisma.monitorIncident.findFirstOrThrow()).endedAt?.getTime()).toBe(t);
+  });
+});
+
+describe("coupure de la surveillance : box coupée (audit du 27/10/2026, P1-e, décision d'Alexandre)", () => {
+  it("toutes les cibles tombent et le hub n'a plus Internet : aucun incident, une coupure ouverte, close au retour avec un avis", async () => {
+    let online = false;
+    const m = service(new NoVeilleClient(), { connectivity: async () => online });
+    const a = await target("a.fr");
+    const b = await target("b.fr");
+    const started = t;
+    for (let i = 0; i < 6; i++) {
+      status.set(a.url, 0);
+      status.set(b.url, 0);
+      await m.runHttpCycle();
+      t += 5 * MIN;
+    }
+    expect(await prisma.monitorIncident.count()).toBe(0);
+    expect(push.sent).toEqual([]);
+    const open = await prisma.monitorBlackout.findFirstOrThrow();
+    expect(open).toMatchObject({ endedAt: null, targets: 2 });
+    expect(open.startedAt.getTime()).toBe(started);
+
+    online = true;
+    status.clear();
+    await m.runHttpCycle();
+    const closed = await prisma.monitorBlackout.findFirstOrThrow();
+    expect(closed.endedAt?.getTime()).toBe(t);
+    expect(push.sent).toHaveLength(1);
+    expect(push.sent[0]).toMatchObject({ title: "Surveillance reprise", urgent: false });
+    expect(push.sent[0]!.body).toMatch(/Internet du hub coupé 30 min/);
+    expect(await prisma.monitorIncident.count()).toBe(0);
+  });
+
+  it("toutes les cibles tombent mais le hub a Internet : vraie panne, incidents ouverts, aucune coupure", async () => {
+    const m = service(new NoVeilleClient(), { connectivity: async () => true });
+    for (const h of ["a.fr", "b.fr"]) status.set((await target(h)).url, 503);
+    await m.runHttpCycle();
+    t += 5 * MIN;
+    await m.runHttpCycle();
+    expect(await prisma.monitorIncident.count()).toBe(2);
+    expect(await prisma.monitorBlackout.count()).toBe(0);
+  });
+
+  it("disponibilité : la coupure sort du temps mesuré et du temps en panne", () => {
+    const H = 3_600_000;
+    const at = (h: number) => new Date(h * H);
+    // 10 h observées ; coupure de 2 h (de 4 h à 6 h) ; panne de 1 h (de 5 h 30 à 6 h 30), dont 30 min dans la coupure.
+    const value = availability([{ startedAt: at(5.5), endedAt: at(6.5) }], 0, 10 * H, 0, [{ startedAt: at(4), endedAt: at(6) }]);
+    expect(value).toBe(93.75);
+    // Coupure en cours (sans fin) jusqu'au bout de la fenêtre.
+    expect(availability([], 0, 10 * H, 0, [{ startedAt: at(8), endedAt: null }])).toBe(100);
+    expect(availability([{ startedAt: at(9), endedAt: null }], 0, 10 * H, 0, [{ startedAt: at(8), endedAt: null }])).toBe(100);
   });
 });
 

@@ -12,7 +12,7 @@ import {
   faPlus,
   faTriangleExclamation,
 } from "@fortawesome/free-solid-svg-icons";
-import type { CloudflareZoneSuggestion, MonitorIncidentEntry, MonitorOverview, MonitorTargetEntry, Page } from "@hub/contract";
+import type { CloudflareZoneSuggestion, MonitorBlackoutEntry, MonitorIncidentEntry, MonitorOverview, MonitorTargetEntry, Page } from "@hub/contract";
 import { api, errorMessage } from "@/lib/api";
 import { formatAgo, formatDateTime, plural } from "@/lib/format";
 import { byGravity, EXPIRY_WARN_DAYS, formatDuration, formatSince, formatUptime, soonestExpiry, VERDICT } from "@/lib/monitor";
@@ -44,6 +44,24 @@ function HealthRow({ label, icon, ink, tip, children }: { label: string; icon: I
       </dt>
       <dd className="pl-5.5 text-sm text-[var(--muted)]">{children}</dd>
     </div>
+  );
+}
+
+/**
+ * Coupures de la surveillance (hub sans Internet) des 30 derniers jours : visibles ici seulement, jamais dans le rapport
+ * client ni dans la disponibilité (décision du 27/10/2026).
+ */
+function BlackoutRow({ blackouts }: { blackouts: MonitorBlackoutEntry[] }) {
+  const open = blackouts.find((b) => b.endedAt === null);
+  const last = blackouts.find((b) => b.endedAt !== null);
+  return (
+    <HealthRow label="Internet du hub" {...(open ? WARN : blackouts.length ? INFO : OK)}>
+      {open
+        ? `Coupé depuis ${formatAgo(open.startedAt)} : aucune panne n'est comptée, la période sort des rapports clients.`
+        : last
+          ? `${plural(blackouts.length, "coupure", "coupures")} sur 30 jours, la dernière le ${formatDateTime(last.startedAt)} pendant ${formatDuration(last.durationMs ?? 0)}. Exclues des rapports clients.`
+          : "Aucune coupure sur 30 jours."}
+    </HealthRow>
   );
 }
 
@@ -141,6 +159,7 @@ export function MonitorPage() {
                 <HealthRow label="Le hub" tip="hub" {...(o.health.hubChecksRunning ? OK : WARN)}>
                   {o.health.hubChecksRunning ? "Contrôles en cours toutes les 5 minutes." : "Contrôles arrêtés : redémarrez le hub."}
                 </HealthRow>
+                <BlackoutRow blackouts={o.health.blackouts} />
                 <HealthRow label="Cloudflare (Worker de veille)" tip="worker" {...(!o.health.edge.configured ? INFO : o.health.edge.error ? WARN : OK)}>
                   {!o.health.edge.configured
                     ? "Non configuré : seules les observations du hub comptent, et aucune alerte ne part si la box est coupée."

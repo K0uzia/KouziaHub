@@ -7,7 +7,7 @@ import type { ReportSettings } from "@/contract.js";
 import type { ErpDirectory } from "@/lib/erp/types.js";
 import { prisma } from "@/lib/prisma.js";
 import { HTTP_INTERVAL_MS } from "@/lib/monitor/service.js";
-import { availability } from "@/lib/monitor/view.js";
+import { availability, blackoutsSince } from "@/lib/monitor/view.js";
 import { getReportSettings } from "@/lib/report-settings.js";
 import { frNumber, parisMidnight } from "@/lib/fr-format.js";
 import {
@@ -144,7 +144,7 @@ export async function buildReportView(target: MonitorTarget, month: string, now 
   const monthIndex = Number(month.slice(5, 7)) - 1;
   const prevStart = parisMidnight(year, monthIndex - 1);
 
-  const [incidents, firstHttp, hourly, tls, tlsCount, domain, domainCount, speed, prevSpeed, speedCount, dnsChecks, alerts] = await Promise.all([
+  const [incidents, firstHttp, hourly, tls, tlsCount, domain, domainCount, speed, prevSpeed, speedCount, dnsChecks, alerts, blind] = await Promise.all([
     prisma.monitorIncident.findMany({
       where: { targetId: target.id, startedAt: { lt: end }, OR: [{ endedAt: null }, { endedAt: { gt: start } }] },
       orderBy: { startedAt: "asc" },
@@ -160,11 +160,13 @@ export async function buildReportView(target: MonitorTarget, month: string, now 
     prisma.monitorCheck.count({ where: { targetId: target.id, kind: "speed", at: inMonth } }),
     prisma.monitorCheck.findMany({ where: { targetId: target.id, kind: "dns", at: inMonth }, select: { detail: true, at: true } }),
     prisma.monitorAlert.count({ where: { targetId: target.id, sentAt: inMonth } }),
+    // Coupures de la surveillance (hub sans Internet) : hors du rapport client (décision du 27/10/2026).
+    blackoutsSince(start.getTime()),
   ]);
 
   // Disponibilité au sens de la règle de décision, depuis le premier signe de surveillance.
   const firstSeen = Math.min(firstHttp?.at.getTime() ?? Infinity, ...hourly.map((h) => h.hour.getTime()));
-  const uptimeValue = availability(incidents, start.getTime(), to, Number.isFinite(firstSeen) ? firstSeen : null);
+  const uptimeValue = availability(incidents, start.getTime(), to, Number.isFinite(firstSeen) ? firstSeen : null, blind);
   const open = incidents.find((i) => !i.endedAt) ?? null;
 
   // Frise : un jour par barre (heures de Paris), coupure, journée surveillée sans coupure, ou sans donnée.
