@@ -43,7 +43,7 @@ Elles remplacent les points correspondants ci-dessus et du cadrage (`docs/cadrag
 ## Décisions d'Alexandre (19/10/2026, quatrième série : sans Cloudflare Access, verrouillées)
 
 - Ni Cloudflare Access ni Zero Trust devant le hub. Le hub fonctionne comme l'ERP : tunnel Cloudflare à jeton, protection par le login du hub seul, mot de passe et code TOTP obligatoires. Access reste possible en option.
-- Par le tunnel, seul `hub.kouzia.com` est servi (404 ailleurs) ; limite de débit stricte, verrouillage progressif, journal des connexions, notification à chaque nouvel appareil.
+- Par le tunnel, seul `hub.kouzia.com` est servi (404 ailleurs) ; limite de débit stricte, attente progressive par IP puis par compte (appareils inconnus seulement, un appareil connu entre toujours, alerte à chaque mise en attente du compte), journal des connexions, notification à chaque nouvel appareil.
 - Elles remplacent le point « Accès à l'outil » de la première série et le cadrage 1.6.
 
 ## Décisions d'Alexandre (22/10/2026, cinquième série : indexation et logiciels, verrouillées)
