@@ -116,7 +116,8 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
 
   // Réponses de l'API jamais mises en cache (sauf en-tête posé par la route) ; rien d'indexable.
   app.addHook("onSend", async (request, reply, payload) => {
-    if (request.url.startsWith("/api/") && !reply.hasHeader("cache-control")) reply.header("Cache-Control", "no-store");
+    const route = request.routeOptions.url ?? request.url;
+    if (route.startsWith("/api/") && !reply.hasHeader("cache-control")) reply.header("Cache-Control", "no-store");
     reply.header("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()");
     reply.header("X-Robots-Tag", "noindex, nofollow");
     return payload;

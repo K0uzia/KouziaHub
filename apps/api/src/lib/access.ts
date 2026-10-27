@@ -99,8 +99,8 @@ const OPEN_ROUTES = new Set(["/api/health"]);
 export function registerAccessGuard(app: FastifyInstance, verifier: AccessVerifier | null): void {
   if (!verifier) return;
   app.addHook("onRequest", async (request, reply) => {
-    const pathname = request.url.split("?")[0] ?? "";
-    if (OPEN_ROUTES.has(pathname)) return;
+    // Route reconnue (chemin encodé ou non), jamais l'adresse brute.
+    if (request.routeOptions.url && OPEN_ROUTES.has(request.routeOptions.url)) return;
     const header = request.headers["cf-access-jwt-assertion"];
     const token = Array.isArray(header) ? header[0] : header;
     if (await verifier.verify(token)) return;

@@ -16,7 +16,8 @@ const queryValues = z.record(z.string(), z.string().max(2000).regex(/^[^\u0000-\
 
 export function registerInputGuards(app: FastifyInstance): void {
   app.addHook("preValidation", async (request, reply) => {
-    if (!request.url.startsWith("/api/")) return;
+    // Route reconnue, jamais l'adresse brute : /%61pi/... atteint la même route que /api/... (audit du 27/10/2026).
+    if (!request.routeOptions.url?.startsWith("/api/")) return;
     if (request.params && Object.keys(request.params).length > 0 && !routeParams.safeParse(request.params).success) {
       // Même réponse qu'une route ou une ressource inconnue : rien sur ce qui existe.
       return reply.code(404).send({ error: "Not found" });
