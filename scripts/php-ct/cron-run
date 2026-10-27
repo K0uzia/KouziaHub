@@ -36,6 +36,7 @@ fi
 
 timeout "$max" "/usr/bin/php${php}" \
   -d "open_basedir=${home}/" \
+  -d "disable_functions=exec,passthru,shell_exec,system,proc_open,popen,pcntl_exec,dl" \
   -d "max_execution_time=0" \
   -d "sys_temp_dir=${home}/tmp" \
   -d "upload_tmp_dir=${home}/tmp" \

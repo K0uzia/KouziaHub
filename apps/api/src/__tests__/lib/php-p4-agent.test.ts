@@ -1,5 +1,8 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  DISABLED_FUNCTIONS,
   checkCron,
   checkEnvVars,
   cronLine,
@@ -413,6 +416,8 @@ describe("script du projet", () => {
     expect(call.io).toMatchObject({ uid: 20001, gid: 20005, cwd: "/srv/sites/mytakumi/current", timeoutMs: 120_000 });
     expect(call.args).toContain("open_basedir=/srv/sites/mytakumi/");
     expect(call.args).toContain("memory_limit=1024M");
+    // Fonctions coupées comme pour les pages, même si la configuration commune n'était pas lue (revue de l'agent).
+    expect(call.args).toContain("disable_functions=exec,passthru,shell_exec,system,proc_open,popen,pcntl_exec,dl");
     expect(call.args.at(-1)).toBe("scripts/migrate.php");
     // create-admin.php : arguments, mot de passe sur l'entrée standard (jamais en argument), masqué dans la sortie.
     c.m.nodes.set("/srv/sites/mytakumi/current/scripts/create-admin.php", { type: "file", text: "<?php" });
@@ -545,5 +550,14 @@ describe("page du site pour la vignette (lot P5)", () => {
     await expect(ops.page("inconnu", "/")).rejects.toThrow(/Site inconnu/);
     const without = siteOperations({ ...ctx, paths, limitsEffective: () => true, httpStatus: async () => 403, sys: m.sys });
     await expect(without.page("mytakumi", "/")).rejects.toMatchObject({ status: 503 });
+  });
+});
+
+describe("PHP en ligne de commande d'un site : mêmes fonctions coupées que les pages (revue de l'agent)", () => {
+  it("install.sh (PHP-FPM et CLI), cron-run et le script lancé depuis le hub coupent la même liste", () => {
+    const root = join(import.meta.dirname, "../../../../../scripts/php-ct");
+    const list = DISABLED_FUNCTIONS;
+    expect(readFileSync(join(root, "install.sh"), "utf8")).toContain(`disable_functions = ${list}`);
+    expect(readFileSync(join(root, "cron-run"), "utf8")).toContain(`-d "disable_functions=${list}"`);
   });
 });

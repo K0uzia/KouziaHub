@@ -33,6 +33,8 @@ export const MARIADB_SOCKET = "/run/mysqld/mysqld.sock";
 export const COPY_MISSING = "require('fs').cpSync(process.argv[1], process.argv[2], { recursive: true, force: false, errorOnExist: false })";
 /** Sonde du contrôle anti-fuite, écrite par le compte du site (création exclusive : jamais à travers un lien posé avant). */
 export const WRITE_PROBE = `require('fs').writeFileSync(process.argv[1], "<?php echo 'EXECUTE';\\n", { flag: 'wx', mode: 0o644 })`;
+/** Fonctions coupées pour tout PHP d'un site (pages, tâche planifiée, script lancé depuis le hub) : même liste qu'install.sh. */
+export const DISABLED_FUNCTIONS = "exec,passthru,shell_exec,system,proc_open,popen,pcntl_exec,dl";
 export const DUMPS_KEPT = 5;
 /** Page lue pour la vignette : chemin absolu et sa requête, sans espace ni caractère de contrôle. */
 export const PAGE_PATH_RE = /^\/[\x21-\x7e]{0,2047}$/;
@@ -906,6 +908,9 @@ export function siteOperations(ctx) {
         [
           "-d",
           `open_basedir=${home}/`,
+          // Comme les pages (install.sh), même si la configuration commune n'était pas lue.
+          "-d",
+          `disable_functions=${DISABLED_FUNCTIONS}`,
           "-d",
           `memory_limit=${spec.memoryLimitMb ?? 256}M`,
           "-d",

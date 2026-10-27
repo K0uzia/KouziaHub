@@ -6,6 +6,8 @@ export const RELEASES_KEPT: number;
 export const SLUG_RE: RegExp;
 export const MARIADB_SOCKET: string;
 export const DUMPS_KEPT: number;
+/** Fonctions coupées pour tout PHP d'un site (même liste qu'install.sh). */
+export const DISABLED_FUNCTIONS: string;
 export const PAGE_PATH_RE: RegExp;
 export const PAGE_MAX_BYTES: number;
 export const DB_VARS: string[];
