@@ -83,7 +83,11 @@ describe("réglages P4 : dossiers persistants publics, mémoire, taille d'envoi"
       expect(nested.find((r) => r.re.test(p))?.action, p).toBe("return 403;");
     }
     expect(nested.find((r) => r.re.test("/assets/img/oeuvres/vase-960.webp"))).toBeUndefined();
-    expect(block![2]).toContain("try_files $uri =404;");
+    // Servi directement depuis shared/, sans suivre aucun lien : nginx est dans le groupe de chaque site, un lien posé
+    // par un site vers le .env d'un autre ne doit jamais être servi (audit du 27/10/2026).
+    expect(block![2]).toContain("alias /srv/sites/mytakumi/shared/public/assets/img/oeuvres/;");
+    expect(block![2]).toContain("disable_symlinks on from=/srv/sites/mytakumi/shared/public/assets/img/oeuvres;");
+    expect(block![2]).not.toContain("/current/");
   });
 
   it("PHP-FPM : limites en php_admin_value (le .user.ini du projet n'y peut rien), socket MariaDB par défaut", () => {
@@ -307,7 +311,7 @@ describe("base, .env et dumps sur le CT (système simulé)", () => {
     expect(m.inputs[1]!.input).toContain("CREATE DATABASE IF NOT EXISTS `s_mytakumi`");
     const imported = m.inputs.findIndex((i) => i.io.inputFile);
     expect(imported).toBeGreaterThan(1);
-    expect(m.inputs[imported]).toMatchObject({ args: ["--defaults-extra-file=/etc/kouziaphp/sites/mytakumi.db.cnf", "s_mytakumi"], io: { inputFile: "/srv/sites/mytakumi/dumps/6.sql.gz", gunzip: true } });
+    expect(m.inputs[imported]).toMatchObject({ args: ["--defaults-extra-file=/etc/kouziaphp/sites/mytakumi.db.cnf", "--sandbox", "s_mytakumi"], io: { inputFile: "/srv/sites/mytakumi/dumps/6.sql.gz", gunzip: true } });
     await expect(ops.restoreDump("mytakumi", 1)).rejects.toThrow(/Pas de dump/);
   });
 
@@ -318,7 +322,7 @@ describe("base, .env et dumps sur le CT (système simulé)", () => {
     await ops.createDb("mytakumi");
     m.inputs.length = 0;
     await ops.importDb("mytakumi", "/srv/sites/mytakumi/incoming/a.sql", false);
-    expect(m.inputs[0]).toMatchObject({ file: "/usr/bin/mariadb", args: ["--defaults-extra-file=/etc/kouziaphp/sites/mytakumi.db.cnf", "s_mytakumi"], input: "CREATE TABLE t (id INT);" });
+    expect(m.inputs[0]).toMatchObject({ file: "/usr/bin/mariadb", args: ["--defaults-extra-file=/etc/kouziaphp/sites/mytakumi.db.cnf", "--sandbox", "s_mytakumi"], input: "CREATE TABLE t (id INT);" });
     expect(m.nodes.has("/srv/sites/mytakumi/incoming/a.sql")).toBe(false);
     const { file } = await ops.exportDb("mytakumi");
     expect(file).toMatch(/^\/srv\/sites\/mytakumi\/incoming\/export-[0-9a-f]{16}\.sql\.gz$/);

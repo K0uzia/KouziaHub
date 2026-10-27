@@ -233,11 +233,13 @@ export function nginxConf(spec, paths) {
     ? ""
     : '    location = /robots.txt {\n        add_header X-Robots-Tag "noindex, nofollow" always;\n        default_type text/plain;\n        return 200 "User-agent: *\\nDisallow: /\\n";\n    }\n';
   // « ^~ » : préfixe prioritaire sur toute location regex, donc jamais la règle PHP. Fichiers statiques seulement.
+  // Servi DIRECTEMENT depuis shared/ (alias), et aucun lien symbolique suivi : nginx est dans le groupe de chaque
+  // site, un lien posé par un site vers le .env d'un autre ne doit jamais être servi (audit du 27/10/2026).
   const uploads = (spec.publicPersistentDirs ?? [])
-    .map(
-      (d) =>
-        `    location ^~ ${servedPath(spec, d)}/ {\n        location ~ /\\. { return 403; }\n        location ~* \\.(php\\d?|phtml|phar|pht|phps|cgi|pl|py|sh)$ { return 403; }\n        try_files $uri =404;\n    }\n`,
-    )
+    .map((d) => {
+      const dir = path.posix.join(paths.sitesDir, spec.slug, "shared", d);
+      return `    location ^~ ${servedPath(spec, d)}/ {\n        alias ${dir}/;\n        disable_symlinks on from=${dir};\n        location ~ /\\. { return 403; }\n        location ~* \\.(php\\d?|phtml|phar|pht|phps|cgi|pl|py|sh)$ { return 403; }\n    }\n`;
+    })
     .join("");
   // Corps accepté : comme post_max_size du pool.
   return `# Généré par l'agent des sites PHP pour ${spec.hostname}. Ne pas modifier : réécrit à chaque réglage.
@@ -434,9 +436,13 @@ export function siteOperations(ctx) {
     }
   }
 
-  /** Import d'un fichier SQL (.sql ou .sql.gz) avec le compte du site : il ne peut toucher que sa base. */
+  /**
+   * Import d'un fichier SQL (.sql ou .sql.gz) avec le compte du site : il ne peut toucher que sa base. Client en
+   * --sandbox : le client tourne en root, aucune commande cliente du fichier (\! shell, source...) ne s'exécute
+   * (fichier envoyé, ou dump d'une base que le site contrôle ; audit du 27/10/2026).
+   */
   async function importFrom(slug, file, gz) {
-    const r = await sys.runIo("/usr/bin/mariadb", [`--defaults-extra-file=${dbCnf(slug)}`, dbNameOf(slug)], { inputFile: file, gunzip: gz, timeoutMs: 30 * 60_000 });
+    const r = await sys.runIo("/usr/bin/mariadb", [`--defaults-extra-file=${dbCnf(slug)}`, "--sandbox", dbNameOf(slug)], { inputFile: file, gunzip: gz, timeoutMs: 30 * 60_000 });
     if (r.code !== 0) throw new OpError(422, `Import refusé par MariaDB : ${(r.stderr || "").trim().slice(0, 300) || `code ${r.code}`}.`);
   }
 
