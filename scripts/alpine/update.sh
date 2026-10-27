@@ -113,6 +113,8 @@ fail_update() {
   if [ "${2:-}" = "--no-start" ]; then
     echo "  Le hub reste arrêté : la base a pu être migrée à moitié, il ne doit pas tourner dessus."
     echo "  « hubctl rollback » remet le code et la base d'avant la mise à jour (sauvegarde automatique)."
+    # Le piège EXIT relancerait le hub (on_exit) : retiré ici, et seulement ici (audit du 27/10/2026).
+    trap - EXIT
     exit 1
   fi
   echo "  Plus tard : « hubctl rollback » remet la version d'avant ; « hubctl logs erreurs » montre l'erreur."
