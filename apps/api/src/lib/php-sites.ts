@@ -61,8 +61,26 @@ export async function phpDnsTarget(services: Services): Promise<string> {
 }
 
 /**
- * Publie une version d'un site PHP : réglages du site reposés, version envoyée si le CT ne l'a plus (sinon simple
- * bascule : retour arrière immédiat), puis contrôle anti-fuite ; une fuite coupe le site et fait échouer la publication.
+ * Contrôle anti-fuite (nginx local, sous le nom du site). Une fuite coupe le site et fait échouer la publication ; avant de
+ * couper, rollback() remet la version acceptée si la nouvelle avait déjà basculé.
+ */
+async function leakGate(agent: ReturnType<typeof agentOf>, slug: string, rollback: () => Promise<void> = async () => {}): Promise<void> {
+  const check = await agent.check(slug);
+  if (check.ok) return;
+  await rollback().catch(() => undefined);
+  await agent.setEnabled(slug, false).catch(() => undefined);
+  // Statut 0 : nginx n'a pas répondu (délai de 2 s ou refus) ; le site est coupé quand même, par prudence.
+  const silent = check.results.filter((r) => r.status === 0).map((r) => r.path);
+  if (silent.length) throw new HttpError(500, `Contrôle anti-fuite incomplet, site coupé par prudence : pas de réponse de nginx en 2 s sur ${silent.join(", ")}.`, "php_check");
+  const leaks = check.results.filter((r) => r.status !== 403 && r.status !== 404).map((r) => `${r.path} (${r.status})`);
+  throw new HttpError(500, `Fuite détectée après publication, site coupé : ${leaks.join(", ")} répond(ent) au lieu d'être refusé(s).`, "php_leak");
+}
+
+/**
+ * Publie une version d'un site PHP : réglages du site reposés, contrôle anti-fuite AVANT la bascule (il sonde les règles
+ * de nginx, qui ne dépendent pas du contenu de la version), version envoyée si le CT ne l'a plus (sinon simple bascule :
+ * retour arrière immédiat), puis second contrôle. Une version refusée ne reste jamais celle du CT : « Rallumer » ne la
+ * relance pas (audit du 27/10/2026).
  */
 export async function deployPhpVersion(services: Services, siteId: string, versionId: string): Promise<void> {
   const agent = agentOf(services);
@@ -73,6 +91,7 @@ export async function deployPhpVersion(services: Services, siteId: string, versi
   // Variables reposées à chaque publication : un CT reconstruit retrouve son .env sans autre geste.
   if (site.phpEnv) await agent.setEnv(site.slug, envOf(site));
   await prisma.version.update({ where: { id: versionId }, data: { status: "UPLOADING", error: null } });
+  await leakGate(agent, site.slug);
   // Dump de la base avant la bascule (le nouveau code peut migrer le schéma) : restaurable avec la version.
   await agent.dumpBefore(site.slug, version.number);
 
@@ -97,15 +116,13 @@ export async function deployPhpVersion(services: Services, siteId: string, versi
     await agent.publish(site.slug, version.number);
   }
 
-  const check = await agent.check(site.slug);
-  if (!check.ok) {
-    await agent.setEnabled(site.slug, false).catch(() => undefined);
-    // Statut 0 : nginx n'a pas répondu (délai de 2 s ou refus) ; le site est coupé quand même, par prudence.
-    const silent = check.results.filter((r) => r.status === 0).map((r) => r.path);
-    if (silent.length) throw new HttpError(500, `Contrôle anti-fuite incomplet, site coupé par prudence : pas de réponse de nginx en 2 s sur ${silent.join(", ")}.`, "php_check");
-    const leaks = check.results.filter((r) => r.status !== 403 && r.status !== 404).map((r) => `${r.path} (${r.status})`);
-    throw new HttpError(500, `Fuite détectée après publication, site coupé : ${leaks.join(", ")} répond(ent) au lieu d'être refusé(s).`, "php_leak");
-  }
+  // Second contrôle, après la bascule : en cas de refus, la version servie avant (encore gardée sur le CT) est remise.
+  const previous = site.currentVersionId && site.currentVersionId !== versionId
+    ? await prisma.version.findUnique({ where: { id: site.currentVersionId }, select: { number: true } })
+    : null;
+  await leakGate(agent, site.slug, async () => {
+    if (previous) await agent.publish(site.slug, previous.number);
+  });
 
   const now = new Date();
   await prisma.version.update({ where: { id: versionId }, data: { status: "PUBLISHED", publishedAt: now, error: null } });

@@ -158,6 +158,27 @@ describe("site PHP de bout en bout", () => {
     expect(mem.nodes.has("/etc/nginx/kouziaphp-sites/mytakumi.conf.off")).toBe(true);
   });
 
+  it("version refusée par le contrôle anti-fuite : jamais basculée, la version acceptée reste celle du CT (audit P1-a)", async () => {
+    const id = ((await create()).json() as SiteDetail).id;
+    await settle(hub);
+    await uploadFiles(hub, id, [{ filename: "public/index.php", content: "<?php echo 2;" }]);
+    await post(id, "publish");
+    await settle(hub);
+    expect(mem.nodes.get("/srv/sites/mytakumi/current")).toEqual({ type: "link", target: "releases/2" });
+
+    await uploadFiles(hub, id, [{ filename: "public/index.php", content: "<?php echo 3;" }]);
+    leaks = new Set(["/.env"]);
+    await post(id, "publish");
+    await settle(hub);
+    const op = (await detail(id)).operation as Operation;
+    expect(op).toMatchObject({ kind: "PUBLISH", status: "FAILED" });
+    expect(op.error).toMatch(/Fuite détectée/);
+    // Rien n'a basculé : le lien du CT et le hub désignent toujours la version 2 ; « Rallumer » ne relance pas la 3.
+    expect(mem.nodes.get("/srv/sites/mytakumi/current")).toEqual({ type: "link", target: "releases/2" });
+    expect((await detail(id)).currentVersion?.number).toBe(2);
+    expect(mem.nodes.has("/etc/nginx/kouziaphp-sites/mytakumi.conf.off")).toBe(true);
+  });
+
   it("agent injoignable à la publication : étape PHP nommée comme telle, cause dite (pas « erreur inattendue »)", async () => {
     const id = ((await create()).json() as SiteDetail).id;
     await settle(hub);
