@@ -117,3 +117,11 @@ export async function sha256OfLargeBlob(blob: Blob, onProgress?: (fraction: numb
   }
   return hash.digest();
 }
+
+/** Au-delà, le fichier est haché par tranches : un fichier PHP accepte 256 Mio, trop pour un ArrayBuffer d'un coup. */
+export const WHOLE_FILE_HASH_MAX = 25 * 1024 * 1024;
+
+/** Empreinte d'un fichier envoyé : d'un coup jusqu'à 25 Mio, par tranches au-delà (onglet mobile préservé). */
+export function sha256OfFile(file: Blob): Promise<string> {
+  return file.size > WHOLE_FILE_HASH_MAX ? sha256OfLargeBlob(file) : sha256Hex(file);
+}

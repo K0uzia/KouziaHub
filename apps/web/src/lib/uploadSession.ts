@@ -1,7 +1,7 @@
 import type { CreateUploadInput, UploadFileDecl, UploadResult, UploadSession } from "@hub/contract";
 import { api, isAbort, xhrSend, type ApiError } from "@/lib/api";
 import type { PickedFile } from "@/lib/files";
-import { sha256Hex, sha256OfLargeBlob } from "@/lib/sha256";
+import { sha256Hex, sha256OfFile, sha256OfLargeBlob } from "@/lib/sha256";
 
 /** Avancement global d'un envoi : préparation (empreintes), envoi des morceaux, finalisation. */
 export type SendProgress = {
@@ -106,7 +106,7 @@ export async function sendFiles(opts: {
   let hashed = 0;
   for (const f of files) {
     if (signal?.aborted) throw Object.assign(new Error("Envoi annulé."), { name: "AbortError" });
-    decls.push({ path: f.path, size: f.file.size, sha256: await sha256Hex(f.file) });
+    decls.push({ path: f.path, size: f.file.size, sha256: await sha256OfFile(f.file) });
     hashed += f.file.size;
     onProgress({ phase: "hash", bytesDone: hashed, bytesTotal, filesDone: decls.length, filesTotal: files.length });
   }
